@@ -13,8 +13,8 @@
 Implemented:
 
 - project workspace registration
-- task creation and manual delegation
-- idea inbox and AI planning entrypoint
+- direct task creation and manual delegation
+- optional idea inbox and AI planning entrypoint
 - machine-readable planner/worker/supervisor result contract
 - worktree allocation and reuse across iterations
 - OpenCode session/message/status integration
@@ -26,8 +26,8 @@ Implemented:
 - bounded `changes_requested -> worker retry` loop
 - project autonomy modes: manual / assisted / autonomous
 - concurrency policy
-- optional local fast-forward auto-merge and cleanup
-- manual review/merge controls in UI
+- local fast-forward merge and cleanup
+- manual controls in UI
 
 Still needed before M1 is considered closed:
 
@@ -37,17 +37,36 @@ Still needed before M1 is considered closed:
 - end-to-end integration test against a real OpenCode server
 - structured log/usage capture
 
-## M2 — GitHub feedback loop
+## M2 — GitHub feedback loop — ACTIVE
 
-- repository binding validation
-- push task branch
-- create/update PR
-- GitHub Actions/check ingestion
-- CI evidence attached to task/run
-- supervisor can incorporate PR/CI review evidence
-- approved PR merge policy
-- branch/worktree cleanup after remote merge
-- CI failure -> automatic bounded repair loop
+Implemented:
+
+- strict `owner/repository` binding and local-origin identity validation
+- bounded/shell-free Git branch push using host credential helper or SSH agent
+- create or reuse task PRs
+- normalized GitHub PR/head evidence
+- GitHub check-runs + commit-status ingestion
+- CI discovery grace period for newly-created PRs
+- CI evidence persisted on the task publication record
+- CI failure -> bounded autonomous worker repair loop
+- supervisor receives worker + GitHub/CI evidence
+- PR head and CI revalidated after supervisor approval
+- expected-head-SHA guarded GitHub merge
+- configurable merge method (`squash` default)
+- optional remote branch + local worktree/branch cleanup
+- detection of PRs merged externally
+- manual Publish / Refresh CI / Review / Merge controls in dashboard
+
+Still needed before M2 is closed:
+
+- end-to-end test against a real disposable GitHub repository/PR/Actions run
+- richer GitHub check/job/log evidence so repair agents receive the actual failing step/log tail
+- GitHub issue -> project Task import/sync
+- GitHub webhook/event ingestion instead of polling-only reconciliation
+- pull-request review comments / requested changes as supervisor evidence
+- branch-protection/required-check awareness rather than generic all-check aggregation
+- base-branch synchronization/rebase strategy when the target moves
+- explicit GitHub rate-limit/backoff handling
 
 ## M3 — Agent platform
 

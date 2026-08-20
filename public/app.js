@@ -12,31 +12,60 @@ function empty(message) { return `<div class="empty">${message}</div>`; }
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 }
-
+function safeHttpUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+  } catch { return null; }
+}
 function projectName(id) { return state.projects.find((project) => project.id === id)?.name || 'Unknown project'; }
+
+function taskPublication(task) {
+  const publication = task.publication;
+  if (!publication) return '';
+  const ci = publication.ci?.state || 'unknown';
+  const pr = publication.prNumber ? `PR #${publication.prNumber}` : 'GitHub';
+  const url = safeHttpUrl(publication.prUrl);
+  const label = url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(pr)}</a>` : escapeHtml(pr);
+  return `${label} · CI ${escapeHtml(ci)}${publication.lastError ? ` · ${escapeHtml(publication.lastError)}` : ''}`;
+}
+
+function taskActions(task) {
+  const buttons = [];
+  if (task.state === 'backlog') buttons.push(`<button class="delegate" data-task="${task.id}">Delegate</button>`);
+  if (task.state === 'awaiting_publish') buttons.push(`<button class="publish" data-task="${task.id}">Publish PR</button>`);
+  if (task.state === 'awaiting_ci') buttons.push(`<button class="refresh-ci" data-task="${task.id}">Refresh CI</button>`);
+  if (task.state === 'awaiting_review') buttons.push(`<button class="review" data-task="${task.id}">Review</button>`);
+  if (task.state === 'ready_to_merge') buttons.push(`<button class="merge" data-task="${task.id}">Merge</button>`);
+  return buttons.join('');
+}
 
 function render() {
   $('project-count').textContent = state.projects.length;
   $('task-count').textContent = state.tasks.length;
   $('run-count').textContent = state.runs.length;
-  $('task-sub').textContent = `${state.tasks.filter((t) => t.state === 'in_progress' || t.state === 'reviewing').length} active · ${state.ideas.length} ideas`;
+  $('task-sub').textContent = `${state.tasks.filter((t) => ['in_progress','reviewing','awaiting_ci'].includes(t.state)).length} active · ${state.ideas.length} ideas`;
   $('run-sub').textContent = `${state.runs.filter((r) => ['running', 'retrying'].includes(r.status)).length} running`;
 
   $('project-list').innerHTML = state.projects.length ? state.projects.map((project) => `
     <div class="row-card"><div><div class="title">${escapeHtml(project.name)}</div><div class="meta">${escapeHtml(project.repository || project.repoPath || 'workspace not bound')} · base ${escapeHtml(project.baseBranch || 'main')}</div></div><span class="tag">${escapeHtml(project.autonomy?.mode || 'manual')}</span></div>`).join('') : empty('No projects yet. Register the first workspace.');
 
   $('idea-list').innerHTML = state.ideas.length ? state.ideas.slice().reverse().map((idea) => `
-    <div class="row-card"><div><div class="title">${escapeHtml(idea.title)}</div><div class="meta">${escapeHtml(projectName(idea.projectId))} · ${escapeHtml(idea.summary || idea.description || 'captured idea')}</div></div><div class="row-actions"><span class="tag">${escapeHtml(idea.state)}</span>${['inbox','needs_input'].includes(idea.state) ? `<button class="analyze-idea" data-idea="${idea.id}">AI plan</button>` : ''}</div></div>`).join('') : empty('Capture rough thoughts here. AI can turn them into an executable plan.');
+    <div class="row-card"><div><div class="title">${escapeHtml(idea.title)}</div><div class="meta">${escapeHtml(projectName(idea.projectId))} · ${escapeHtml(idea.summary || idea.description || 'captured idea')}</div></div><div class="row-actions"><span class="tag">${escapeHtml(idea.state)}</span>${['inbox','needs_input'].includes(idea.state) ? `<button class="analyze-idea" data-idea="${idea.id}">AI plan</button>` : ''}</div></div>`).join('') : empty('Optional idea inbox for brainstorming and loosely specified work.');
 
-  $('task-list').innerHTML = state.tasks.filter((task) => task.kind !== 'planning').length ? state.tasks.filter((task) => task.kind !== 'planning').map((task) => `
-    <div class="row-card"><div><div class="title">${escapeHtml(task.title)}</div><div class="meta">${escapeHtml(task.runner)} · ${escapeHtml(task.agentRole || 'unassigned role')} · iteration ${task.iteration || 0}</div></div><div class="row-actions"><span class="tag">${escapeHtml(task.priority)} · ${escapeHtml(task.state)}</span>${task.state === 'backlog' ? `<button class="delegate" data-task="${task.id}">Delegate</button>` : ''}${task.state === 'awaiting_review' ? `<button class="review" data-task="${task.id}">Review</button>` : ''}${task.state === 'ready_to_merge' ? `<button class="merge" data-task="${task.id}">Merge</button>` : ''}</div></div>`).join('') : empty('Task queue is empty. Ideas can generate tasks automatically.');
+  const visibleTasks = state.tasks.filter((task) => task.kind !== 'planning');
+  $('task-list').innerHTML = visibleTasks.length ? visibleTasks.map((task) => {
+    const publication = taskPublication(task);
+    const feedback = task.supervisorFeedback ? ` · ${escapeHtml(task.supervisorFeedback)}` : '';
+    return `<div class="row-card"><div><div class="title">${escapeHtml(task.title)}</div><div class="meta">${escapeHtml(task.runner)} · ${escapeHtml(task.agentRole || 'unassigned role')} · iteration ${task.iteration || 0}${publication ? `<br>${publication}` : ''}${feedback}</div></div><div class="row-actions"><span class="tag">${escapeHtml(task.priority)} · ${escapeHtml(task.state)}</span>${taskActions(task)}</div></div>`;
+  }).join('') : empty('Task queue is empty. Create work directly or optionally generate tasks from an idea.');
 
   $('run-list').innerHTML = state.runs.length ? state.runs.slice().reverse().map((run) => `
     <div class="row-card"><div><div class="title">${escapeHtml(run.kind || 'worker')} · ${escapeHtml(run.runner)}</div><div class="meta">${escapeHtml(run.branch || run.sessionId || run.taskId || 'run')}</div></div><div class="row-actions"><span class="tag">${escapeHtml(run.status)}</span>${['running','retrying'].includes(run.status) ? `<button class="abort" data-run="${run.id}">Abort</button>` : ''}</div></div>`).join('') : empty('No agent runs yet. Delegate a task or analyze an idea.');
 
   $('autonomy-list').innerHTML = state.projects.length ? state.projects.map((project) => {
     const config = project.autonomy || {};
-    return `<div class="row-card"><div><div class="title">${escapeHtml(project.name)}</div><div class="meta">${escapeHtml(config.supervisorRole || 'supervisor')} supervisor · max ${config.maxTaskIterations || 4} iterations · ${config.autoMerge ? 'auto-merge on' : 'manual merge'}</div></div><div class="row-actions"><span class="tag">${escapeHtml(config.mode || 'manual')}</span>${config.mode !== 'manual' ? `<button class="tick" data-project="${project.id}">Run loop</button>` : ''}</div></div>`;
+    return `<div class="row-card"><div><div class="title">${escapeHtml(project.name)}</div><div class="meta">${escapeHtml(config.supervisorRole || 'supervisor')} supervisor · max ${config.maxTaskIterations || 4} iterations · ${config.autoMerge ? 'auto-merge on' : 'manual merge'}${project.repository ? ' · GitHub gated' : ' · local-only'}</div></div><div class="row-actions"><span class="tag">${escapeHtml(config.mode || 'manual')}</span>${config.mode !== 'manual' ? `<button class="tick" data-project="${project.id}">Run loop</button>` : ''}</div></div>`;
   }).join('') : empty('Autonomy is configured per project.');
 
   const options = state.projects.map((project) => `<option value="${project.id}">${escapeHtml(project.name)}</option>`).join('');
@@ -56,6 +85,9 @@ async function refresh() {
     $('opencode-version').textContent = oc.connected ? `v${oc.version || '?'} · ${oc.sessionCount || 0} sessions` : 'not connected';
     $('opencode-status').textContent = oc.connected ? `${oc.activeSessionCount || 0} active · ${oc.sessionCount || 0} sessions` : 'offline';
     $('opencode-status').className = `status${oc.connected ? '' : ' bad'}`;
+    const gh = health.integrations.github || {};
+    $('github-status').textContent = gh.configured ? 'configured' : 'token not configured';
+    $('github-status').className = `status${gh.configured ? '' : ' pending'}`;
   } catch (error) {
     $('system-dot').className = 'dot bad';
     $('system-label').textContent = error.message;
@@ -101,10 +133,13 @@ $('task-list').addEventListener('click', async (event) => {
   if (!button) return;
   button.disabled = true;
   try {
+    let path = `/api/tasks/${encodeURIComponent(button.dataset.task)}/delegate`;
     let action = 'delegate';
-    if (button.classList.contains('review')) action = 'review';
-    if (button.classList.contains('merge')) action = 'merge';
-    const value = await api(`/api/tasks/${encodeURIComponent(button.dataset.task)}/${action}`, { method: 'POST' });
+    if (button.classList.contains('publish')) { action = 'publish'; path = `/api/tasks/${encodeURIComponent(button.dataset.task)}/publish`; }
+    if (button.classList.contains('refresh-ci')) { action = 'refresh CI'; path = `/api/tasks/${encodeURIComponent(button.dataset.task)}/github/refresh`; }
+    if (button.classList.contains('review')) { action = 'review'; path = `/api/tasks/${encodeURIComponent(button.dataset.task)}/review`; }
+    if (button.classList.contains('merge')) { action = 'merge'; path = `/api/tasks/${encodeURIComponent(button.dataset.task)}/merge`; }
+    const value = await api(path, { method: 'POST' });
     appendEvent(`${action}  ${value.id || value.task?.id || button.dataset.task}`);
     await refresh();
   } catch (error) {
