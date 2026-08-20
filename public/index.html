@@ -10,15 +10,9 @@
   <aside class="sidebar">
     <div class="brand"><span class="brand-mark">AI</span><span>Control Center</span></div>
     <nav>
-      <a class="active" href="#overview">Overview</a>
-      <a href="#projects">Projects</a>
-      <a href="#tasks">Tasks</a>
-      <a href="#research">Research</a>
-      <a href="#models">Models</a>
-      <a href="#ideas">Ideas</a>
-      <a href="#agents">Agents</a>
-      <a href="#integrations">Integrations</a>
-      <a href="#automations">Automations</a>
+      <a class="active" href="#overview">Overview</a><a href="#projects">Projects</a><a href="#tasks">Tasks</a>
+      <a href="#research">Research</a><a href="#models">Models</a><a href="#ideas">Ideas</a>
+      <a href="#agents">Agents</a><a href="#integrations">Integrations</a><a href="#automations">Automations</a>
     </nav>
     <div class="sidebar-foot"><span class="dot" id="system-dot"></span><span id="system-label">Connecting…</span></div>
   </aside>
@@ -26,12 +20,7 @@
   <main>
     <header>
       <div><p class="eyebrow">SELF-HOSTED AI OPERATIONS</p><h1>Mission control</h1></div>
-      <div class="header-actions">
-        <button id="refresh">Refresh</button>
-        <button id="new-idea">+ Idea</button>
-        <button id="new-research">+ Research</button>
-        <button class="primary" id="new-project">+ Project</button>
-      </div>
+      <div class="header-actions"><button id="refresh">Refresh</button><button id="new-task">+ Task</button><button id="new-research">+ Research</button><button class="primary" id="new-project">+ Project</button></div>
     </header>
 
     <section class="metrics" id="overview">
@@ -42,128 +31,94 @@
     </section>
 
     <section class="grid two">
-      <article class="panel" id="projects">
-        <div class="panel-head"><div><p class="eyebrow">PROJECTS</p><h2>Project state</h2></div><span class="pill">LIVE</span></div>
-        <div id="project-list" class="stack"></div>
-      </article>
-      <article class="panel" id="agents">
-        <div class="panel-head"><div><p class="eyebrow">AGENT FLEET</p><h2>Harness runs</h2></div><span class="pill muted">M3</span></div>
-        <div id="run-list" class="stack"></div>
-      </article>
+      <article class="panel" id="projects"><div class="panel-head"><div><p class="eyebrow">PROJECTS</p><h2>Project state</h2></div><span class="pill">LIVE</span></div><div id="project-list" class="stack"></div></article>
+      <article class="panel" id="agents"><div class="panel-head"><div><p class="eyebrow">AGENT FLEET</p><h2>Harness runs</h2></div><span class="pill muted">HARDENING</span></div><div id="run-list" class="stack"></div></article>
     </section>
 
     <section class="grid two">
-      <article class="panel" id="tasks">
-        <div class="panel-head"><div><p class="eyebrow">TASK FLOW</p><h2>Queue</h2></div><button id="new-task">+ Task</button></div>
-        <div id="task-list" class="stack"></div>
-      </article>
-      <article class="panel" id="research">
-        <div class="panel-head"><div><p class="eyebrow">DIRECT MODEL WORK</p><h2>Research</h2></div><button id="new-research-inline">+ Research</button></div>
-        <p class="panel-copy">Read project context and produce analysis without starting OpenCode, creating a worktree, or modifying Git.</p>
-        <div id="research-list" class="stack"></div>
-      </article>
+      <article class="panel" id="tasks"><div class="panel-head"><div><p class="eyebrow">TASK FLOW</p><h2>Queue</h2></div><button id="new-task-inline">+ Task</button></div><div id="task-list" class="stack"></div></article>
+      <article class="panel" id="research"><div class="panel-head"><div><p class="eyebrow">DIRECT MODEL WORK</p><h2>Research</h2></div><button id="new-research-inline">+ Research</button></div><p class="panel-copy">Read project context and produce analysis without starting OpenCode, creating a worktree, or modifying Git.</p><div id="research-list" class="stack"></div></article>
     </section>
 
     <section class="grid two">
-      <article class="panel" id="models">
-        <div class="panel-head"><div><p class="eyebrow">MODEL PROVIDERS</p><h2>Provider registry</h2></div><button id="new-provider">+ Provider</button></div>
-        <p class="panel-copy">LM Studio and NVIDIA are built in as OpenAI-compatible profiles. Custom compatible endpoints use the same adapter.</p>
-        <div id="provider-list" class="stack"></div>
-      </article>
-      <article class="panel" id="ideas">
-        <div class="panel-head"><div><p class="eyebrow">OPTIONAL IDEA INBOX</p><h2>Brainstorming</h2></div><button id="new-idea-inline">+ Idea</button></div>
-        <div id="idea-list" class="stack"></div>
-      </article>
+      <article class="panel" id="models"><div class="panel-head"><div><p class="eyebrow">MODEL PROVIDERS</p><h2>Provider registry</h2></div><button id="new-provider">+ Provider</button></div><p class="panel-copy">LM Studio and NVIDIA are built in as OpenAI-compatible profiles. Custom compatible endpoints use the same adapter.</p><div id="provider-list" class="stack"></div></article>
+      <article class="panel" id="ideas"><div class="panel-head"><div><p class="eyebrow">OPTIONAL IDEA INBOX</p><h2>Brainstorming</h2></div><button id="new-idea-inline">+ Idea</button></div><div id="idea-list" class="stack"></div></article>
     </section>
 
     <section class="grid two">
       <article class="panel" id="integrations">
         <div class="panel-head"><div><p class="eyebrow">INTEGRATIONS</p><h2>Runtime links</h2></div></div>
-        <div class="integration-row"><div><strong>OpenCode</strong><p>coding harness · model chosen per task/run</p></div><div class="status" id="opencode-status">Checking…</div></div>
-        <div class="integration-row"><div><strong>GitHub</strong><p>branch publishing, PR, CI evidence and merge</p></div><div class="status pending" id="github-status">checking</div></div>
+        <div class="integration-row"><div><strong>OpenCode</strong><p>coding harness · model selected per task/run</p></div><div class="status" id="opencode-status">Checking…</div></div>
+        <div class="integration-row"><div><strong>GitHub</strong><p>branch publishing, PR, fail-closed CI evidence and merge</p></div><div class="status pending" id="github-status">checking</div></div>
         <div class="integration-row"><div><strong>Direct model</strong><p>provider API → project research report</p></div><div class="status" id="model-status">ready</div></div>
-        <div class="integration-row"><div><strong>ACP / other harnesses</strong><p>Codex, Claude Code and other agent adapters</p></div><div class="status pending">planned</div></div>
+        <div class="integration-row"><div><strong>Persistence</strong><p>durable control-plane state</p></div><div class="status pending" id="persistence-status">checking</div></div>
       </article>
-      <article class="panel" id="automations">
-        <div class="panel-head"><div><p class="eyebrow">AUTONOMY</p><h2>Control loop</h2></div><span class="pill">M2</span></div>
-        <p class="panel-copy">Autonomous coding projects reconcile runs, publish checkpoints, wait for GitHub CI, request independent supervisor review, retry within budgets, and optionally merge.</p>
-        <div id="autonomy-list" class="stack"></div>
-      </article>
+      <article class="panel" id="automations"><div class="panel-head"><div><p class="eyebrow">AUTONOMY</p><h2>Control loop</h2></div><span class="pill">SAFETY GATES</span></div><p class="panel-copy">Workers must produce a real diff and pass control-plane verification. GitHub CI errors fail closed. Supervisor approval is acceptance-criteria scoped and verification is repeated before merge.</p><div id="autonomy-list" class="stack"></div></article>
     </section>
 
-    <section class="panel terminal-panel">
-      <div class="panel-head"><div><p class="eyebrow">EVENT STREAM</p><h2>Control-plane events</h2></div><button id="clear-events">Clear</button></div>
-      <pre id="events">waiting for events…</pre>
-    </section>
+    <section class="panel terminal-panel"><div class="panel-head"><div><p class="eyebrow">EVENT STREAM</p><h2>Control-plane events</h2></div><button id="clear-events">Clear</button></div><pre id="events">waiting for events…</pre></section>
   </main>
 
-  <dialog id="project-dialog">
-    <form method="dialog" id="project-form">
-      <h2>Register project</h2>
-      <label>Name<input name="name" required placeholder="Norge World Engine"></label>
-      <label>Local repository path<input name="repoPath" placeholder="C:\\projects\\nwe or /srv/nwe"></label>
-      <label>GitHub repository<input name="repository" placeholder="owner/repository"></label>
-      <label>Base branch<input name="baseBranch" value="main"></label>
-      <label>Default coding model<input name="codingModel" list="opencode-models" placeholder="provider/model or leave blank"></label>
-      <label>Planner model<input name="planningModel" list="opencode-models" placeholder="defaults to coding model"></label>
-      <label>Supervisor model<input name="supervisorModel" list="opencode-models" placeholder="defaults to task model"></label>
-      <label>Default research model<input name="researchModel" list="direct-models" placeholder="lmstudio/model or nvidia/model"></label>
-      <label>Autonomy mode<select name="autonomyMode"><option value="manual">Manual</option><option value="assisted">Assisted</option><option value="autonomous">Autonomous</option></select></label>
-      <label class="check"><input type="checkbox" name="autoAnalyzeIdeas"> Automatically analyze new ideas</label>
-      <label class="check"><input type="checkbox" name="autoMerge"> Auto-merge after GitHub CI + independent supervisor approval</label>
-      <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create</button></div>
-    </form>
-  </dialog>
+  <dialog id="project-dialog"><form method="dialog" id="project-form">
+    <h2>Register project</h2>
+    <label>Name<input name="name" required placeholder="Norge World Engine"></label>
+    <label>Local repository path<input name="repoPath" placeholder="C:\\projects\\nwe or /srv/nwe"></label>
+    <label>GitHub repository<input name="repository" placeholder="owner/repository"></label>
+    <label>Base branch<input name="baseBranch" value="main"></label>
+    <label>Default verification commands<textarea name="verificationCommands" rows="3" placeholder="npm test&#10;npm run lint"></textarea></label>
+    <p class="dialog-note">One command per line. Commands are parsed to argv and executed without a shell.</p>
+    <label>Default coding model<input name="codingModel" list="opencode-models" placeholder="provider/model or leave blank"></label>
+    <label>Planner model<input name="planningModel" list="opencode-models" placeholder="defaults to coding model"></label>
+    <label>Supervisor model<input name="supervisorModel" list="opencode-models" placeholder="defaults to task model"></label>
+    <label>Default research model<input name="researchModel" list="direct-models" placeholder="lmstudio/model or nvidia/model"></label>
+    <label>Autonomy mode<select name="autonomyMode"><option value="manual">Manual</option><option value="assisted">Assisted</option><option value="autonomous">Autonomous</option></select></label>
+    <label class="check"><input type="checkbox" name="requireCi" checked> Require successful GitHub CI before review/merge</label>
+    <label class="check"><input type="checkbox" name="autoAnalyzeIdeas"> Automatically analyze new ideas</label>
+    <label class="check"><input type="checkbox" name="autoMerge"> Auto-merge only after machine evidence + CI + independent supervisor approval</label>
+    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create</button></div>
+  </form></dialog>
 
-  <dialog id="idea-dialog">
-    <form method="dialog" id="idea-form">
-      <h2>Capture idea</h2>
-      <label>Project<select name="projectId" id="idea-project" required></select></label>
-      <label>Idea<input name="title" required placeholder="Add autonomous release notes"></label>
-      <label>Context<textarea name="description" rows="6" placeholder="What should exist when this is finished? Constraints, thoughts, rough notes..."></textarea></label>
-      <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Save idea</button></div>
-    </form>
-  </dialog>
+  <dialog id="idea-dialog"><form method="dialog" id="idea-form">
+    <h2>Capture idea</h2><label>Project<select name="projectId" id="idea-project" required></select></label>
+    <label>Idea<input name="title" required placeholder="Add autonomous release notes"></label>
+    <label>Context<textarea name="description" rows="6" placeholder="What should exist when this is finished?"></textarea></label>
+    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Save idea</button></div>
+  </form></dialog>
 
-  <dialog id="task-dialog">
-    <form method="dialog" id="task-form">
-      <h2>Create task</h2>
-      <label>Project<select name="projectId" id="task-project" required></select></label>
-      <label>Title<input name="title" required placeholder="Validate OpenCode runner"></label>
-      <label>Priority<select name="priority"><option>P0</option><option>P1</option><option selected>P2</option><option>P3</option></select></label>
-      <label>Harness<select name="runner"><option value="opencode">OpenCode</option></select></label>
-      <label>Model<input name="model" list="opencode-models" placeholder="project default / provider/model"></label>
-      <label>Agent role<input name="agentRole" placeholder="LUMEN / FORGE / general"></label>
-      <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create</button></div>
-    </form>
-  </dialog>
+  <dialog id="task-dialog"><form method="dialog" id="task-form">
+    <h2>Create task</h2>
+    <label>Project<select name="projectId" id="task-project" required></select></label>
+    <label>Title<input name="title" required placeholder="Harden terrain streaming admission"></label>
+    <label>Description<textarea name="description" rows="5" placeholder="Concrete implementation scope, constraints and context..."></textarea></label>
+    <label>Acceptance criteria<textarea name="acceptanceCriteria" rows="4" placeholder="One verifiable criterion per line"></textarea></label>
+    <label>Dependencies<textarea name="blockedBy" rows="2" placeholder="Task IDs, one per line"></textarea></label>
+    <label>Verification commands<textarea name="verificationCommands" rows="3" placeholder="Leave blank to inherit project defaults"></textarea></label>
+    <label>Priority<select name="priority"><option>P0</option><option>P1</option><option selected>P2</option><option>P3</option></select></label>
+    <label>Harness<select name="runner"><option value="opencode">OpenCode</option></select></label>
+    <label>Model<input name="model" list="opencode-models" placeholder="project default / provider/model"></label>
+    <label>Agent role<input name="agentRole" placeholder="LUMEN / FORGE / general"></label>
+    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create task</button></div>
+  </form></dialog>
 
-  <dialog id="research-dialog">
-    <form method="dialog" id="research-form">
-      <h2>Research project</h2>
-      <label>Project<select name="projectId" id="research-project" required></select></label>
-      <label>Direct model<input name="model" list="direct-models" placeholder="project research default / provider/model"></label>
-      <label>Research request<textarea name="prompt" required rows="8" placeholder="Analyze the renderer architecture, identify risks and recommend the next three verifiable steps."></textarea></label>
-      <p class="dialog-note">Research runs are read-only: selected project files become bounded context, then the model returns a persisted report. No worktree or Git branch is created.</p>
-      <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Run research</button></div>
-    </form>
-  </dialog>
+  <dialog id="research-dialog"><form method="dialog" id="research-form">
+    <h2>Research project</h2><label>Project<select name="projectId" id="research-project" required></select></label>
+    <label>Direct model<input name="model" list="direct-models" placeholder="project research default / provider/model"></label>
+    <label>Research request<textarea name="prompt" required rows="8" placeholder="Analyze the renderer architecture, identify risks and recommend the next three verifiable steps."></textarea></label>
+    <p class="dialog-note">Read-only repository context. No coding harness, worktree or Git branch.</p>
+    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Run research</button></div>
+  </form></dialog>
 
-  <dialog id="provider-dialog">
-    <form method="dialog" id="provider-form">
-      <h2>Add model provider</h2>
-      <label>ID<input name="id" required placeholder="my-nim"></label>
-      <label>Name<input name="name" required placeholder="My NIM"></label>
-      <label>OpenAI-compatible base URL<input name="baseUrl" required placeholder="http://127.0.0.1:8000/v1"></label>
-      <label>API key environment variable<input name="apiKeyEnv" placeholder="MY_NIM_API_KEY"></label>
-      <p class="dialog-note">Secrets are read from environment variables; the dashboard stores the variable name, not the API key value.</p>
-      <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Save provider</button></div>
-    </form>
-  </dialog>
+  <dialog id="provider-dialog"><form method="dialog" id="provider-form">
+    <h2>Add model provider</h2><label>ID<input name="id" required placeholder="my-nim"></label><label>Name<input name="name" required placeholder="My NIM"></label>
+    <label>OpenAI-compatible base URL<input name="baseUrl" required placeholder="http://127.0.0.1:8000/v1"></label>
+    <label>API key environment variable<input name="apiKeyEnv" placeholder="MY_NIM_API_KEY"></label>
+    <p class="dialog-note">Secrets are read from environment variables; only the variable name is stored.</p>
+    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Save provider</button></div>
+  </form></dialog>
 
-  <datalist id="opencode-models"></datalist>
-  <datalist id="direct-models"></datalist>
+  <dialog id="evidence-dialog"><form method="dialog"><div class="panel-head"><div><p class="eyebrow">TASK EVIDENCE</p><h2 id="evidence-title">Evidence</h2></div><button value="cancel">Close</button></div><pre id="evidence-content">Loading…</pre></form></dialog>
 
+  <datalist id="opencode-models"></datalist><datalist id="direct-models"></datalist>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
