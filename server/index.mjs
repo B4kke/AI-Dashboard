@@ -31,7 +31,7 @@ await store.load();
 const research = createResearchService({ store, opencode });
 await research.initialize();
 const baseOrchestrator = createOrchestrator({ store, opencode, github, locks: sqlite });
-const orchestrator = decorateControlPlane({ orchestrator: baseOrchestrator, store, locks: sqlite, github });
+const orchestrator = decorateControlPlane({ orchestrator: baseOrchestrator, store, locks: sqlite, github, opencode });
 const recovery = await orchestrator.recover();
 if (recovery.length) console.log(`AI Dashboard recovered ${recovery.length} state transition(s)`);
 
