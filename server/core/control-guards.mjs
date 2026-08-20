@@ -28,6 +28,46 @@ export function decorateControlPlane({ orchestrator, store, locks }) {
     return orchestrator.startWorker(taskId);
   }
 
+  async function reconcileRun(run) {
+    const value = await orchestrator.reconcileRun(run);
+    if (value?.status === 'invalid_result_contract') {
+      const current = typeof run === 'string' ? store.getRun(run) : store.getRun(run.id);
+      if (current?.kind === 'supervisor' && current.taskId) {
+        await store.updateTask(current.taskId, {
+          state: 'needs_input',
+          supervisorFeedback: current.error || 'Supervisor returned an invalid result contract; autonomous review is paused.',
+        });
+      }
+    }
+    return value;
+  }
+
+  async function reconcilePublishedTask(taskId) {
+    const { task } = projectForTask(store, taskId);
+    const nextCheckAt = task.publication?.nextCheckAt ? Date.parse(task.publication.nextCheckAt) : 0;
+    if (Number.isFinite(nextCheckAt) && nextCheckAt > Date.now()) {
+      return { state: 'backoff', nextCheckAt: task.publication.nextCheckAt };
+    }
+    const result = await orchestrator.reconcilePublishedTask(taskId);
+    const refreshed = store.getTask(taskId);
+    if (result?.state === 'error' || refreshed?.publication?.ci?.state === 'error') {
+      const attempts = Math.min(8, Number(refreshed.publication?.ciErrorAttempts || 0) + 1);
+      const delaySeconds = Math.min(300, 5 * (2 ** (attempts - 1)));
+      await store.updateTask(taskId, {
+        publication: {
+          ...refreshed.publication,
+          ciErrorAttempts: attempts,
+          nextCheckAt: new Date(Date.now() + delaySeconds * 1000).toISOString(),
+        },
+      });
+      return { ...result, backoffSeconds: delaySeconds };
+    }
+    if (refreshed?.publication && (refreshed.publication.ciErrorAttempts || refreshed.publication.nextCheckAt)) {
+      await store.updateTask(taskId, { publication: { ...refreshed.publication, ciErrorAttempts: 0, nextCheckAt: null } });
+    }
+    return result;
+  }
+
   async function mergeApprovedTask(taskId) {
     const { project } = projectForTask(store, taskId);
     const result = await orchestrator.mergeApprovedTask(taskId);
@@ -58,24 +98,15 @@ export function decorateControlPlane({ orchestrator, store, locks }) {
           worktrees: worktrees.map((worktree) => {
             const run = owned.get(worktree.path) || null;
             const managedBranch = worktree.branch?.startsWith('ai/') === true;
-            return {
-              ...worktree,
-              managedBranch,
-              ownerRunId: run?.id || null,
-              ownerTaskId: run?.taskId || null,
-              abandoned: managedBranch && !run,
-            };
+            return { ...worktree, managedBranch, ownerRunId: run?.id || null, ownerTaskId: run?.taskId || null, abandoned: managedBranch && !run };
           }),
         });
       } catch (error) {
         projects.push({ projectId: project.id, projectName: project.name, repoPath: project.repoPath, error: error.message, worktrees: [] });
       }
     }
-    return {
-      projects,
-      abandonedCount: projects.reduce((sum, project) => sum + project.worktrees.filter((worktree) => worktree.abandoned).length, 0),
-    };
+    return { projects, abandonedCount: projects.reduce((sum, project) => sum + project.worktrees.filter((worktree) => worktree.abandoned).length, 0) };
   }
 
-  return { ...orchestrator, startWorker, mergeApprovedTask, workspaceInventory };
+  return { ...orchestrator, startWorker, reconcileRun, reconcilePublishedTask, mergeApprovedTask, workspaceInventory };
 }
