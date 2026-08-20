@@ -39,13 +39,19 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
       });
     }
 
+    const runsBefore = new Set(store.snapshot().runs.filter((run) => run.taskId === taskId).map((run) => run.id));
     try {
       return await orchestrator.startWorker(taskId);
     } catch (error) {
       // OpenCode prompt_async can have an ambiguous outcome: the request may have been accepted even when
-      // the client loses the 204 acknowledgement. A failed run with a persisted session is therefore not
-      // safe to auto-retry. Keep the task attached to that session until reconciliation proves what happened.
-      const run = latestTaskRun(store, taskId, (item) => item.kind === 'worker' && item.status === 'failed' && Boolean(item.sessionId));
+      // the client loses the 204 acknowledgement. Only a session created by this exact start attempt may be
+      // recovered; an older failed run must never be revived because a new start failed before creating a run.
+      const run = latestTaskRun(store, taskId, (item) => (
+        !runsBefore.has(item.id)
+        && item.kind === 'worker'
+        && item.status === 'failed'
+        && Boolean(item.sessionId)
+      ));
       const currentTask = store.getTask(taskId);
       if (run && currentTask?.state === 'backlog') {
         const message = `OpenCode dispatch acknowledgement is uncertain: ${run.error || error.message}. Reconcile this session before any retry.`;
