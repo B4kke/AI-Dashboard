@@ -73,3 +73,71 @@ test('merge replay recognizes a PR already merged before local state persisted',
     assert.equal(store.getProject(project.id).status, 'active');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+async function uncertainDispatchFixture() {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-dispatch-'));
+  const store = new StateStore(join(dir, 'state.json')); await store.load();
+  const project = await store.addProject({ name: 'Dispatch', repoPath: dir, verificationCommands: ['node --test'] });
+  const task = await store.addTask({ projectId: project.id, title: 'Dispatch safely', acceptanceCriteria: ['work completes once'] });
+  let innerReconcileCalls = 0;
+  const orchestrator = {
+    async startWorker() {
+      let run = await store.createRun({ taskId: task.id, projectId: project.id, kind: 'worker', worktreePath: join(dir, 'worktree'), branch: 'ai/dispatch' });
+      run = await store.updateRun(run.id, {
+        sessionId: 'session-1', status: 'failed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+        error: 'OpenCode POST prompt_async timed out after the server may have accepted it',
+      });
+      await store.updateTask(task.id, { state: 'backlog' });
+      throw new Error('socket closed before 204 acknowledgement');
+    },
+    async reconcileRun(runId) {
+      innerReconcileCalls += 1;
+      const run = typeof runId === 'string' ? store.getRun(runId) : store.getRun(runId.id);
+      assert.equal(run.status, 'running');
+      return { status: 'running' };
+    },
+    async recover() { return []; },
+  };
+  return { dir, store, project, task, orchestrator, innerReconcileCalls: () => innerReconcileCalls };
+}
+
+test('lost OpenCode prompt acknowledgement keeps the existing session active instead of starting a duplicate worker', async () => {
+  const fixture = await uncertainDispatchFixture();
+  try {
+    const opencode = {
+      async sessionStatus() { return { 'session-1': { type: 'busy' } }; },
+      async messages() { return []; },
+    };
+    const guarded = decorateControlPlane({ orchestrator: fixture.orchestrator, store: fixture.store, locks, opencode });
+    const run = await guarded.startWorker(fixture.task.id);
+    assert.equal(run.status, 'dispatch_unknown');
+    assert.equal(fixture.store.getTask(fixture.task.id).state, 'in_progress');
+    assert.equal(fixture.store.snapshot().runs.length, 1);
+
+    const reconciled = await guarded.reconcileRun(run);
+    assert.equal(reconciled.status, 'running');
+    assert.equal(fixture.innerReconcileCalls(), 1);
+    assert.equal(fixture.store.snapshot().runs.length, 1);
+    assert.equal(fixture.store.getTask(fixture.task.id).state, 'in_progress');
+  } finally { await rm(fixture.dir, { recursive: true, force: true }); }
+});
+
+test('unconfirmed idle OpenCode dispatch blocks for input instead of auto-retrying', async () => {
+  const fixture = await uncertainDispatchFixture();
+  try {
+    const opencode = {
+      async sessionStatus() { return { 'session-1': { type: 'idle' } }; },
+      async messages() { return []; },
+    };
+    const guarded = decorateControlPlane({ orchestrator: fixture.orchestrator, store: fixture.store, locks, opencode });
+    const run = await guarded.startWorker(fixture.task.id);
+    await fixture.store.updateRun(run.id, { startedAt: new Date(Date.now() - 60_000).toISOString() });
+
+    const reconciled = await guarded.reconcileRun(run.id);
+    assert.equal(reconciled.status, 'dispatch_unconfirmed');
+    assert.equal(fixture.innerReconcileCalls(), 0);
+    assert.equal(fixture.store.getRun(run.id).status, 'failed');
+    assert.equal(fixture.store.getTask(fixture.task.id).state, 'needs_input');
+    assert.equal(fixture.store.snapshot().runs.length, 1);
+  } finally { await rm(fixture.dir, { recursive: true, force: true }); }
+});
