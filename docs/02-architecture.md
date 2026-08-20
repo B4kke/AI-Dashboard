@@ -2,23 +2,34 @@
 
 ## Core domain
 
+Project is the root aggregate. Work may enter the system directly as Tasks, from integrations, or optionally through Ideas that a planner expands into Tasks.
+
 ```text
 Project
-  -> Idea
-      -> planning Task / planner Run
-      -> generated Task[]
-
-Project
-  -> Task
+  -> Repository / workspace binding
+  -> Task[]
       -> Run[]
           -> Agent role
           -> Workspace / worktree
           -> Event stream
           -> Result contract
           -> Evidence / checkpoint
+  -> Idea[] (optional)
+      -> Planner Run
+      -> generated Task[]
+  -> Integration events (GitHub/CI/etc.)
+      -> Task[]
 ```
 
-A task can have multiple worker iterations and multiple review attempts. Failed or rejected runs remain historical evidence rather than being overwritten.
+A Task can have multiple worker iterations and multiple review attempts. Failed or rejected Runs remain historical evidence rather than being overwritten.
+
+## Entry-path invariants
+
+- A Project does not require any Idea to exist.
+- A Task may be created manually, by a planner, or by an integration.
+- All Tasks converge on the same worker/supervisor/evidence pipeline.
+- Ideas are project-scoped planning helpers only; once materialized, their generated work is ordinary Tasks.
+- Autonomy operates on ready Tasks regardless of their origin.
 
 ## Autonomous control loop
 
@@ -29,20 +40,25 @@ A task can have multiple worker iterations and multiple review attempts. Failed 
                          +-------------+-------------+
                                        |
                                        v
-Idea inbox -> Planner -> Task graph -> Worker
-                                   |      |
-                                   |      v
-                                   |   checkpoint commit
-                                   |      |
-                                   |      v
-                                   |  Supervisor
-                                   |   /   |    \
-                                   | approve change blocked
-                                   |   |      |      |
-                                   |   v      +--> Worker retry
-                                   | merge          or human
-                                   |   |
-                                   +---+--> cleanup -> done
+          +---------------------- ready Task ----------------------+
+          |                             |                           |
+manual Task / integration Task   optional Idea -> Planner          |
+          |                             |                           |
+          +------------------------> Worker <-----------------------+
+                                         |
+                                         v
+                                  checkpoint commit
+                                         |
+                                         v
+                                     Supervisor
+                                      /   |    \
+                                approve change blocked
+                                   |      |      |
+                                   v      +--> Worker retry
+                                 merge         or human
+                                   |
+                                   v
+                              cleanup -> done
 ```
 
 The worker never becomes its own approver. The supervisor provides a verdict; the control plane owns irreversible actions such as merge and cleanup.
@@ -108,7 +124,7 @@ This bootstrap intentionally refuses clever automatic rebases/conflict resolutio
 
 ## Autonomy budgets
 
-Each project has explicit policy values:
+Each Project has explicit policy values:
 
 - `maxConcurrentRuns`
 - `maxTaskIterations`
@@ -118,7 +134,7 @@ Each project has explicit policy values:
 - `autoMerge`
 - `cleanupAfterMerge`
 
-These limits belong to the control plane, not the underlying runner.
+`autoAnalyzeIdeas` only affects optional Idea objects. It does not gate or control direct Tasks. These limits belong to the control plane, not the underlying runner.
 
 ## Bootstrap technology
 
