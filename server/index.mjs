@@ -9,6 +9,7 @@ import { extractResult, latestAssistantText } from './core/result-contract.mjs';
 import { buildPlannerPrompt, buildSupervisorPrompt, buildTaskPrompt } from './core/task-prompt.mjs';
 import { OpenCodeClient } from './integrations/opencode.mjs';
 import { GitHubClient, parseGitHubRemote, parseGitHubRepository } from './integrations/github.mjs';
+import { createResearchService } from './research/service.mjs';
 import {
   commitWorktree,
   createTaskWorktree,
@@ -32,6 +33,9 @@ const store = new StateStore(dataFile, { onChange: (type, payload) => events.pub
 const opencode = new OpenCodeClient();
 const github = new GitHubClient();
 await store.load();
+
+const research = createResearchService({ store, opencode });
+await research.initialize();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -94,10 +98,15 @@ async function githubOverview(repository = null) {
 }
 
 async function createScopedRun({ task, project, kind, worktreePath, branch, parentRunId = null, iteration = 1, prompt }) {
+  if ((task.runner || 'opencode') !== 'opencode') {
+    throw new Error(`Runner ${task.runner} is not implemented yet; use opencode for coding-agent runs`);
+  }
+
   let run = await store.createRun({
     taskId: task.id,
     projectId: project.id,
     runner: task.runner,
+    model: task.model || null,
     kind,
     parentRunId,
     branch,
@@ -118,6 +127,7 @@ async function createScopedRun({ task, project, kind, worktreePath, branch, pare
       sessionId: session.id,
       prompt,
       agent: task.agentRole || undefined,
+      model: task.model || undefined,
     });
     return store.getRun(run.id);
   } catch (error) {
@@ -162,6 +172,8 @@ async function startIdeaPlanning(ideaId) {
     title: `Plan idea: ${idea.title}`,
     description: idea.description,
     priority: 'P1',
+    runner: 'opencode',
+    model: project.modelPolicy?.planningModel || project.modelPolicy?.codingModel || null,
     agentRole: project.autonomy.plannerRole,
     state: 'planning',
   });
@@ -229,12 +241,7 @@ async function startWorker(taskId) {
       branch: workspace.branch,
       parentRunId: reusable?.id || null,
       iteration: nextIteration,
-      prompt: buildTaskPrompt({
-        project,
-        task,
-        feedback: task.supervisorFeedback,
-        iteration: nextIteration,
-      }),
+      prompt: buildTaskPrompt({ project, task, feedback: task.supervisorFeedback, iteration: nextIteration }),
     });
   } catch (error) {
     await store.updateTask(task.id, { state: 'backlog' });
@@ -250,7 +257,12 @@ async function startSupervisor(taskId) {
   const worker = latestWorker(task.id);
   if (!worker) throw new Error('No completed worker run is available for review');
 
-  const reviewTask = { ...task, agentRole: project.autonomy.supervisorRole };
+  const reviewTask = {
+    ...task,
+    runner: 'opencode',
+    model: project.modelPolicy?.supervisorModel || task.model || null,
+    agentRole: project.autonomy.supervisorRole,
+  };
   await store.updateTask(task.id, { state: 'reviewing' });
   try {
     return await createScopedRun({
@@ -304,6 +316,8 @@ async function applyPlannerResult(run, result, assistantText) {
       title: spec.title,
       description: spec.description || '',
       priority: spec.priority,
+      runner: spec.runner || 'opencode',
+      model: spec.model || project.modelPolicy?.codingModel || null,
       agentRole: spec.agentRole || project.autonomy.workerRole,
       acceptanceCriteria: spec.acceptanceCriteria,
       blockedBy: [],
@@ -397,18 +411,11 @@ async function publishTask(taskId) {
     if (evidence.headSha && evidence.headSha !== worker.checkpointHead) throw new Error('GitHub PR head does not match worker checkpoint after publish');
     const now = new Date().toISOString();
     const publication = {
-      provider: 'github',
-      repository: expected.fullName,
-      prNumber: pull.number,
-      prUrl: evidence.url || pull.html_url || null,
-      headSha: worker.checkpointHead,
-      headBranch: worker.branch,
-      baseBranch: project.baseBranch || 'main',
-      state: evidence.state || 'open',
-      ci: evidence.ci,
-      publishedAt: now,
-      lastCheckedAt: now,
-      lastError: null,
+      provider: 'github', repository: expected.fullName, prNumber: pull.number,
+      prUrl: evidence.url || pull.html_url || null, headSha: worker.checkpointHead,
+      headBranch: worker.branch, baseBranch: project.baseBranch || 'main',
+      state: evidence.state || 'open', ci: evidence.ci, publishedAt: now,
+      lastCheckedAt: now, lastError: null,
     };
     await store.updateTask(task.id, { state: 'awaiting_ci', publication, supervisorFeedback: null });
     return publication;
@@ -519,10 +526,7 @@ async function applySupervisorResult(run, result, assistantText) {
     });
     return;
   }
-  await store.updateTask(task.id, {
-    state: 'needs_input',
-    supervisorFeedback: result.summary || 'Supervisor blocked autonomous progress.',
-  });
+  await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: result.summary || 'Supervisor blocked autonomous progress.' });
 }
 
 async function failRun(run, message) {
@@ -648,12 +652,19 @@ async function api(request, response, url) {
     return json(response, 200, {
       ok: true,
       service: 'ai-dashboard',
-      version: '0.0.3',
+      version: '0.0.4',
       now: new Date().toISOString(),
       eventClients: events.clientCount,
       integrations: {
         opencode: openCode,
         github: { configured: Boolean(github.token), apiUrl: github.baseUrl },
+        modelProviders: (await research.listProviders()).map((provider) => ({
+          id: provider.id,
+          name: provider.name,
+          configured: provider.configured,
+          modelCount: provider.lastModels?.length || 0,
+          lastError: provider.lastError || null,
+        })),
       },
     });
   }
@@ -666,10 +677,27 @@ async function api(request, response, url) {
     return json(response, value.connected ? 200 : 503, value);
   }
 
+  if (request.method === 'GET' && url.pathname === '/api/integrations/opencode/models') {
+    return json(response, 200, await research.openCodeModels(url.searchParams.get('projectId')));
+  }
+
   if (request.method === 'GET' && url.pathname === '/api/integrations/github') {
     const value = await githubOverview(url.searchParams.get('repository'));
     await store.setIntegration('github', value);
     return json(response, value.authenticated ? 200 : 503, value);
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/model-providers') {
+    return json(response, 200, await research.listProviders());
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/model-providers') {
+    return json(response, 201, await research.upsertProvider(await body(request)));
+  }
+
+  const providerDiscover = url.pathname.match(/^\/api\/model-providers\/([^/]+)\/discover$/);
+  if (request.method === 'POST' && providerDiscover) {
+    return json(response, 200, await research.discoverProvider(decodeURIComponent(providerDiscover[1])));
   }
 
   if (request.method === 'GET' && url.pathname === '/api/events') {
@@ -680,6 +708,12 @@ async function api(request, response, url) {
   if (request.method === 'POST' && url.pathname === '/api/projects') return json(response, 201, await store.addProject(await body(request)));
   if (request.method === 'POST' && url.pathname === '/api/tasks') return json(response, 201, await store.addTask(await body(request)));
   if (request.method === 'POST' && url.pathname === '/api/ideas') return json(response, 201, await store.addIdea(await body(request)));
+  if (request.method === 'POST' && url.pathname === '/api/research') return json(response, 202, await research.startResearch(await body(request)));
+
+  const retryResearch = url.pathname.match(/^\/api\/research\/([^/]+)\/retry$/);
+  if (request.method === 'POST' && retryResearch) {
+    return json(response, 202, await research.retryResearch(decodeURIComponent(retryResearch[1])));
+  }
 
   const projectPatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
   if (request.method === 'PATCH' && projectPatch) {
