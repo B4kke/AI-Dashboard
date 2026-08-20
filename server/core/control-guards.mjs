@@ -1,5 +1,7 @@
 import { deleteTaskBranch, listRepositoryWorktrees, removeTaskWorktree, syncBaseBranch } from '../git/worktrees.mjs';
 
+const DISPATCH_GRACE_SECONDS = 30;
+
 function projectForTask(store, taskId) {
   const task = store.getTask(taskId);
   if (!task) throw new Error('Task not found');
@@ -8,7 +10,18 @@ function projectForTask(store, taskId) {
   return { task, project };
 }
 
-export function decorateControlPlane({ orchestrator, store, locks, github = null }) {
+function latestTaskRun(store, taskId, predicate = () => true) {
+  return store.snapshot().runs
+    .filter((run) => run.taskId === taskId && predicate(run))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] || null;
+}
+
+function secondsSince(iso) {
+  if (!iso) return Number.POSITIVE_INFINITY;
+  return (Date.now() - new Date(iso).getTime()) / 1000;
+}
+
+export function decorateControlPlane({ orchestrator, store, locks, github = null, opencode = null }) {
   async function startWorker(taskId) {
     const { task, project } = projectForTask(store, taskId);
     if (project.status !== 'active') throw new Error(`Project is ${project.status}; resolve project state before starting more work`);
@@ -25,17 +38,75 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
         }
       });
     }
-    return orchestrator.startWorker(taskId);
+
+    try {
+      return await orchestrator.startWorker(taskId);
+    } catch (error) {
+      // OpenCode prompt_async can have an ambiguous outcome: the request may have been accepted even when
+      // the client loses the 204 acknowledgement. A failed run with a persisted session is therefore not
+      // safe to auto-retry. Keep the task attached to that session until reconciliation proves what happened.
+      const run = latestTaskRun(store, taskId, (item) => item.kind === 'worker' && item.status === 'failed' && Boolean(item.sessionId));
+      const currentTask = store.getTask(taskId);
+      if (run && currentTask?.state === 'backlog') {
+        const message = `OpenCode dispatch acknowledgement is uncertain: ${run.error || error.message}. Reconcile this session before any retry.`;
+        await store.updateRun(run.id, { status: 'dispatch_unknown', error: message, finishedAt: null, dispatchUncertain: true });
+        await store.updateTask(taskId, { state: 'in_progress', supervisorFeedback: message });
+        return store.getRun(run.id);
+      }
+      throw error;
+    }
+  }
+
+  async function reconcileUncertainDispatch(run) {
+    if (!opencode || !run?.sessionId || !run?.worktreePath) {
+      const message = 'Cannot reconcile uncertain OpenCode dispatch because session/worktree evidence is missing.';
+      await store.updateRun(run.id, { status: 'failed', error: message, finishedAt: new Date().toISOString() });
+      if (run.taskId) await store.updateTask(run.taskId, { state: 'needs_input', supervisorFeedback: message });
+      return { status: 'dispatch_unconfirmed', error: message };
+    }
+
+    let statuses;
+    let messages;
+    try {
+      [statuses, messages] = await Promise.all([
+        opencode.sessionStatus(run.worktreePath),
+        opencode.messages({ directory: run.worktreePath, sessionId: run.sessionId, limit: 50 }),
+      ]);
+    } catch (error) {
+      await store.updateRun(run.id, { error: `Runner unavailable while reconciling uncertain dispatch: ${error.message}` });
+      return { status: 'runner_unavailable', error: error.message };
+    }
+
+    const status = statuses?.[run.sessionId] || { type: 'idle' };
+    const assistantObserved = Array.isArray(messages) && messages.some((message) => message?.info?.role === 'assistant');
+    if (status.type === 'busy' || status.type === 'retry' || assistantObserved) {
+      await store.updateRun(run.id, { status: 'running', dispatchUncertain: false, error: null });
+      return orchestrator.reconcileRun(run.id);
+    }
+
+    if (status.type === 'idle' && secondsSince(run.startedAt) >= DISPATCH_GRACE_SECONDS) {
+      const message = 'OpenCode dispatch could not be confirmed: the persisted session remained idle without an assistant message. Automatic retry is blocked to avoid duplicate workers.';
+      await store.updateRun(run.id, { status: 'failed', error: message, finishedAt: new Date().toISOString(), dispatchUncertain: false });
+      if (run.taskId) await store.updateTask(run.taskId, { state: 'needs_input', supervisorFeedback: message });
+      return { status: 'dispatch_unconfirmed', error: message };
+    }
+
+    return { status: 'dispatch_unknown' };
   }
 
   async function reconcileRun(run) {
+    const current = typeof run === 'string' ? store.getRun(run) : store.getRun(run.id);
+    if (current?.status === 'dispatch_unknown' || current?.dispatchUncertain === true) {
+      return reconcileUncertainDispatch(current);
+    }
+
     const value = await orchestrator.reconcileRun(run);
     if (value?.status === 'invalid_result_contract') {
-      const current = typeof run === 'string' ? store.getRun(run) : store.getRun(run.id);
-      if (current?.kind === 'supervisor' && current.taskId) {
-        await store.updateTask(current.taskId, {
+      const refreshed = typeof run === 'string' ? store.getRun(run) : store.getRun(run.id);
+      if (refreshed?.kind === 'supervisor' && refreshed.taskId) {
+        await store.updateTask(refreshed.taskId, {
           state: 'needs_input',
-          supervisorFeedback: current.error || 'Supervisor returned an invalid result contract; autonomous review is paused.',
+          supervisorFeedback: refreshed.error || 'Supervisor returned an invalid result contract; autonomous review is paused.',
         });
       }
     }
@@ -97,6 +168,22 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
     return result;
   }
 
+  async function recover() {
+    const uncertainBefore = store.snapshot().runs.filter((run) => run.status === 'dispatch_unknown' || run.dispatchUncertain === true);
+    const actions = await orchestrator.recover();
+    for (const run of uncertainBefore) {
+      const current = store.getRun(run.id);
+      if (!current?.sessionId || !current?.taskId || ['completed', 'merged', 'aborted'].includes(current.status)) continue;
+      await store.updateRun(current.id, { status: 'dispatch_unknown', dispatchUncertain: true, finishedAt: null });
+      await store.updateTask(current.taskId, {
+        state: 'in_progress',
+        supervisorFeedback: 'Recovered an uncertain OpenCode dispatch after process restart; reconciling the existing session before any retry.',
+      });
+      actions.push({ type: 'run.dispatch_recovered', runId: current.id, taskId: current.taskId });
+    }
+    return actions;
+  }
+
   async function workspaceInventory() {
     const snapshot = store.snapshot();
     const owned = new Map(snapshot.runs.filter((run) => run.worktreePath).map((run) => [run.worktreePath, run]));
@@ -107,14 +194,17 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
         projects.push({
           projectId: project.id, projectName: project.name, repoPath: project.repoPath,
           worktrees: worktrees.map((worktree) => {
-            const run = owned.get(worktree.path) || null; const managedBranch = worktree.branch?.startsWith('ai/') === true;
+            const run = owned.get(worktree.path) || null;
+            const managedBranch = worktree.branch?.startsWith('ai/') === true;
             return { ...worktree, managedBranch, ownerRunId: run?.id || null, ownerTaskId: run?.taskId || null, abandoned: managedBranch && !run };
           }),
         });
-      } catch (error) { projects.push({ projectId: project.id, projectName: project.name, repoPath: project.repoPath, error: error.message, worktrees: [] }); }
+      } catch (error) {
+        projects.push({ projectId: project.id, projectName: project.name, repoPath: project.repoPath, error: error.message, worktrees: [] });
+      }
     }
     return { projects, abandonedCount: projects.reduce((sum, project) => sum + project.worktrees.filter((worktree) => worktree.abandoned).length, 0) };
   }
 
-  return { ...orchestrator, startWorker, reconcileRun, reconcilePublishedTask, mergeApprovedTask, workspaceInventory };
+  return { ...orchestrator, startWorker, reconcileRun, reconcilePublishedTask, mergeApprovedTask, recover, workspaceInventory };
 }
