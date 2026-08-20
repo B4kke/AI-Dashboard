@@ -39,8 +39,12 @@ export class AutonomyEngine {
         const ideas = state.ideas.filter((item) => item.projectId === project.id);
         if (config.mode === 'autonomous' && config.autoAnalyzeIdeas) {
           for (const idea of ideas.filter((item) => item.state === 'inbox')) {
-            await this.operations.startIdeaPlanning(idea.id);
-            actions.push({ type: 'idea.plan', ideaId: idea.id });
+            try {
+              await this.operations.startIdeaPlanning(idea.id);
+              actions.push({ type: 'idea.plan', ideaId: idea.id });
+            } catch (error) {
+              actions.push({ type: 'idea.plan_failed', ideaId: idea.id, error: error.message });
+            }
           }
         }
 
@@ -55,9 +59,13 @@ export class AutonomyEngine {
           if (capacity <= 0) break;
           const activeReview = current.runs.some((run) => run.taskId === task.id && run.kind === 'supervisor' && ['preparing', 'running', 'retrying'].includes(run.status));
           if (!activeReview) {
-            await this.operations.startSupervisor(task.id);
-            actions.push({ type: 'task.supervise', taskId: task.id });
-            capacity -= 1;
+            try {
+              await this.operations.startSupervisor(task.id);
+              actions.push({ type: 'task.supervise', taskId: task.id });
+              capacity -= 1;
+            } catch (error) {
+              actions.push({ type: 'task.supervise_failed', taskId: task.id, error: error.message });
+            }
           }
         }
 
@@ -72,9 +80,13 @@ export class AutonomyEngine {
           });
           for (const task of ready) {
             if (capacity <= 0) break;
-            await this.operations.startWorker(task.id);
-            actions.push({ type: 'task.worker', taskId: task.id });
-            capacity -= 1;
+            try {
+              await this.operations.startWorker(task.id);
+              actions.push({ type: 'task.worker', taskId: task.id });
+              capacity -= 1;
+            } catch (error) {
+              actions.push({ type: 'task.worker_failed', taskId: task.id, error: error.message });
+            }
           }
         }
 

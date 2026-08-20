@@ -105,6 +105,12 @@ async function createScopedRun({ task, project, kind, worktreePath, branch, pare
   }
 }
 
+async function discardRunWorkspace(run, project) {
+  if (!run?.worktreePath || !run?.branch || !project?.repoPath) return;
+  await removeTaskWorktree({ repoPath: project.repoPath, worktreePath: run.worktreePath, force: true }).catch(() => {});
+  await deleteTaskBranch({ repoPath: project.repoPath, branch: run.branch, force: true }).catch(() => {});
+}
+
 async function startIdeaPlanning(ideaId) {
   const idea = store.getIdea(ideaId);
   if (!idea) throw new Error('Idea not found');
@@ -130,15 +136,22 @@ async function startIdeaPlanning(ideaId) {
     title: planningTask.title,
     baseRef: project.baseBranch || 'HEAD',
   });
-  return createScopedRun({
-    task: planningTask,
-    project,
-    kind: 'planner',
-    worktreePath: workspace.worktreePath,
-    branch: workspace.branch,
-    iteration: 1,
-    prompt: buildPlannerPrompt({ project, idea }),
-  });
+  try {
+    return await createScopedRun({
+      task: planningTask,
+      project,
+      kind: 'planner',
+      worktreePath: workspace.worktreePath,
+      branch: workspace.branch,
+      iteration: 1,
+      prompt: buildPlannerPrompt({ project, idea }),
+    });
+  } catch (error) {
+    await store.updateTask(planningTask.id, { state: 'needs_input' });
+    await store.updateIdea(idea.id, { state: 'needs_input' });
+    await discardRunWorkspace({ ...workspace }, project);
+    throw error;
+  }
 }
 
 async function startWorker(taskId) {
@@ -221,12 +234,6 @@ async function startSupervisor(taskId) {
     await store.updateTask(task.id, { state: 'awaiting_review' });
     throw error;
   }
-}
-
-async function discardRunWorkspace(run, project) {
-  if (!run?.worktreePath || !run?.branch || !project?.repoPath) return;
-  await removeTaskWorktree({ repoPath: project.repoPath, worktreePath: run.worktreePath, force: true }).catch(() => {});
-  await deleteTaskBranch({ repoPath: project.repoPath, branch: run.branch, force: true }).catch(() => {});
 }
 
 async function applyPlannerResult(run, result, assistantText) {

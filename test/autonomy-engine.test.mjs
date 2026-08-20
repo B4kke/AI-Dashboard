@@ -53,3 +53,33 @@ test('autonomous projects can automatically send inbox ideas to planning', async
   await engine.tick();
   assert.deepEqual(calls, ['i1']);
 });
+
+test('one failed autonomous action does not stop other ready work', async () => {
+  const state = {
+    projects: [{ id: 'p1', status: 'active', autonomy: { mode: 'autonomous', autoAnalyzeIdeas: false, autoMerge: false, maxConcurrentRuns: 2 } }],
+    ideas: [],
+    tasks: [
+      { id: 'bad', projectId: 'p1', kind: 'work', state: 'backlog', blockedBy: [] },
+      { id: 'good', projectId: 'p1', kind: 'work', state: 'backlog', blockedBy: [] },
+    ],
+    runs: [],
+  };
+  const calls = [];
+  const store = { snapshot: () => structuredClone(state) };
+  const operations = {
+    reconcileRun: async () => {},
+    startIdeaPlanning: async () => {},
+    startSupervisor: async () => {},
+    startWorker: async (taskId) => {
+      calls.push(taskId);
+      if (taskId === 'bad') throw new Error('runner offline');
+      state.runs.push({ id: 'r-good', projectId: 'p1', taskId, kind: 'worker', status: 'running' });
+    },
+    mergeApprovedTask: async () => {},
+  };
+  const engine = new AutonomyEngine({ store, operations, intervalMs: 999999 });
+  const result = await engine.tick();
+  assert.deepEqual(calls, ['bad', 'good']);
+  assert.ok(result.actions.some((action) => action.type === 'task.worker_failed' && action.taskId === 'bad'));
+  assert.ok(result.actions.some((action) => action.type === 'task.worker' && action.taskId === 'good'));
+});
