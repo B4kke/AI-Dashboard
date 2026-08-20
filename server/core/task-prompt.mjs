@@ -1,4 +1,4 @@
-import { RESULT_MARKER } from './result-contract.mjs';
+import { RESULT_MARKER, RESULT_SCHEMA_VERSION } from './result-contract.mjs';
 
 function jsonContract(shape) {
   return [
@@ -35,10 +35,17 @@ export function buildTaskPrompt({ project, task, feedback = null, iteration = 1 
     '- Run relevant tests/checks for the changed scope.',
     '- Do not merge or push unless the task explicitly requires it; the control plane owns publication, approval and merge.',
     '- Leave the worktree in a reviewable state and report concrete evidence.',
+    '- Your reported tests are claims only. The control plane independently captures Git diff/checkpoint evidence and runs configured verification commands.',
+    '- Use status no_change only when no repository change is actually needed. It never auto-completes a coding task.',
     ...jsonContract({
+      schemaVersion: RESULT_SCHEMA_VERSION,
+      kind: 'worker',
       status: 'success',
       summary: 'What changed and why',
-      evidence: ['tests/checks actually run and their outcomes'],
+      evidence: {
+        tests: ['tests/checks you actually ran and their observed outcome'],
+        notes: ['other concrete evidence or constraints'],
+      },
       risks: [],
       needsInput: null,
     }),
@@ -57,9 +64,12 @@ export function buildPlannerPrompt({ project, idea }) {
     '- Inspect the repository and existing project instructions before planning.',
     '- Prefer the smallest vertical slices that can be independently verified.',
     '- Avoid duplicate or overlapping tasks.',
+    '- Give each implementation task concrete acceptance criteria.',
     '- Call out prerequisites, risks, and questions that genuinely require human input.',
     '- Do not implement the feature in this planning run.',
     ...jsonContract({
+      schemaVersion: RESULT_SCHEMA_VERSION,
+      kind: 'planner',
       status: 'ready',
       summary: 'Plan summary',
       tasks: [
@@ -78,16 +88,19 @@ export function buildPlannerPrompt({ project, idea }) {
   ].join('\n');
 }
 
-export function buildSupervisorPrompt({ project, task, workerResult, iteration, publication = null }) {
+export function buildSupervisorPrompt({ project, task, workerResult, iteration, publication = null, controlEvidence = null }) {
   const lines = [
     `Act as the independent supervisor for task: ${task.title}`,
     '',
     `Project: ${project.name}`,
     `Worker iteration: ${iteration}`,
     '',
-    'Worker-reported result:',
+    'Worker-reported result (untrusted claim):',
     JSON.stringify(workerResult || {}, null, 2),
   ];
+  if (controlEvidence) {
+    lines.push('', 'Control-plane generated evidence:', JSON.stringify(controlEvidence, null, 2));
+  }
   if (publication) {
     lines.push('', 'GitHub/CI evidence collected by the control plane:', JSON.stringify(publication, null, 2));
   }
@@ -95,16 +108,22 @@ export function buildSupervisorPrompt({ project, task, workerResult, iteration, 
     '',
     'Supervisor contract:',
     '- Independently inspect the diff and relevant repository context.',
-    '- Use GitHub/CI evidence as additional evidence, not as a replacement for checking the actual change.',
-    '- Run or re-run the checks needed to validate the acceptance criteria.',
-    '- Treat worker claims as untrusted until verified.',
-    '- Do not approve if CI is failing/pending, tests are missing, the scope is unrelated, or the change is unsafe.',
-    '- Do not modify files, create commits, merge, or push. Review must be read-only.',
-    '- The control plane will reject your approval if the reviewed worktree changes or the PR head moves during supervision.',
+    '- Use control-plane and GitHub/CI evidence as primary machine evidence; worker claims are untrusted.',
+    '- Validate every acceptance criterion explicitly and return one result for each criterion using the exact criterion text.',
+    '- Re-run checks if necessary to establish confidence, but do not modify files.',
+    '- Do not approve if CI is failing/pending/error, configured verification failed, acceptance evidence is missing, the scope is unrelated, or the change is unsafe.',
+    '- Do not create commits, merge, or push. Review must be read-only.',
+    '- The control plane will independently re-check repository integrity and configured verification before merge.',
     ...jsonContract({
+      schemaVersion: RESULT_SCHEMA_VERSION,
+      kind: 'supervisor',
       verdict: 'approve',
       summary: 'Independent verification summary',
-      evidence: ['checks independently verified'],
+      acceptanceCriteria: (task.acceptanceCriteria || []).map((criterion) => ({
+        criterion,
+        status: 'passed',
+        evidence: 'What independently proves this criterion',
+      })),
       requiredChanges: [],
       risks: [],
     }),
