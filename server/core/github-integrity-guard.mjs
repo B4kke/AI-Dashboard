@@ -5,6 +5,12 @@ function identityMatches(project, worker, evidence) {
     && evidence?.baseBranch === (project?.baseBranch || 'main');
 }
 
+function hasActiveCiBackoff(task) {
+  if (task?.state !== 'awaiting_ci' || !task?.publication?.nextCheckAt) return false;
+  const nextCheckAt = Date.parse(task.publication.nextCheckAt);
+  return Number.isFinite(nextCheckAt) && nextCheckAt > Date.now();
+}
+
 export function decorateGitHubIntegrity({ orchestrator, store, github }) {
   async function blockMergedIdentityMismatch(task, project, worker, evidence) {
     const expectedHead = worker?.checkpointHead || 'missing verified worker checkpoint';
@@ -41,6 +47,9 @@ export function decorateGitHubIntegrity({ orchestrator, store, github }) {
   }
 
   async function reconcilePublishedTask(taskId) {
+    const task = store.getTask(taskId);
+    // The inner control guard owns CI outage/rate-limit backoff. Do not perform a second GitHub read before it.
+    if (hasActiveCiBackoff(task)) return orchestrator.reconcilePublishedTask(taskId);
     const check = await verifyExternalMergeIdentity(taskId);
     if (check?.blocked) return check.blocked;
     return orchestrator.reconcilePublishedTask(taskId);
