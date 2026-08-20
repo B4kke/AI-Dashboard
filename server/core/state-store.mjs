@@ -6,7 +6,7 @@ const DEFAULT_AUTONOMY = Object.freeze({
   mode: 'manual', supervisorRole: 'supervisor', plannerRole: 'planner', workerRole: 'builder',
   maxConcurrentRuns: 2, maxTaskIterations: 4, maxRunMinutes: 45, maxRetryAttempts: 5,
   autoAnalyzeIdeas: false, autoMerge: false, cleanupAfterMerge: true,
-  ciDiscoverySeconds: 30, mergeMethod: 'squash', deleteRemoteBranch: true,
+  ciDiscoverySeconds: 30, requireCi: true, mergeMethod: 'squash', deleteRemoteBranch: true,
 });
 
 const DEFAULT_MODEL_POLICY = Object.freeze({
@@ -17,11 +17,12 @@ const DEFAULT_MODEL_POLICY = Object.freeze({
 });
 
 const EMPTY_STATE = Object.freeze({
-  schemaVersion: 4,
+  schemaVersion: 5,
   projects: [], ideas: [], tasks: [], agents: [], runs: [], researchRuns: [], modelProviders: [], integrations: {},
 });
 
 function cloneEmpty() { return structuredClone(EMPTY_STATE); }
+function stringList(value) { return Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : []; }
 function modelPolicy(input = {}) {
   const out = { ...structuredClone(DEFAULT_MODEL_POLICY) };
   for (const key of Object.keys(out)) out[key] = input?.[key]?.trim?.() || null;
@@ -37,6 +38,7 @@ function autonomy(input = {}) {
     maxRunMinutes: Math.max(1, Number(input.maxRunMinutes || DEFAULT_AUTONOMY.maxRunMinutes)),
     maxRetryAttempts: Math.max(0, Number(input.maxRetryAttempts ?? DEFAULT_AUTONOMY.maxRetryAttempts)),
     ciDiscoverySeconds: Math.max(0, Math.min(600, Number(input.ciDiscoverySeconds ?? DEFAULT_AUTONOMY.ciDiscoverySeconds))),
+    requireCi: input.requireCi !== false,
     autoAnalyzeIdeas: input.autoAnalyzeIdeas === true,
     autoMerge: input.autoMerge === true,
     cleanupAfterMerge: input.cleanupAfterMerge !== false,
@@ -52,13 +54,24 @@ export class StateStore {
   async load() {
     try {
       const parsed = JSON.parse(await readFile(this.filePath, 'utf8'));
-      this.state = { ...cloneEmpty(), ...parsed, schemaVersion: 4 };
-      this.state.projects = this.state.projects.map((project) => ({ ...project, autonomy: autonomy(project.autonomy), modelPolicy: modelPolicy(project.modelPolicy) }));
+      this.state = { ...cloneEmpty(), ...parsed, schemaVersion: 5 };
+      this.state.projects = this.state.projects.map((project) => ({
+        ...project,
+        autonomy: autonomy(project.autonomy),
+        modelPolicy: modelPolicy(project.modelPolicy),
+        verificationCommands: stringList(project.verificationCommands),
+      }));
       if (!Array.isArray(this.state.ideas)) this.state.ideas = [];
       if (!Array.isArray(this.state.researchRuns)) this.state.researchRuns = [];
       if (!Array.isArray(this.state.modelProviders)) this.state.modelProviders = [];
-      this.state.tasks = this.state.tasks.map((task) => ({ publication: null, model: null, ...task }));
-      this.state.runs = this.state.runs.map((run) => ({ model: null, ...run }));
+      this.state.tasks = this.state.tasks.map((task) => ({
+        publication: null,
+        model: null,
+        verificationCommands: stringList(task.verificationCommands),
+        allowNoChange: task.allowNoChange === true,
+        ...task,
+      }));
+      this.state.runs = this.state.runs.map((run) => ({ model: null, evidence: null, ...run }));
       await this.#persist();
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
@@ -75,7 +88,8 @@ export class StateStore {
     const project = {
       id: randomUUID(), name: input.name.trim(), repoPath: input.repoPath?.trim() || null,
       repository: input.repository?.trim() || null, baseBranch: input.baseBranch?.trim() || 'main', status: 'active',
-      autonomy: autonomy(input.autonomy), modelPolicy: modelPolicy(input.modelPolicy), createdAt: now, updatedAt: now,
+      autonomy: autonomy(input.autonomy), modelPolicy: modelPolicy(input.modelPolicy),
+      verificationCommands: stringList(input.verificationCommands), createdAt: now, updatedAt: now,
     };
     this.state.projects.push(project); await this.#changed('project.created', project); return structuredClone(project);
   }
@@ -85,6 +99,7 @@ export class StateStore {
     if (!project) throw new Error('Project not found');
     if (patch.autonomy) project.autonomy = autonomy({ ...project.autonomy, ...patch.autonomy });
     if (patch.modelPolicy) project.modelPolicy = modelPolicy({ ...project.modelPolicy, ...patch.modelPolicy });
+    if (patch.verificationCommands !== undefined) project.verificationCommands = stringList(patch.verificationCommands);
     for (const key of ['name', 'repoPath', 'repository', 'baseBranch', 'status']) if (patch[key] !== undefined) project[key] = patch[key];
     project.updatedAt = new Date().toISOString(); await this.#changed('project.updated', project); return structuredClone(project);
   }
@@ -112,13 +127,15 @@ export class StateStore {
     if (!project) throw new Error('Valid projectId is required');
     if (!input?.title?.trim()) throw new Error('Task title is required');
     const now = new Date().toISOString();
+    const taskCommands = Array.isArray(input.verificationCommands) ? stringList(input.verificationCommands) : stringList(project.verificationCommands);
     const task = {
       id: randomUUID(), projectId: project.id, sourceIdeaId: input.sourceIdeaId || null, parentTaskId: input.parentTaskId || null,
       kind: ['planning', 'work', 'review'].includes(input.kind) ? input.kind : 'work', title: input.title.trim(), description: input.description?.trim() || '',
       priority: ['P0', 'P1', 'P2', 'P3'].includes(input.priority) ? input.priority : 'P2', state: input.state || 'backlog',
       runner: input.runner || 'opencode', model: input.model?.trim?.() || project.modelPolicy?.codingModel || null,
-      agentRole: input.agentRole?.trim() || null, blockedBy: Array.isArray(input.blockedBy) ? input.blockedBy : [],
-      acceptanceCriteria: Array.isArray(input.acceptanceCriteria) ? input.acceptanceCriteria.filter(Boolean) : [],
+      agentRole: input.agentRole?.trim() || null, blockedBy: stringList(input.blockedBy),
+      acceptanceCriteria: stringList(input.acceptanceCriteria), verificationCommands: taskCommands,
+      allowNoChange: input.allowNoChange === true,
       iteration: Number(input.iteration || 0), supervisorFeedback: null, publication: null, createdAt: now, updatedAt: now,
     };
     this.state.tasks.push(task); await this.#changed('task.created', task); return structuredClone(task);
@@ -138,6 +155,7 @@ export class StateStore {
   async updateTask(id, patch) {
     const task = this.state.tasks.find((item) => item.id === id);
     if (!task) throw new Error('Task not found');
+    if (patch.verificationCommands !== undefined) patch = { ...patch, verificationCommands: stringList(patch.verificationCommands) };
     Object.assign(task, patch, { updatedAt: new Date().toISOString() }); await this.#changed('task.updated', task); return structuredClone(task);
   }
 
@@ -146,7 +164,7 @@ export class StateStore {
     const run = {
       id: randomUUID(), taskId: input.taskId, projectId: input.projectId, kind: input.kind || 'worker', parentRunId: input.parentRunId || null,
       runner: input.runner || 'opencode', model: input.model || null, status: input.status || 'preparing', sessionId: null, branch: input.branch || null,
-      worktreePath: input.worktreePath || null, iteration: Number(input.iteration || 1), retryAttempts: 0, result: null, assistantText: null,
+      worktreePath: input.worktreePath || null, iteration: Number(input.iteration || 1), retryAttempts: 0, result: null, evidence: null, assistantText: null,
       error: null, createdAt: now, updatedAt: now, startedAt: null, finishedAt: null,
     };
     this.state.runs.push(run); await this.#changed('run.created', run); return structuredClone(run);
