@@ -7,12 +7,14 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-async function git(cwd, args) {
+async function git(cwd, args, { timeoutMs = 60_000 } = {}) {
   const { stdout } = await execFileAsync('git', args, {
     cwd,
     encoding: 'utf8',
     windowsHide: true,
+    timeout: timeoutMs,
     maxBuffer: 8 * 1024 * 1024,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
   return stdout.trim();
 }
@@ -87,6 +89,18 @@ export async function commitWorktree({ worktreePath, message }) {
   await git(worktreePath, ['add', '-A']);
   await git(worktreePath, ['commit', '-m', message]);
   return { committed: true, head: await git(worktreePath, ['rev-parse', 'HEAD']) };
+}
+
+export async function gitRemoteUrl({ worktreePath, remote = 'origin' }) {
+  if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw new Error('Invalid Git remote name');
+  return git(worktreePath, ['remote', 'get-url', remote]);
+}
+
+export async function pushTaskBranch({ worktreePath, branch, remote = 'origin', timeoutMs = 120_000 }) {
+  if (!branch || branch.startsWith('-') || /[\u0000-\u001f\u007f]/.test(branch)) throw new Error('Invalid task branch');
+  if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw new Error('Invalid Git remote name');
+  await git(worktreePath, ['push', '--set-upstream', remote, branch], { timeoutMs });
+  return { branch, remote, head: await git(worktreePath, ['rev-parse', 'HEAD']) };
 }
 
 export async function mergeTaskBranch({ repoPath, branch, baseBranch = 'main' }) {
