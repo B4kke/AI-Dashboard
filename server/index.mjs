@@ -1,0 +1,125 @@
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { extname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { EventHub } from './core/events.mjs';
+import { StateStore } from './core/state-store.mjs';
+import { OpenCodeClient } from './integrations/opencode.mjs';
+
+const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const PUBLIC = join(ROOT, 'public');
+const host = process.env.AI_DASHBOARD_HOST || '127.0.0.1';
+const port = Number(process.env.AI_DASHBOARD_PORT || 7331);
+const dataFile = resolve(process.env.AI_DASHBOARD_DATA || join(ROOT, 'data', 'state.json'));
+
+const events = new EventHub();
+const store = new StateStore(dataFile, { onChange: (type, payload) => events.publish(type, payload) });
+const opencode = new OpenCodeClient();
+await store.load();
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.svg': 'image/svg+xml',
+};
+
+function json(response, status, value) {
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(`${JSON.stringify(value)}\n`);
+}
+
+async function body(request) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of request) {
+    total += chunk.length;
+    if (total > 1_000_000) throw new Error('Request body too large');
+    chunks.push(chunk);
+  }
+  if (!chunks.length) return {};
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+async function opencodeOverview() {
+  try {
+    return await opencode.overview();
+  } catch (error) {
+    return { connected: false, healthy: false, url: opencode.baseUrl, error: error.message };
+  }
+}
+
+async function api(request, response, url) {
+  if (request.method === 'GET' && url.pathname === '/api/health') {
+    const openCode = await opencodeOverview();
+    return json(response, 200, {
+      ok: true,
+      service: 'ai-dashboard',
+      version: '0.0.1',
+      now: new Date().toISOString(),
+      eventClients: events.clientCount,
+      integrations: { opencode: openCode },
+    });
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/state') {
+    return json(response, 200, store.snapshot());
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/integrations/opencode') {
+    const value = await opencodeOverview();
+    await store.setIntegration('opencode', value);
+    return json(response, value.connected ? 200 : 503, value);
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/events') {
+    events.subscribe(response);
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/projects') {
+    return json(response, 201, await store.addProject(await body(request)));
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/tasks') {
+    return json(response, 201, await store.addTask(await body(request)));
+  }
+
+  return false;
+}
+
+async function staticFile(response, pathname) {
+  const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+  const filePath = resolve(PUBLIC, relative);
+  if (!filePath.startsWith(`${PUBLIC}/`) && filePath !== join(PUBLIC, 'index.html')) return false;
+  try {
+    const content = await readFile(filePath);
+    response.writeHead(200, { 'content-type': MIME[extname(filePath)] || 'application/octet-stream' });
+    response.end(content);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+const server = createServer(async (request, response) => {
+  try {
+    const url = new URL(request.url, `http://${request.headers.host || `${host}:${port}`}`);
+    if (url.pathname.startsWith('/api/')) {
+      const handled = await api(request, response, url);
+      if (handled === false) json(response, 404, { error: 'API route not found' });
+      return;
+    }
+    if (!(await staticFile(response, url.pathname))) {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end('Not found\n');
+    }
+  } catch (error) {
+    json(response, 500, { error: error.message });
+  }
+});
+
+server.listen(port, host, () => {
+  console.log(`AI Dashboard listening on http://${host}:${port}`);
+});

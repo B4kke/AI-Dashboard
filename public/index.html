@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Dashboard</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">AI</span><span>Control Center</span></div>
+    <nav>
+      <a class="active" href="#overview">Overview</a>
+      <a href="#projects">Projects</a>
+      <a href="#tasks">Tasks</a>
+      <a href="#agents">Agents</a>
+      <a href="#integrations">Integrations</a>
+      <a href="#automations">Automations</a>
+    </nav>
+    <div class="sidebar-foot"><span class="dot" id="system-dot"></span><span id="system-label">Connecting…</span></div>
+  </aside>
+
+  <main>
+    <header>
+      <div><p class="eyebrow">SELF-HOSTED AI OPERATIONS</p><h1>Mission control</h1></div>
+      <div class="header-actions"><button id="refresh">Refresh</button><button class="primary" id="new-project">+ Project</button></div>
+    </header>
+
+    <section class="metrics" id="overview">
+      <article><span>Projects</span><strong id="project-count">0</strong><small>registered workspaces</small></article>
+      <article><span>Tasks</span><strong id="task-count">0</strong><small id="task-sub">0 active</small></article>
+      <article><span>Agent runs</span><strong id="run-count">0</strong><small id="run-sub">0 running</small></article>
+      <article><span>OpenCode</span><strong id="opencode-short">—</strong><small id="opencode-version">checking</small></article>
+    </section>
+
+    <section class="grid two">
+      <article class="panel" id="projects">
+        <div class="panel-head"><div><p class="eyebrow">PROJECTS</p><h2>Project state</h2></div><span class="pill">LIVE</span></div>
+        <div id="project-list" class="stack"></div>
+      </article>
+      <article class="panel" id="agents">
+        <div class="panel-head"><div><p class="eyebrow">AGENT FLEET</p><h2>Runs</h2></div><span class="pill muted">M0</span></div>
+        <div id="run-list" class="stack"></div>
+      </article>
+    </section>
+
+    <section class="grid two">
+      <article class="panel" id="tasks">
+        <div class="panel-head"><div><p class="eyebrow">TASK FLOW</p><h2>Queue</h2></div><button id="new-task">+ Task</button></div>
+        <div id="task-list" class="stack"></div>
+      </article>
+      <article class="panel" id="integrations">
+        <div class="panel-head"><div><p class="eyebrow">INTEGRATIONS</p><h2>Runtime links</h2></div></div>
+        <div class="integration-row"><div><strong>OpenCode</strong><p>HTTP/SSE runner adapter</p></div><div class="status" id="opencode-status">Checking…</div></div>
+        <div class="integration-row"><div><strong>GitHub</strong><p>PR, CI, issues and review</p></div><div class="status pending">planned M2</div></div>
+        <div class="integration-row"><div><strong>ACP</strong><p>generic agent protocol</p></div><div class="status pending">planned M1</div></div>
+      </article>
+    </section>
+
+    <section class="panel terminal-panel">
+      <div class="panel-head"><div><p class="eyebrow">EVENT STREAM</p><h2>Control-plane events</h2></div><button id="clear-events">Clear</button></div>
+      <pre id="events">waiting for events…</pre>
+    </section>
+  </main>
+
+  <dialog id="project-dialog">
+    <form method="dialog" id="project-form">
+      <h2>Register project</h2>
+      <label>Name<input name="name" required placeholder="Norge World Engine"></label>
+      <label>Local repository path<input name="repoPath" placeholder="C:\\projects\\nwe or /srv/nwe"></label>
+      <label>GitHub repository<input name="repository" placeholder="owner/repository"></label>
+      <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="task-dialog">
+    <form method="dialog" id="task-form">
+      <h2>Create task</h2>
+      <label>Project<select name="projectId" id="task-project" required></select></label>
+      <label>Title<input name="title" required placeholder="Validate OpenCode runner"></label>
+      <label>Priority<select name="priority"><option>P0</option><option>P1</option><option selected>P2</option><option>P3</option></select></label>
+      <label>Agent role<input name="agentRole" placeholder="LUMEN / FORGE / general"></label>
+      <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create</button></div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

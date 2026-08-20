@@ -1,0 +1,13 @@
+{
+  "name": "ai-dashboard",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted control center for AI projects and coding agents",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "node --watch server/index.mjs",
+    "start": "node server/index.mjs",
+    "test": "node --test"
+  }
+}
