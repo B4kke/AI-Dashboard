@@ -32,7 +32,7 @@ function checkState(check) {
   return 'failure';
 }
 
-export function aggregateGitHubChecks({ checkRuns = [], combinedStatus = null } = {}) {
+export function aggregateGitHubChecks({ checkRuns = [], combinedStatus = null, errors = [] } = {}) {
   const checks = checkRuns.map((check) => ({
     id: check.id,
     name: check.name || 'check',
@@ -45,16 +45,22 @@ export function aggregateGitHubChecks({ checkRuns = [], combinedStatus = null } 
   if (legacyState && legacyState !== 'success') {
     checks.push({ id: 'combined-status', name: 'commit status', status: legacyState, conclusion: legacyState, state: legacyState === 'pending' ? 'pending' : 'failure', url: null });
   }
+
+  const normalizedErrors = errors.filter(Boolean).map((error) => String(error));
   let state = 'none';
-  if (checks.some((check) => check.state === 'failure')) state = 'failure';
+  if (normalizedErrors.length) state = 'error';
+  else if (checks.some((check) => check.state === 'failure')) state = 'failure';
   else if (checks.some((check) => check.state === 'pending')) state = 'pending';
   else if (checks.length || legacyState === 'success') state = 'success';
+
   return {
     state,
     checks,
     total: checks.length,
     failed: checks.filter((check) => check.state === 'failure').map((check) => check.name),
     pending: checks.filter((check) => check.state === 'pending').map((check) => check.name),
+    errors: normalizedErrors,
+    complete: normalizedErrors.length === 0,
   };
 }
 
@@ -136,17 +142,26 @@ export class GitHubClient {
   async commitChecks({ repository, sha }) {
     const { owner, repo } = parseGitHubRepository(repository);
     const root = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}`;
-    const [checkRuns, combinedStatus] = await Promise.all([
-      this.request(`${root}/check-runs?per_page=100`).catch(() => ({ check_runs: [] })),
-      this.request(`${root}/status`).catch(() => null),
+    const [checkRunsResult, statusResult] = await Promise.allSettled([
+      this.request(`${root}/check-runs?per_page=100`),
+      this.request(`${root}/status`),
     ]);
-    return aggregateGitHubChecks({ checkRuns: checkRuns?.check_runs || [], combinedStatus });
+    const errors = [];
+    if (checkRunsResult.status === 'rejected') errors.push(`check-runs: ${checkRunsResult.reason?.message || checkRunsResult.reason}`);
+    if (statusResult.status === 'rejected') errors.push(`commit-status: ${statusResult.reason?.message || statusResult.reason}`);
+    return aggregateGitHubChecks({
+      checkRuns: checkRunsResult.status === 'fulfilled' ? (checkRunsResult.value?.check_runs || []) : [],
+      combinedStatus: statusResult.status === 'fulfilled' ? statusResult.value : null,
+      errors,
+    });
   }
 
   async pullRequestEvidence({ repository, number }) {
     const pull = await this.pullRequest({ repository, number });
     const sha = pull?.head?.sha || null;
-    const ci = sha ? await this.commitChecks({ repository, sha }) : { state: 'none', checks: [], total: 0, failed: [], pending: [] };
+    const ci = sha
+      ? await this.commitChecks({ repository, sha })
+      : aggregateGitHubChecks({ errors: ['pull request did not expose a head SHA'] });
     return {
       number: pull?.number || Number(number),
       url: pull?.html_url || null,
