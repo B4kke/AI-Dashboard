@@ -25,7 +25,7 @@ export function buildTaskPrompt({ project, task, feedback = null, iteration = 1 
   if (task.acceptanceCriteria?.length) {
     lines.push('', 'Acceptance criteria:', ...task.acceptanceCriteria.map((item) => `- ${item}`));
   }
-  if (feedback) lines.push('', 'Supervisor feedback from the previous iteration:', feedback);
+  if (feedback) lines.push('', 'Control-plane feedback from the previous iteration (supervisor and/or CI):', feedback);
   lines.push(
     '',
     'Execution contract:',
@@ -33,7 +33,7 @@ export function buildTaskPrompt({ project, task, feedback = null, iteration = 1 
     '- Read repository-level AGENTS.md/instructions before modifying code.',
     '- Do not modify unrelated files.',
     '- Run relevant tests/checks for the changed scope.',
-    '- Do not merge or push unless the task explicitly requires it; the control plane owns approval/merge.',
+    '- Do not merge or push unless the task explicitly requires it; the control plane owns publication, approval and merge.',
     '- Leave the worktree in a reviewable state and report concrete evidence.',
     ...jsonContract({
       status: 'success',
@@ -78,8 +78,8 @@ export function buildPlannerPrompt({ project, idea }) {
   ].join('\n');
 }
 
-export function buildSupervisorPrompt({ project, task, workerResult, iteration }) {
-  return [
+export function buildSupervisorPrompt({ project, task, workerResult, iteration, publication = null }) {
+  const lines = [
     `Act as the independent supervisor for task: ${task.title}`,
     '',
     `Project: ${project.name}`,
@@ -87,14 +87,20 @@ export function buildSupervisorPrompt({ project, task, workerResult, iteration }
     '',
     'Worker-reported result:',
     JSON.stringify(workerResult || {}, null, 2),
+  ];
+  if (publication) {
+    lines.push('', 'GitHub/CI evidence collected by the control plane:', JSON.stringify(publication, null, 2));
+  }
+  lines.push(
     '',
     'Supervisor contract:',
     '- Independently inspect the diff and relevant repository context.',
+    '- Use GitHub/CI evidence as additional evidence, not as a replacement for checking the actual change.',
     '- Run or re-run the checks needed to validate the acceptance criteria.',
     '- Treat worker claims as untrusted until verified.',
-    '- Do not approve if tests are missing, the scope is unrelated, or the change is unsafe.',
+    '- Do not approve if CI is failing/pending, tests are missing, the scope is unrelated, or the change is unsafe.',
     '- Do not modify files, create commits, merge, or push. Review must be read-only.',
-    '- The control plane will reject your approval if the reviewed worktree changes during supervision.',
+    '- The control plane will reject your approval if the reviewed worktree changes or the PR head moves during supervision.',
     ...jsonContract({
       verdict: 'approve',
       summary: 'Independent verification summary',
@@ -102,5 +108,6 @@ export function buildSupervisorPrompt({ project, task, workerResult, iteration }
       requiredChanges: [],
       risks: [],
     }),
-  ].join('\n');
+  );
+  return lines.join('\n');
 }

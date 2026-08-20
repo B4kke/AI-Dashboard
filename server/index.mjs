@@ -8,13 +8,16 @@ import { AutonomyEngine } from './core/autonomy-engine.mjs';
 import { extractResult, latestAssistantText } from './core/result-contract.mjs';
 import { buildPlannerPrompt, buildSupervisorPrompt, buildTaskPrompt } from './core/task-prompt.mjs';
 import { OpenCodeClient } from './integrations/opencode.mjs';
+import { GitHubClient, parseGitHubRemote, parseGitHubRepository } from './integrations/github.mjs';
 import {
   commitWorktree,
   createTaskWorktree,
   deleteTaskBranch,
-  mergeTaskBranch,
-  removeTaskWorktree,
+  gitRemoteUrl,
   inspectRepository,
+  mergeTaskBranch,
+  pushTaskBranch,
+  removeTaskWorktree,
   worktreeStatus,
 } from './git/worktrees.mjs';
 
@@ -27,6 +30,7 @@ const dataFile = resolve(process.env.AI_DASHBOARD_DATA || join(ROOT, 'data', 'st
 const events = new EventHub();
 const store = new StateStore(dataFile, { onChange: (type, payload) => events.publish(type, payload) });
 const opencode = new OpenCodeClient();
+const github = new GitHubClient();
 await store.load();
 
 const MIME = {
@@ -58,10 +62,19 @@ function minutesSince(iso) {
   return (Date.now() - new Date(iso).getTime()) / 60_000;
 }
 
+function secondsSince(iso) {
+  if (!iso) return Number.POSITIVE_INFINITY;
+  return (Date.now() - new Date(iso).getTime()) / 1000;
+}
+
 function latestRun(taskId, predicate = () => true) {
   return store.snapshot().runs
     .filter((run) => run.taskId === taskId && predicate(run))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] || null;
+}
+
+function latestWorker(taskId) {
+  return latestRun(taskId, (run) => run.kind === 'worker' && run.status === 'completed' && run.worktreePath && run.branch && run.checkpointHead);
 }
 
 async function opencodeOverview() {
@@ -69,6 +82,14 @@ async function opencodeOverview() {
     return await opencode.overview();
   } catch (error) {
     return { connected: false, healthy: false, url: opencode.baseUrl, error: error.message };
+  }
+}
+
+async function githubOverview(repository = null) {
+  try {
+    return await github.overview(repository);
+  } catch (error) {
+    return { configured: Boolean(github.token), authenticated: false, apiUrl: github.baseUrl, repository, error: error.message };
   }
 }
 
@@ -109,6 +130,22 @@ async function discardRunWorkspace(run, project) {
   if (!run?.worktreePath || !run?.branch || !project?.repoPath) return;
   await removeTaskWorktree({ repoPath: project.repoPath, worktreePath: run.worktreePath, force: true }).catch(() => {});
   await deleteTaskBranch({ repoPath: project.repoPath, branch: run.branch, force: true }).catch(() => {});
+}
+
+async function completeIdeaIfReady(task) {
+  if (!task?.sourceIdeaId) return;
+  const idea = store.getIdea(task.sourceIdeaId);
+  if (!idea) return;
+  const generated = idea.generatedTaskIds.map((id) => store.getTask(id)).filter(Boolean);
+  if (generated.length && generated.every((item) => item.state === 'done')) {
+    await store.updateIdea(idea.id, { state: 'completed' });
+  }
+}
+
+async function cleanupTaskWorkspace({ project, worker, forceBranch = false }) {
+  if (!project?.autonomy?.cleanupAfterMerge || !worker) return;
+  await removeTaskWorktree({ repoPath: project.repoPath, worktreePath: worker.worktreePath, force: true }).catch(() => {});
+  await deleteTaskBranch({ repoPath: project.repoPath, branch: worker.branch, force: forceBranch }).catch(() => {});
 }
 
 async function startIdeaPlanning(ideaId) {
@@ -208,8 +245,9 @@ async function startWorker(taskId) {
 async function startSupervisor(taskId) {
   const task = store.getTask(taskId);
   if (!task) throw new Error('Task not found');
+  if (task.state !== 'awaiting_review') throw new Error(`Task cannot be reviewed from state ${task.state}`);
   const project = store.getProject(task.projectId);
-  const worker = latestRun(task.id, (run) => run.kind === 'worker' && run.status === 'completed' && run.worktreePath);
+  const worker = latestWorker(task.id);
   if (!worker) throw new Error('No completed worker run is available for review');
 
   const reviewTask = { ...task, agentRole: project.autonomy.supervisorRole };
@@ -228,6 +266,7 @@ async function startSupervisor(taskId) {
         task,
         workerResult: worker.result,
         iteration: worker.iteration,
+        publication: task.publication,
       }),
     });
   } catch (error) {
@@ -294,6 +333,7 @@ async function applyPlannerResult(run, result, assistantText) {
 async function applyWorkerResult(run, result, assistantText) {
   const task = store.getTask(run.taskId);
   if (!task) throw new Error('Task not found');
+  const project = store.getProject(task.projectId);
   if (result.status === 'success') {
     const checkpoint = await commitWorktree({
       worktreePath: run.worktreePath,
@@ -302,7 +342,7 @@ async function applyWorkerResult(run, result, assistantText) {
     await store.updateRun(run.id, {
       status: 'completed', result, assistantText, checkpointHead: checkpoint.head, finishedAt: new Date().toISOString(),
     });
-    await store.updateTask(task.id, { state: 'awaiting_review' });
+    await store.updateTask(task.id, { state: project?.repository ? 'awaiting_publish' : 'awaiting_review' });
   } else {
     await store.updateRun(run.id, { status: 'completed', result, assistantText, finishedAt: new Date().toISOString() });
     await store.updateTask(task.id, {
@@ -312,11 +352,133 @@ async function applyWorkerResult(run, result, assistantText) {
   }
 }
 
+function pullRequestBody(task, worker) {
+  const acceptance = task.acceptanceCriteria?.length
+    ? `\n\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}`
+    : '';
+  return `AI Dashboard task: ${task.title}\n\nWorker iteration: ${worker.iteration}\nCheckpoint: ${worker.checkpointHead}${acceptance}\n\nWorker summary:\n${worker.result?.summary || 'No summary supplied.'}`;
+}
+
+async function publishTask(taskId) {
+  const task = store.getTask(taskId);
+  if (!task) throw new Error('Task not found');
+  const project = store.getProject(task.projectId);
+  if (!project?.repository) throw new Error('Project has no GitHub repository binding');
+  const expected = parseGitHubRepository(project.repository);
+  const worker = latestWorker(task.id);
+  if (!worker) throw new Error('No completed worker checkpoint is available to publish');
+
+  try {
+    const remoteValue = await gitRemoteUrl({ worktreePath: worker.worktreePath });
+    const remote = parseGitHubRemote(remoteValue);
+    if (!remote || remote.fullName.toLowerCase() !== expected.fullName.toLowerCase()) {
+      throw new Error(`origin does not match configured GitHub repository ${expected.fullName}`);
+    }
+    const pushed = await pushTaskBranch({ worktreePath: worker.worktreePath, branch: worker.branch });
+    if (pushed.head !== worker.checkpointHead) throw new Error('Pushed branch HEAD does not match worker checkpoint');
+
+    let pull = await github.findOpenPullRequest({
+      repository: expected.fullName,
+      headBranch: worker.branch,
+      baseBranch: project.baseBranch || 'main',
+    });
+    if (!pull) {
+      pull = await github.createPullRequest({
+        repository: expected.fullName,
+        title: `[AI] ${task.title}`,
+        headBranch: worker.branch,
+        baseBranch: project.baseBranch || 'main',
+        body: pullRequestBody(task, worker),
+        draft: false,
+      });
+    }
+    if (!pull?.number) throw new Error('GitHub did not return a pull request number');
+    const evidence = await github.pullRequestEvidence({ repository: expected.fullName, number: pull.number });
+    if (evidence.headSha && evidence.headSha !== worker.checkpointHead) throw new Error('GitHub PR head does not match worker checkpoint after publish');
+    const now = new Date().toISOString();
+    const publication = {
+      provider: 'github',
+      repository: expected.fullName,
+      prNumber: pull.number,
+      prUrl: evidence.url || pull.html_url || null,
+      headSha: worker.checkpointHead,
+      headBranch: worker.branch,
+      baseBranch: project.baseBranch || 'main',
+      state: evidence.state || 'open',
+      ci: evidence.ci,
+      publishedAt: now,
+      lastCheckedAt: now,
+      lastError: null,
+    };
+    await store.updateTask(task.id, { state: 'awaiting_ci', publication, supervisorFeedback: null });
+    return publication;
+  } catch (error) {
+    await store.updateTask(task.id, {
+      state: 'needs_input',
+      publication: { ...(task.publication || {}), provider: 'github', repository: expected.fullName, lastError: error.message, lastCheckedAt: new Date().toISOString() },
+      supervisorFeedback: `GitHub publish failed: ${error.message}`,
+    });
+    throw error;
+  }
+}
+
+async function finalizeExternallyMergedTask(task, project, worker, evidence) {
+  await store.updateTask(task.id, {
+    state: 'done',
+    publication: { ...(task.publication || {}), ...evidence, state: 'merged', lastCheckedAt: new Date().toISOString() },
+  });
+  await cleanupTaskWorkspace({ project, worker, forceBranch: true });
+  await completeIdeaIfReady(store.getTask(task.id));
+  return { state: 'merged', evidence };
+}
+
+async function reconcilePublishedTask(taskId) {
+  const task = store.getTask(taskId);
+  if (!task?.publication?.prNumber) throw new Error('Task has no GitHub pull request publication');
+  const project = store.getProject(task.projectId);
+  const worker = latestWorker(task.id);
+  if (!project?.repository || !worker) throw new Error('Task lost GitHub project/worker linkage');
+
+  const evidence = await github.pullRequestEvidence({ repository: project.repository, number: task.publication.prNumber });
+  if (evidence.merged) return finalizeExternallyMergedTask(task, project, worker, evidence);
+  if (evidence.state !== 'open') {
+    const message = `GitHub PR #${task.publication.prNumber} is ${evidence.state || 'not open'} before approval`;
+    await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message, publication: { ...task.publication, ...evidence, lastCheckedAt: new Date().toISOString() } });
+    return { state: 'blocked', message };
+  }
+  if (evidence.headSha !== worker.checkpointHead) {
+    const message = 'GitHub PR head moved away from the worker checkpoint; refusing autonomous review';
+    await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message, publication: { ...task.publication, ...evidence, lastCheckedAt: new Date().toISOString() } });
+    return { state: 'blocked', message };
+  }
+
+  const publication = { ...task.publication, ...evidence, headSha: evidence.headSha, prUrl: evidence.url || task.publication.prUrl, lastCheckedAt: new Date().toISOString(), lastError: null };
+  if (evidence.ci.state === 'failure') {
+    const failed = evidence.ci.failed?.length ? evidence.ci.failed.join(', ') : 'unknown checks';
+    const feedback = `GitHub CI failed: ${failed}. Inspect the PR checks and repair the failure without changing unrelated scope.`;
+    const canRetry = project.autonomy.mode === 'autonomous' && Number(task.iteration || 0) < project.autonomy.maxTaskIterations;
+    await store.updateTask(task.id, { state: canRetry ? 'backlog' : 'needs_input', supervisorFeedback: feedback, publication });
+    return { state: 'failure', failed: evidence.ci.failed || [], retry: canRetry };
+  }
+  if (evidence.ci.state === 'pending') {
+    await store.updateTask(task.id, { state: 'awaiting_ci', publication });
+    return { state: 'pending', pending: evidence.ci.pending || [] };
+  }
+  if (evidence.ci.state === 'none' && secondsSince(task.publication.publishedAt) < project.autonomy.ciDiscoverySeconds) {
+    await store.updateTask(task.id, { state: 'awaiting_ci', publication });
+    return { state: 'discovering' };
+  }
+
+  await store.updateTask(task.id, { state: 'awaiting_review', publication, supervisorFeedback: null });
+  return { state: evidence.ci.state === 'none' ? 'no_checks' : 'success', publication };
+}
+
 async function applySupervisorResult(run, result, assistantText) {
   const task = store.getTask(run.taskId);
   const project = store.getProject(run.projectId);
   if (!task || !project) throw new Error('Supervisor run lost project/task linkage');
   const worker = run.parentRunId ? store.getRun(run.parentRunId) : null;
+
   if (result.verdict === 'approve') {
     const [status, repository] = await Promise.all([worktreeStatus(run.worktreePath), inspectRepository(run.worktreePath)]);
     if (status || (worker?.checkpointHead && repository.head !== worker.checkpointHead)) {
@@ -325,9 +487,25 @@ async function applySupervisorResult(run, result, assistantText) {
       await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message });
       return;
     }
+    if (project.repository) {
+      if (!task.publication?.prNumber) {
+        const message = 'GitHub-backed task has no PR evidence at supervisor approval';
+        await store.updateRun(run.id, { status: 'failed', result, assistantText, error: message, finishedAt: new Date().toISOString() });
+        await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message });
+        return;
+      }
+      const evidence = await github.pullRequestEvidence({ repository: project.repository, number: task.publication.prNumber });
+      if (evidence.headSha !== worker?.checkpointHead || !['success', 'none'].includes(evidence.ci.state) || evidence.state !== 'open') {
+        const message = 'PR head/CI changed during supervisor review; approval rejected by GitHub integrity gate';
+        await store.updateRun(run.id, { status: 'failed', result, assistantText, error: message, finishedAt: new Date().toISOString() });
+        await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message, publication: { ...task.publication, ...evidence, lastCheckedAt: new Date().toISOString() } });
+        return;
+      }
+      await store.updateTask(task.id, { publication: { ...task.publication, ...evidence, lastCheckedAt: new Date().toISOString() } });
+    }
   }
-  await store.updateRun(run.id, { status: 'completed', result, assistantText, finishedAt: new Date().toISOString() });
 
+  await store.updateRun(run.id, { status: 'completed', result, assistantText, finishedAt: new Date().toISOString() });
   if (result.verdict === 'approve') {
     await store.updateTask(task.id, { state: 'ready_to_merge', supervisorFeedback: null });
     return;
@@ -402,7 +580,6 @@ async function reconcileRun(runInput) {
   }
 
   if (status.type === 'busy') return { status: 'running' };
-
   const assistantText = latestAssistantText(messages);
   if (assistantText && minutesSince(run.startedAt) > 0.25) {
     await failRun(run, 'Agent became idle without a valid AI_DASHBOARD_RESULT contract');
@@ -419,35 +596,49 @@ async function mergeApprovedTask(taskId) {
   if (!project?.repoPath) throw new Error('Project needs a local repoPath');
   const supervisor = latestRun(task.id, (run) => run.kind === 'supervisor' && run.status === 'completed' && run.result?.verdict === 'approve');
   if (!supervisor) throw new Error('No approving supervisor run found');
-  const worker = latestRun(task.id, (run) => run.kind === 'worker' && run.worktreePath && run.branch);
+  const worker = latestWorker(task.id);
   if (!worker) throw new Error('No worker workspace found');
 
   const status = await worktreeStatus(worker.worktreePath);
   if (status) throw new Error('Approved worktree is no longer clean; refusing merge');
+
+  if (project.repository && task.publication?.prNumber) {
+    const evidence = await github.pullRequestEvidence({ repository: project.repository, number: task.publication.prNumber });
+    if (evidence.state !== 'open' || evidence.draft) throw new Error('GitHub PR is not open and ready for merge');
+    if (evidence.headSha !== worker.checkpointHead) throw new Error('GitHub PR head moved after supervisor approval');
+    if (!['success', 'none'].includes(evidence.ci.state)) throw new Error(`GitHub CI is ${evidence.ci.state}; refusing merge`);
+    const merged = await github.mergePullRequest({
+      repository: project.repository,
+      number: task.publication.prNumber,
+      expectedHeadSha: worker.checkpointHead,
+      method: project.autonomy.mergeMethod,
+      commitTitle: task.title,
+    });
+    if (merged?.merged !== true) throw new Error(merged?.message || 'GitHub refused the pull request merge');
+    await store.updateTask(task.id, {
+      state: 'done',
+      publication: { ...task.publication, ...evidence, state: 'merged', mergeSha: merged.sha || null, mergedAt: new Date().toISOString(), lastCheckedAt: new Date().toISOString() },
+    });
+    await store.updateRun(supervisor.id, { status: 'merged', mergeHead: merged.sha || null, workerHead: worker.checkpointHead });
+    if (project.autonomy.deleteRemoteBranch) {
+      await github.deleteBranch({ repository: project.repository, branch: worker.branch }).catch(() => {});
+    }
+    await cleanupTaskWorkspace({ project, worker, forceBranch: true });
+    await completeIdeaIfReady(store.getTask(task.id));
+    return { task: store.getTask(task.id), provider: 'github', merge: merged, checkpointHead: worker.checkpointHead };
+  }
+
   const merge = await mergeTaskBranch({ repoPath: project.repoPath, branch: worker.branch, baseBranch: project.baseBranch || 'main' });
   await store.updateTask(task.id, { state: 'done' });
   await store.updateRun(supervisor.id, { status: 'merged', mergeHead: merge.head, workerHead: worker.checkpointHead || null });
-
-  if (project.autonomy.cleanupAfterMerge) {
-    await removeTaskWorktree({ repoPath: project.repoPath, worktreePath: worker.worktreePath });
-    await deleteTaskBranch({ repoPath: project.repoPath, branch: worker.branch });
-  }
-
-  if (task.sourceIdeaId) {
-    const idea = store.getIdea(task.sourceIdeaId);
-    if (idea) {
-      const generated = idea.generatedTaskIds.map((id) => store.getTask(id)).filter(Boolean);
-      if (generated.length && generated.every((item) => item.state === 'done')) {
-        await store.updateIdea(idea.id, { state: 'completed' });
-      }
-    }
-  }
-  return { task: store.getTask(task.id), merge, checkpointHead: worker.checkpointHead || null };
+  await cleanupTaskWorkspace({ project, worker, forceBranch: false });
+  await completeIdeaIfReady(store.getTask(task.id));
+  return { task: store.getTask(task.id), provider: 'local', merge, checkpointHead: worker.checkpointHead || null };
 }
 
 const autonomy = new AutonomyEngine({
   store,
-  operations: { reconcileRun, startIdeaPlanning, startWorker, startSupervisor, mergeApprovedTask },
+  operations: { reconcileRun, startIdeaPlanning, startWorker, publishTask, reconcilePublishedTask, startSupervisor, mergeApprovedTask },
 });
 autonomy.start();
 
@@ -457,10 +648,13 @@ async function api(request, response, url) {
     return json(response, 200, {
       ok: true,
       service: 'ai-dashboard',
-      version: '0.0.2',
+      version: '0.0.3',
       now: new Date().toISOString(),
       eventClients: events.clientCount,
-      integrations: { opencode: openCode },
+      integrations: {
+        opencode: openCode,
+        github: { configured: Boolean(github.token), apiUrl: github.baseUrl },
+      },
     });
   }
 
@@ -470,6 +664,12 @@ async function api(request, response, url) {
     const value = await opencodeOverview();
     await store.setIntegration('opencode', value);
     return json(response, value.connected ? 200 : 503, value);
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/integrations/github') {
+    const value = await githubOverview(url.searchParams.get('repository'));
+    await store.setIntegration('github', value);
+    return json(response, value.authenticated ? 200 : 503, value);
   }
 
   if (request.method === 'GET' && url.pathname === '/api/events') {
@@ -491,6 +691,12 @@ async function api(request, response, url) {
 
   const delegate = url.pathname.match(/^\/api\/tasks\/([^/]+)\/delegate$/);
   if (request.method === 'POST' && delegate) return json(response, 202, await startWorker(decodeURIComponent(delegate[1])));
+
+  const publish = url.pathname.match(/^\/api\/tasks\/([^/]+)\/publish$/);
+  if (request.method === 'POST' && publish) return json(response, 200, await publishTask(decodeURIComponent(publish[1])));
+
+  const githubRefresh = url.pathname.match(/^\/api\/tasks\/([^/]+)\/github\/refresh$/);
+  if (request.method === 'POST' && githubRefresh) return json(response, 200, await reconcilePublishedTask(decodeURIComponent(githubRefresh[1])));
 
   const review = url.pathname.match(/^\/api\/tasks\/([^/]+)\/review$/);
   if (request.method === 'POST' && review) return json(response, 202, await startSupervisor(decodeURIComponent(review[1])));

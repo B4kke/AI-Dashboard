@@ -14,10 +14,13 @@ const DEFAULT_AUTONOMY = Object.freeze({
   autoAnalyzeIdeas: false,
   autoMerge: false,
   cleanupAfterMerge: true,
+  ciDiscoverySeconds: 30,
+  mergeMethod: 'squash',
+  deleteRemoteBranch: true,
 });
 
 const EMPTY_STATE = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 3,
   projects: [],
   ideas: [],
   tasks: [],
@@ -32,17 +35,21 @@ function cloneEmpty() {
 
 function autonomy(input = {}) {
   const mode = ['manual', 'assisted', 'autonomous'].includes(input.mode) ? input.mode : 'manual';
+  const mergeMethod = ['merge', 'squash', 'rebase'].includes(input.mergeMethod) ? input.mergeMethod : DEFAULT_AUTONOMY.mergeMethod;
   return {
     ...structuredClone(DEFAULT_AUTONOMY),
     ...input,
     mode,
+    mergeMethod,
     maxConcurrentRuns: Math.max(1, Number(input.maxConcurrentRuns || DEFAULT_AUTONOMY.maxConcurrentRuns)),
     maxTaskIterations: Math.max(1, Number(input.maxTaskIterations || DEFAULT_AUTONOMY.maxTaskIterations)),
     maxRunMinutes: Math.max(1, Number(input.maxRunMinutes || DEFAULT_AUTONOMY.maxRunMinutes)),
     maxRetryAttempts: Math.max(0, Number(input.maxRetryAttempts ?? DEFAULT_AUTONOMY.maxRetryAttempts)),
+    ciDiscoverySeconds: Math.max(0, Math.min(600, Number(input.ciDiscoverySeconds ?? DEFAULT_AUTONOMY.ciDiscoverySeconds))),
     autoAnalyzeIdeas: input.autoAnalyzeIdeas === true,
     autoMerge: input.autoMerge === true,
     cleanupAfterMerge: input.cleanupAfterMerge !== false,
+    deleteRemoteBranch: input.deleteRemoteBranch !== false,
   };
 }
 
@@ -57,12 +64,13 @@ export class StateStore {
   async load() {
     try {
       const parsed = JSON.parse(await readFile(this.filePath, 'utf8'));
-      this.state = { ...cloneEmpty(), ...parsed, schemaVersion: 2 };
+      this.state = { ...cloneEmpty(), ...parsed, schemaVersion: 3 };
       this.state.projects = this.state.projects.map((project) => ({
         ...project,
         autonomy: autonomy(project.autonomy),
       }));
       if (!Array.isArray(this.state.ideas)) this.state.ideas = [];
+      this.state.tasks = this.state.tasks.map((task) => ({ publication: null, ...task }));
       await this.#persist();
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
@@ -159,6 +167,7 @@ export class StateStore {
       acceptanceCriteria: Array.isArray(input.acceptanceCriteria) ? input.acceptanceCriteria.filter(Boolean) : [],
       iteration: Number(input.iteration || 0),
       supervisorFeedback: null,
+      publication: null,
       createdAt: now,
       updatedAt: now,
     };

@@ -49,22 +49,44 @@ export class AutonomyEngine {
         }
 
         if (config.mode !== 'autonomous') continue;
-        const current = this.store.snapshot();
+
+        let current = this.store.snapshot();
+        for (const task of current.tasks.filter((item) => item.projectId === project.id && item.kind === 'work' && item.state === 'awaiting_publish')) {
+          try {
+            await this.operations.publishTask(task.id);
+            actions.push({ type: 'task.publish', taskId: task.id });
+          } catch (error) {
+            actions.push({ type: 'task.publish_failed', taskId: task.id, error: error.message });
+          }
+        }
+
+        current = this.store.snapshot();
+        for (const task of current.tasks.filter((item) => item.projectId === project.id && item.kind === 'work' && item.state === 'awaiting_ci')) {
+          try {
+            const result = await this.operations.reconcilePublishedTask(task.id);
+            actions.push({ type: 'task.ci', taskId: task.id, result });
+          } catch (error) {
+            actions.push({ type: 'task.ci_failed', taskId: task.id, error: error.message });
+          }
+        }
+
+        current = this.store.snapshot();
         const projectRuns = current.runs.filter((item) => item.projectId === project.id && ['preparing', 'running', 'retrying'].includes(item.status));
         let capacity = Math.max(0, Number(config.maxConcurrentRuns || 1) - projectRuns.length);
-        if (capacity <= 0) continue;
 
-        const tasks = current.tasks.filter((item) => item.projectId === project.id);
-        for (const task of tasks.filter((item) => item.kind === 'work' && item.state === 'awaiting_review')) {
-          if (capacity <= 0) break;
-          const activeReview = current.runs.some((run) => run.taskId === task.id && run.kind === 'supervisor' && ['preparing', 'running', 'retrying'].includes(run.status));
-          if (!activeReview) {
-            try {
-              await this.operations.startSupervisor(task.id);
-              actions.push({ type: 'task.supervise', taskId: task.id });
-              capacity -= 1;
-            } catch (error) {
-              actions.push({ type: 'task.supervise_failed', taskId: task.id, error: error.message });
+        if (capacity > 0) {
+          const tasks = current.tasks.filter((item) => item.projectId === project.id);
+          for (const task of tasks.filter((item) => item.kind === 'work' && item.state === 'awaiting_review')) {
+            if (capacity <= 0) break;
+            const activeReview = current.runs.some((run) => run.taskId === task.id && run.kind === 'supervisor' && ['preparing', 'running', 'retrying'].includes(run.status));
+            if (!activeReview) {
+              try {
+                await this.operations.startSupervisor(task.id);
+                actions.push({ type: 'task.supervise', taskId: task.id });
+                capacity -= 1;
+              } catch (error) {
+                actions.push({ type: 'task.supervise_failed', taskId: task.id, error: error.message });
+              }
             }
           }
         }
@@ -93,9 +115,12 @@ export class AutonomyEngine {
         if (config.autoMerge) {
           const mergeState = this.store.snapshot();
           for (const task of mergeState.tasks.filter((item) => item.projectId === project.id && item.state === 'ready_to_merge')) {
-            await this.operations.mergeApprovedTask(task.id).catch((error) => {
+            try {
+              await this.operations.mergeApprovedTask(task.id);
+              actions.push({ type: 'task.merge', taskId: task.id });
+            } catch (error) {
               actions.push({ type: 'task.merge_failed', taskId: task.id, error: error.message });
-            });
+            }
           }
         }
       }
