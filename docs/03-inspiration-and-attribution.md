@@ -17,7 +17,10 @@ M2 GitHub-loop source study:
 - `mcp-server/worktree.js` — task worktree lifecycle plus a deliberately simple `git push` -> PR flow; also uses argument-array process execution for user-controlled Git inputs.
 - `mcp-server/http-routes.js` — exposes PR creation as a task/card action rather than making PRs the internal task model.
 
-AI Dashboard keeps the simple control-plane ownership idea, but adds bounded Git operations, exact checkpoint/head verification, a separate GitHub REST adapter and CI/supervisor gates.
+M3 model source study:
+- `mcp-server/models.js` — maintains a model catalog per coding harness, obtains OpenCode models dynamically and uses curated model lists where a harness has no stable model-list interface.
+
+AI Dashboard keeps the useful model-discovery idea but deliberately does **not** make the model registry a property of one CLI. Harness, provider and model are separate domain concepts, and a selected model is persisted with the Run.
 
 License observed at project start: MIT.
 
@@ -35,7 +38,10 @@ Relevant ideas:
 M2 GitHub-loop source study:
 - `src/api/git-provider-items-service.ts` — provider-specific API calls live behind a service boundary, provider tokens are treated as secrets, and provider data is normalized before the UI consumes it.
 
-AI Dashboard follows the provider-adapter boundary: GitHub REST objects are normalized into Task publication/evidence rather than becoming the domain model.
+M3 model source study:
+- `src/hooks/use-chat-input-model-state.ts` — resolves an effective model from the active backend/conversation/profile context instead of treating a global UI dropdown as the source of truth.
+
+AI Dashboard applies the same provenance principle to execution: project defaults help choose a model, but the concrete Task/Run records the effective model used for that execution.
 
 License observed at project start: MIT for the referenced open-source repository.
 
@@ -62,6 +68,23 @@ Repository: https://github.com/anomalyco/opencode
 Documentation: https://opencode.ai/docs/server/
 
 OpenCode is an integration target, not a fork base. Prefer its documented headless HTTP API/SSE surface.
+
+M3 model source/API study:
+- OpenCode model identifiers are provider/model scoped.
+- the session prompt API resolves the selected model as `{ providerID, modelID }`.
+- the `/provider` server surface exposes the provider/model catalog available to the connected OpenCode instance.
+
+AI Dashboard therefore passes an explicit provider/model object to OpenCode and uses the connected harness catalog for coding-model choices instead of maintaining a competing hard-coded OpenCode list.
+
+## Direct model provider APIs
+
+The direct-model layer is independently implemented against the common OpenAI-compatible API contract rather than copied from a client SDK.
+
+Initial profiles:
+- LM Studio — local OpenAI-compatible `/v1/models` and `/v1/chat/completions` surface.
+- NVIDIA API Catalog / NIM — OpenAI-compatible model listing/chat surface, with the API key supplied by environment variable.
+
+The same adapter is intentionally reusable for other compatible local or remote servers.
 
 ## Reuse policy
 
