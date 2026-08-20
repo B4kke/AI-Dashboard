@@ -70,3 +70,36 @@ test('a GitHub check API 503 is CI error, never no-checks', async () => {
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('check-run pagination cannot hide a failure beyond the first 100 checks', async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    id: index + 1,
+    name: `check-${index + 1}`,
+    status: 'completed',
+    conclusion: 'success',
+  }));
+  const server = createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url === '/repos/B4kke/AI-Dashboard/commits/paged/check-runs?per_page=100') {
+      return res.end(JSON.stringify({ total_count: 101, check_runs: firstPage }));
+    }
+    if (req.url === '/repos/B4kke/AI-Dashboard/commits/paged/check-runs?per_page=100&page=2') {
+      return res.end(JSON.stringify({ total_count: 101, check_runs: [{ id: 101, name: 'late-failure', status: 'completed', conclusion: 'failure' }] }));
+    }
+    if (req.url === '/repos/B4kke/AI-Dashboard/commits/paged/status') return res.end(JSON.stringify({ state: 'success' }));
+    res.statusCode = 404;
+    res.end('{}');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    const client = new GitHubClient({ baseUrl: `http://127.0.0.1:${address.port}`, token: 'test' });
+    const evidence = await client.commitChecks({ repository: 'B4kke/AI-Dashboard', sha: 'paged' });
+    assert.equal(evidence.complete, true);
+    assert.equal(evidence.state, 'failure');
+    assert.equal(evidence.total, 101);
+    assert.deepEqual(evidence.failed, ['late-failure']);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
