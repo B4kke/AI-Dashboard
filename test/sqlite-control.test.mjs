@@ -47,3 +47,24 @@ test('SQLite operation locks are exclusive and released after the owner exits', 
     a.close(); b.close();
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('stale bootstrap snapshot cannot overwrite a newer committed revision', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-revision-')); const dbPath = join(dir, 'control.sqlite');
+  try {
+    const sqlite = await new SqliteControlStore(dbPath).initialize();
+    await sqlite.save({ schemaVersion: 5, revision: 1, projects: [{ id: 'p1', name: 'rev1' }] });
+    await sqlite.saveWithEvent(
+      { schemaVersion: 5, revision: 2, projects: [{ id: 'p1', name: 'rev2' }] },
+      'project.updated',
+      { id: 'p1', name: 'rev2' },
+    );
+    await assert.rejects(
+      () => sqlite.save({ schemaVersion: 5, revision: 1, projects: [{ id: 'p1', name: 'stale' }] }),
+      /State revision regression/,
+    );
+    const current = await sqlite.load();
+    assert.equal(current.revision, 2);
+    assert.equal(current.projects[0].name, 'rev2');
+    sqlite.close();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
