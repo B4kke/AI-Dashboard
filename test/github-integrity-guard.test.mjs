@@ -60,3 +60,29 @@ test('externally merged PR with the reviewed checkpoint may continue normal reco
     await rm(f.dir, { recursive: true, force: true });
   }
 });
+
+test('active CI backoff reaches the inner guard without an extra GitHub evidence request', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-integrity-backoff-'));
+  try {
+    const store = new StateStore(join(dir, 'state.json')); await store.load();
+    const project = await store.addProject({ name: 'Backoff', repoPath: dir, repository: 'owner/repo', baseBranch: 'main' });
+    const task = await store.addTask({ projectId: project.id, title: 'Wait for CI', state: 'awaiting_ci' });
+    const nextCheckAt = new Date(Date.now() + 60_000).toISOString();
+    await store.updateTask(task.id, { publication: { provider: 'github', repository: 'owner/repo', prNumber: 21, nextCheckAt } });
+    let githubCalls = 0;
+    let innerCalls = 0;
+    const guarded = decorateGitHubIntegrity({
+      store,
+      github: { async pullRequestEvidence() { githubCalls += 1; throw new Error('must not be called during backoff'); } },
+      orchestrator: {
+        async reconcilePublishedTask() { innerCalls += 1; return { state: 'backoff', nextCheckAt }; },
+      },
+    });
+    const result = await guarded.reconcilePublishedTask(task.id);
+    assert.equal(result.state, 'backoff');
+    assert.equal(innerCalls, 1);
+    assert.equal(githubCalls, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
