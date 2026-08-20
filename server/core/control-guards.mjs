@@ -1,4 +1,4 @@
-import { listRepositoryWorktrees, syncBaseBranch } from '../git/worktrees.mjs';
+import { deleteTaskBranch, listRepositoryWorktrees, removeTaskWorktree, syncBaseBranch } from '../git/worktrees.mjs';
 
 function projectForTask(store, taskId) {
   const task = store.getTask(taskId);
@@ -8,7 +8,7 @@ function projectForTask(store, taskId) {
   return { task, project };
 }
 
-export function decorateControlPlane({ orchestrator, store, locks }) {
+export function decorateControlPlane({ orchestrator, store, locks, github = null }) {
   async function startWorker(taskId) {
     const { task, project } = projectForTask(store, taskId);
     if (project.status !== 'active') throw new Error(`Project is ${project.status}; resolve project state before starting more work`);
@@ -45,21 +45,13 @@ export function decorateControlPlane({ orchestrator, store, locks }) {
   async function reconcilePublishedTask(taskId) {
     const { task } = projectForTask(store, taskId);
     const nextCheckAt = task.publication?.nextCheckAt ? Date.parse(task.publication.nextCheckAt) : 0;
-    if (Number.isFinite(nextCheckAt) && nextCheckAt > Date.now()) {
-      return { state: 'backoff', nextCheckAt: task.publication.nextCheckAt };
-    }
+    if (Number.isFinite(nextCheckAt) && nextCheckAt > Date.now()) return { state: 'backoff', nextCheckAt: task.publication.nextCheckAt };
     const result = await orchestrator.reconcilePublishedTask(taskId);
     const refreshed = store.getTask(taskId);
     if (result?.state === 'error' || refreshed?.publication?.ci?.state === 'error') {
       const attempts = Math.min(8, Number(refreshed.publication?.ciErrorAttempts || 0) + 1);
       const delaySeconds = Math.min(300, 5 * (2 ** (attempts - 1)));
-      await store.updateTask(taskId, {
-        publication: {
-          ...refreshed.publication,
-          ciErrorAttempts: attempts,
-          nextCheckAt: new Date(Date.now() + delaySeconds * 1000).toISOString(),
-        },
-      });
+      await store.updateTask(taskId, { publication: { ...refreshed.publication, ciErrorAttempts: attempts, nextCheckAt: new Date(Date.now() + delaySeconds * 1000).toISOString() } });
       return { ...result, backoffSeconds: delaySeconds };
     }
     if (refreshed?.publication && (refreshed.publication.ciErrorAttempts || refreshed.publication.nextCheckAt)) {
@@ -68,19 +60,40 @@ export function decorateControlPlane({ orchestrator, store, locks }) {
     return result;
   }
 
-  async function mergeApprovedTask(taskId) {
-    const { project } = projectForTask(store, taskId);
-    const result = await orchestrator.mergeApprovedTask(taskId);
-    if (result?.provider === 'github') {
-      try {
-        const sync = await locks.withLock(`project:${project.id}:base-sync`, () => syncBaseBranch({ repoPath: project.repoPath, baseBranch: project.baseBranch || 'main' }));
-        await store.updateProject(project.id, { status: 'active' });
-        return { ...result, localBaseSync: { ok: true, ...sync } };
-      } catch (error) {
-        await store.updateProject(project.id, { status: 'needs_sync' });
-        return { ...result, localBaseSync: { ok: false, error: error.message }, warning: 'Remote merge completed, but local base sync failed. Project autonomy is paused.' };
-      }
+  async function syncAfterRemoteMerge(project, result) {
+    try {
+      const sync = await locks.withLock(`project:${project.id}:base-sync`, () => syncBaseBranch({ repoPath: project.repoPath, baseBranch: project.baseBranch || 'main' }));
+      await store.updateProject(project.id, { status: 'active' });
+      return { ...result, localBaseSync: { ok: true, ...sync } };
+    } catch (error) {
+      await store.updateProject(project.id, { status: 'needs_sync' });
+      return { ...result, localBaseSync: { ok: false, error: error.message }, warning: 'Remote merge completed, but local base sync failed. Project autonomy is paused.' };
     }
+  }
+
+  async function recoverAlreadyMerged(task, project) {
+    if (!github || !project.repository || !task.publication?.prNumber) return null;
+    const evidence = await github.pullRequestEvidence({ repository: project.repository, number: task.publication.prNumber });
+    if (!evidence?.merged) return null;
+    const worker = orchestrator.latestWorker?.(task.id) || null;
+    await store.updateTask(task.id, {
+      state: 'done',
+      publication: { ...task.publication, ...evidence, state: 'merged', mergedAt: task.publication?.mergedAt || new Date().toISOString(), lastCheckedAt: new Date().toISOString() },
+      supervisorFeedback: null,
+    });
+    if (worker && project.autonomy?.cleanupAfterMerge) {
+      await removeTaskWorktree({ repoPath: project.repoPath, worktreePath: worker.worktreePath, force: true }).catch(() => {});
+      await deleteTaskBranch({ repoPath: project.repoPath, branch: worker.branch, force: true }).catch(() => {});
+    }
+    return syncAfterRemoteMerge(project, { task: store.getTask(task.id), provider: 'github', recoveredExternalMerge: true, merge: { merged: true, sha: evidence.mergeSha || null } });
+  }
+
+  async function mergeApprovedTask(taskId) {
+    const { task, project } = projectForTask(store, taskId);
+    const recovered = await recoverAlreadyMerged(task, project);
+    if (recovered) return recovered;
+    const result = await orchestrator.mergeApprovedTask(taskId);
+    if (result?.provider === 'github') return syncAfterRemoteMerge(project, result);
     return result;
   }
 
@@ -92,18 +105,13 @@ export function decorateControlPlane({ orchestrator, store, locks }) {
       try {
         const worktrees = await listRepositoryWorktrees(project.repoPath);
         projects.push({
-          projectId: project.id,
-          projectName: project.name,
-          repoPath: project.repoPath,
+          projectId: project.id, projectName: project.name, repoPath: project.repoPath,
           worktrees: worktrees.map((worktree) => {
-            const run = owned.get(worktree.path) || null;
-            const managedBranch = worktree.branch?.startsWith('ai/') === true;
+            const run = owned.get(worktree.path) || null; const managedBranch = worktree.branch?.startsWith('ai/') === true;
             return { ...worktree, managedBranch, ownerRunId: run?.id || null, ownerTaskId: run?.taskId || null, abandoned: managedBranch && !run };
           }),
         });
-      } catch (error) {
-        projects.push({ projectId: project.id, projectName: project.name, repoPath: project.repoPath, error: error.message, worktrees: [] });
-      }
+      } catch (error) { projects.push({ projectId: project.id, projectName: project.name, repoPath: project.repoPath, error: error.message, worktrees: [] }); }
     }
     return { projects, abandonedCount: projects.reduce((sum, project) => sum + project.worktrees.filter((worktree) => worktree.abandoned).length, 0) };
   }
