@@ -48,3 +48,41 @@ test('schema v3 state migrates forward without losing tasks', async () => {
     assert.deepEqual(snapshot.researchRuns, []);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('failed durable write does not advance visible state and later mutations still commit', async () => {
+  class FlakyPersistence {
+    constructor() { this.state = null; this.failNext = false; }
+    info() { return { type: 'test', durable: true, revision: this.state?.revision || 0 }; }
+    async load() { return this.state ? structuredClone(this.state) : null; }
+    async save(state) { this.state = structuredClone(state); }
+    async saveWithEvent(state) {
+      if (this.failNext) {
+        this.failNext = false;
+        throw new Error('simulated durable write failure');
+      }
+      this.state = structuredClone(state);
+    }
+  }
+
+  const persistence = new FlakyPersistence();
+  const events = [];
+  const store = new StateStore('/unused.json', { persistence, onChange: (type, payload) => events.push({ type, payload }) });
+  await store.load();
+  const project = await store.addProject({ name: 'Committed' });
+  const before = store.snapshot();
+  const eventsBeforeFailure = events.length;
+
+  persistence.failNext = true;
+  await assert.rejects(() => store.updateProject(project.id, { name: 'Must not leak' }), /simulated durable write failure/);
+  assert.equal(store.getProject(project.id).name, 'Committed');
+  assert.equal(store.snapshot().revision, before.revision);
+  assert.equal(persistence.state.revision, before.revision);
+  assert.equal(events.length, eventsBeforeFailure);
+
+  const recovered = await store.updateProject(project.id, { name: 'Recovered' });
+  assert.equal(recovered.name, 'Recovered');
+  assert.equal(store.getProject(project.id).name, 'Recovered');
+  assert.equal(store.snapshot().revision, before.revision + 1);
+  assert.equal(persistence.state.revision, before.revision + 1);
+  assert.equal(events.at(-1).type, 'project.updated');
+});
