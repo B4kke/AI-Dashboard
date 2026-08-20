@@ -1,3 +1,5 @@
+import { normalizeModelRef } from './model-provider.mjs';
+
 function basicAuth(username, password) {
   if (!password) return null;
   return `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
@@ -20,10 +22,8 @@ export class OpenCodeClient {
     if (body !== undefined) headers['content-type'] = 'application/json';
     if (this.authorization) headers.authorization = this.authorization;
     if (directory) headers['x-opencode-directory'] = directory;
-
     const response = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers,
+      method, headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -38,6 +38,7 @@ export class OpenCodeClient {
   health() { return this.request('/global/health'); }
   sessions(directory) { return this.request('/session', { directory }); }
   sessionStatus(directory) { return this.request('/session/status', { directory }); }
+  providers(directory) { return this.request('/provider', { directory, timeoutMs: 10_000 }); }
   createSession({ directory, title, parentID }) {
     const body = { title };
     if (parentID) body.parentID = parentID;
@@ -49,7 +50,7 @@ export class OpenCodeClient {
   promptAsync({ directory, sessionId, prompt, agent, model }) {
     const body = { parts: [{ type: 'text', text: prompt }] };
     if (agent) body.agent = agent;
-    if (model) body.model = model;
+    if (model) body.model = normalizeModelRef(model);
     return this.request(`/session/${encodeURIComponent(sessionId)}/prompt_async`, {
       method: 'POST', directory, body, timeoutMs: 10_000,
     });
@@ -62,6 +63,27 @@ export class OpenCodeClient {
   }
   deleteSession({ directory, sessionId }) {
     return this.request(`/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE', directory });
+  }
+
+  async availableModels(directory) {
+    const value = await this.providers(directory);
+    const providers = Array.isArray(value?.all) ? value.all : [];
+    const models = [];
+    for (const provider of providers) {
+      const providerID = provider?.id || provider?.providerID;
+      if (!providerID) continue;
+      const entries = provider?.models && typeof provider.models === 'object' ? Object.entries(provider.models) : [];
+      for (const [modelID, info] of entries) {
+        models.push({
+          id: `${providerID}/${modelID}`,
+          providerID,
+          modelID,
+          name: info?.name || modelID,
+          connected: Array.isArray(value?.connected) ? value.connected.includes(providerID) : null,
+        });
+      }
+    }
+    return models.sort((a, b) => a.id.localeCompare(b.id));
   }
 
   async overview(directory) {
