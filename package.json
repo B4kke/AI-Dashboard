@@ -1,9 +1,9 @@
 {
   "name": "ai-dashboard",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": true,
   "type": "module",
-  "description": "Self-hosted control center for AI projects and coding agents",
+  "description": "Self-hosted control center for AI projects, coding agents and model research",
   "engines": { "node": ">=22" },
   "scripts": {
     "dev": "node --env-file-if-exists=.env --watch server/index.mjs",
