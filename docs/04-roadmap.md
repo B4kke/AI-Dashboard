@@ -1,5 +1,7 @@
 # Roadmap
 
+> Current focus: harden and prove the existing autonomous GitHub loop. Feature breadth is frozen until the safety/recovery gates below are satisfied.
+
 ## M0 — Control surface boots — DONE
 
 - local server and responsive UI
@@ -8,111 +10,107 @@
 - OpenCode health/session visibility
 - tested Git worktree primitives
 
-## M1 — Autonomous local control loop — ACTIVE
+## M1 — Autonomous local control loop — ACTIVE / HARDENING
 
-Implemented:
+Implemented and isolated-test verified:
 
 - project workspace registration
-- direct task creation and manual delegation
-- optional idea inbox and AI planning entrypoint
-- machine-readable planner/worker/supervisor result contract
-- worktree allocation and reuse across iterations
+- direct Task creation and manual delegation; Ideas remain optional
+- versioned, role-specific planner/worker/supervisor result contracts
+- bare worker `success` rejected
+- worktree allocation and reuse across bounded iterations
 - OpenCode session/message/status integration
-- run reconciliation
-- timeout and retry budgets independent of OpenCode
-- worker checkpoint commit
-- independent supervisor review
-- supervisor integrity gate (read-only review enforcement)
+- selected model passed into OpenCode runs
+- run reconciliation with independent timeout/retry budgets
+- fail-closed uncertain OpenCode dispatch handling: a lost `prompt_async` acknowledgement cannot launch a duplicate worker
+- worker checkpoint commit owned by the control plane
+- actual Git parent->checkpoint diff evidence
+- control-plane verification commands executed without shell interpolation
+- worker success with no repository change is rejected
+- independent read-only supervisor
+- supervisor must explicitly verify every acceptance criterion
+- final repository/verification gate rerun before merge
 - bounded `changes_requested -> worker retry` loop
 - project autonomy modes: manual / assisted / autonomous
 - concurrency policy
+- SQLite/WAL default control state with monotonic revision
+- snapshot + transition journal committed in the same SQLite transaction
+- durable operation locks with leases
+- failed persistence cannot advance visible in-memory state or poison later writes
+- stale SQLite snapshot cannot overwrite a newer revision
+- restart recovery for incomplete/active worker and supervisor state
+- crash replay for checkpoint commit created before state persistence
+- worktree inventory with abandoned managed-worktree detection
 - local fast-forward merge and cleanup
-- manual controls in UI
+- direct Task UI with description, acceptance criteria, dependencies, model and verification configuration
+- Task evidence endpoint/view over worker/supervisor/control-plane evidence
 
 Still needed before M1 is closed:
 
-- fuller run/evidence viewer in UI
-- recovery for process restart during active run
-- explicit abandoned-worktree inventory/cleanup command
-- end-to-end integration test against a real OpenCode server
-- structured coding-run usage/cost capture
+- real end-to-end run against an actual OpenCode server
+- physical/process-failure dogfood across OpenCode outage/restart, not only deterministic test doubles
+- cleanup/recovery dogfood against abandoned real worktrees
+- structured coding-run usage/cost capture is deferred while feature breadth is frozen
 
-## M2 — GitHub feedback loop — ACTIVE
+## M2 — GitHub feedback loop — ACTIVE / HARDENING
 
-Implemented:
+Implemented and isolated/integration-test verified:
 
 - strict `owner/repository` binding and local-origin identity validation
 - bounded/shell-free Git branch push using host credential helper or SSH agent
 - create or reuse task PRs
+- publish read-repair after lost GitHub acknowledgement, only when branch/base/head identity matches the verified checkpoint
 - normalized GitHub PR/head evidence
-- GitHub check-runs + commit-status ingestion
+- check-runs + commit-status ingestion
+- check-runs pagination; failures beyond the first 100 checks cannot be hidden
+- GitHub CI API failure becomes `error`/incomplete evidence, never `none`
+- `requireCi=true` by default for GitHub-backed projects
 - CI discovery grace period for newly-created PRs
-- CI evidence persisted on the task publication record
+- CI outage polling backoff preserved across integrity guards
 - CI failure -> bounded autonomous worker repair loop
-- supervisor receives worker + GitHub/CI evidence
-- PR head and CI revalidated after supervisor approval
+- supervisor receives machine-generated worker + GitHub/CI evidence
+- PR head/base and CI revalidated after supervisor approval
 - expected-head-SHA guarded GitHub merge
+- externally merged PR recovery only succeeds when the merged PR head/base still matches the independently reviewed checkpoint
+- externally merged identity drift blocks project autonomy for integrity review
 - configurable merge method (`squash` default)
 - optional remote branch + local worktree/branch cleanup
-- detection of PRs merged externally
+- base branch `fetch + ff-only` sync before new GitHub-backed worker work and after remote merge
 - manual Publish / Refresh CI / Review / Merge controls in dashboard
+- deterministic full-loop CI test: Task -> worker -> real Git worktree/commit/push -> PR test double -> CI failure -> repair -> CI success -> supervisor -> merge
 
 Still needed before M2 is closed:
 
-- end-to-end test against a real disposable GitHub repository/PR/Actions run
-- richer GitHub check/job/log evidence so repair agents receive the actual failing step/log tail
-- GitHub issue -> project Task import/sync
-- GitHub webhook/event ingestion instead of polling-only reconciliation
-- pull-request review comments / requested changes as supervisor evidence
-- branch-protection/required-check awareness rather than generic all-check aggregation
-- base-branch synchronization/rebase strategy when the target moves
-- explicit GitHub rate-limit/backoff handling
+- one real disposable GitHub repository/PR/Actions dogfood combined with a real OpenCode worker
+- repeat that real loop across CI failure/repair, process restart, OpenCode outage, moved base branch and supervisor rejection
+- durable merge-attempt backoff/budget for transient GitHub merge failures (CI polling already has backoff)
+- required-check / branch-protection awareness rather than relying only on observed aggregate checks plus GitHub merge refusal
+- richer check/job/log evidence for diagnosing real CI failures
+- confirm remote merge SHA / reviewed checkpoint lineage in real GitHub dogfood evidence
 
-## M3 — Agent & model platform — ACTIVE
+Deferred while hardening is the priority:
 
-Implemented first slice:
+- GitHub issue import/sync
+- webhook/event ingestion
+- PR review-comment integration
+
+## M3 — Agent & model platform — EARLY SLICE / FEATURE-FROZEN
+
+Already implemented and retained:
 
 - `Harness != Provider != Model` domain separation
 - selected model persisted on each coding Run
-- project model policy with separate coding/planning/supervisor/research defaults
+- project model policy with coding/planning/supervisor/research defaults
 - per-Task coding model override
 - correct OpenCode `{ providerID, modelID }` request shape
 - OpenCode provider/model catalog discovery
 - generic OpenAI-compatible direct provider adapter
-- built-in LM Studio provider profile
-- built-in NVIDIA API Catalog/NIM provider profile
+- built-in LM Studio and NVIDIA API Catalog/NIM profiles
 - custom OpenAI-compatible provider registration
-- provider `/models` discovery and cached model metadata
-- provider credentials referenced by environment-variable name rather than stored secret value
-- direct read-only Research Run domain/history
-- bounded repository context collection for research
-- research report + provider/model + token usage + context-file evidence persistence
-- Research UI and provider/model controls
+- direct read-only Research Runs with bounded repository context, report, model, usage and context-file evidence
 
-Still needed:
+No additional M3 breadth is prioritized until M1/M2 safety gates are proven end-to-end.
 
-- reusable agent definitions and role registry
-- runner abstraction implementation beyond OpenCode
-- ACP adapter
-- Codex / Claude Code / local harness adapters
-- harness capability matrix (model override, tools, resume, permissions, etc.)
-- model capability metadata (tool use, context length, reasoning, vision)
-- usage and cost ledger across coding + research
-- provider health/backoff/rate-limit state
-- streamed direct-model responses
-- research web/MCP/tool integrations
-- multi-step research agent mode with explicit tool/evidence policy
-- richer evidence gates
-- supervisor policies per project/task class
-- sub-agent hierarchy / super-agent fleet views
+## M4 — Automation and remote operations — DEFERRED
 
-## M4 — Automation and remote operations
-
-- schedules
-- webhooks/event triggers
-- deployment integrations
-- notifications
-- private remote access
-- backup/export
-- hardened authentication and authorization
-- policy audit trail and autonomy kill switch
+No M4 implementation should be prioritized before the current control loop is proven safe, idempotent and recoverable.
