@@ -33,6 +33,7 @@ export function buildTaskPrompt({ project, task, feedback = null, iteration = 1 
     '- Read repository-level AGENTS.md/instructions before modifying code.',
     '- Do not modify unrelated files.',
     '- Run relevant tests/checks for the changed scope.',
+    '- Do not create Git commits. Leave changed files in the worktree; the control plane owns the checkpoint commit used for evidence.',
     '- Do not merge or push unless the task explicitly requires it; the control plane owns publication, approval and merge.',
     '- Leave the worktree in a reviewable state and report concrete evidence.',
     '- Your reported tests are claims only. The control plane independently captures Git diff/checkpoint evidence and runs configured verification commands.',
