@@ -23,10 +23,7 @@ const sqlite = await new SqliteControlStore(dbFile).initialize();
 const importedLegacy = await sqlite.importJsonIfEmpty(legacyDataFile);
 if (importedLegacy) console.log(`AI Dashboard imported legacy JSON state into ${dbFile}`);
 
-const store = new StateStore(legacyDataFile, {
-  persistence: sqlite,
-  onChange: (type, payload) => events.publish(type, payload),
-});
+const store = new StateStore(legacyDataFile, { persistence: sqlite, onChange: (type, payload) => events.publish(type, payload) });
 const opencode = new OpenCodeClient();
 const github = new GitHubClient();
 
@@ -34,7 +31,7 @@ await store.load();
 const research = createResearchService({ store, opencode });
 await research.initialize();
 const baseOrchestrator = createOrchestrator({ store, opencode, github, locks: sqlite });
-const orchestrator = decorateControlPlane({ orchestrator: baseOrchestrator, store, locks: sqlite });
+const orchestrator = decorateControlPlane({ orchestrator: baseOrchestrator, store, locks: sqlite, github });
 const recovery = await orchestrator.recover();
 if (recovery.length) console.log(`AI Dashboard recovered ${recovery.length} state transition(s)`);
 
@@ -61,14 +58,8 @@ function shutdown(signal) {
   shuttingDown = true;
   console.log(`AI Dashboard received ${signal}; stopping control loop`);
   autonomy.stop();
-  server.close(() => {
-    sqlite.close();
-    process.exit(0);
-  });
-  setTimeout(() => {
-    try { sqlite.close(); } catch {}
-    process.exit(1);
-  }, 5_000).unref();
+  server.close(() => { sqlite.close(); process.exit(0); });
+  setTimeout(() => { try { sqlite.close(); } catch {} process.exit(1); }, 5_000).unref();
 }
 process.once('SIGTERM', () => shutdown('SIGTERM'));
 process.once('SIGINT', () => shutdown('SIGINT'));
