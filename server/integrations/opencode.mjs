@@ -38,7 +38,14 @@ export class OpenCodeClient {
   health() { return this.request('/global/health'); }
   sessions(directory) { return this.request('/session', { directory }); }
   sessionStatus(directory) { return this.request('/session/status', { directory }); }
-  createSession({ directory, title }) { return this.request('/session', { method: 'POST', directory, body: { title } }); }
+  createSession({ directory, title, parentID }) {
+    const body = { title };
+    if (parentID) body.parentID = parentID;
+    return this.request('/session', { method: 'POST', directory, body });
+  }
+  messages({ directory, sessionId, limit = 50 }) {
+    return this.request(`/session/${encodeURIComponent(sessionId)}/message?limit=${encodeURIComponent(limit)}`, { directory });
+  }
   promptAsync({ directory, sessionId, prompt, agent, model }) {
     const body = { parts: [{ type: 'text', text: prompt }] };
     if (agent) body.agent = agent;
@@ -52,6 +59,9 @@ export class OpenCodeClient {
   }
   diff({ directory, sessionId }) {
     return this.request(`/session/${encodeURIComponent(sessionId)}/diff`, { directory });
+  }
+  deleteSession({ directory, sessionId }) {
+    return this.request(`/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE', directory });
   }
 
   async overview(directory) {

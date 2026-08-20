@@ -1,6 +1,6 @@
 {
   "name": "ai-dashboard",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "type": "module",
   "description": "Self-hosted control center for AI projects and coding agents",

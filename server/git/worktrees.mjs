@@ -75,3 +75,33 @@ export async function removeTaskWorktree({ repoPath, worktreePath, force = false
   await git(repository.root, args);
   await git(repository.root, ['worktree', 'prune']);
 }
+
+export async function worktreeStatus(worktreePath) {
+  return git(worktreePath, ['status', '--porcelain=v1']);
+}
+
+export async function commitWorktree({ worktreePath, message }) {
+  const status = await worktreeStatus(worktreePath);
+  if (!status) return { committed: false, head: await git(worktreePath, ['rev-parse', 'HEAD']) };
+  // The worktree is dedicated to one delegated task; checkpoint its task-scoped changes before independent review.
+  await git(worktreePath, ['add', '-A']);
+  await git(worktreePath, ['commit', '-m', message]);
+  return { committed: true, head: await git(worktreePath, ['rev-parse', 'HEAD']) };
+}
+
+export async function mergeTaskBranch({ repoPath, branch, baseBranch = 'main' }) {
+  const repository = await inspectRepository(repoPath);
+  const status = await git(repository.root, ['status', '--porcelain=v1']);
+  if (status) throw new Error('Base repository has uncommitted changes; refusing autonomous merge');
+  const current = await git(repository.root, ['branch', '--show-current']);
+  if (current !== baseBranch) {
+    throw new Error(`Base repository must be on ${baseBranch}; currently on ${current || 'detached HEAD'}`);
+  }
+  await git(repository.root, ['merge', '--ff-only', branch]);
+  return { head: await git(repository.root, ['rev-parse', 'HEAD']), branch: baseBranch };
+}
+
+export async function deleteTaskBranch({ repoPath, branch, force = false }) {
+  const repository = await inspectRepository(repoPath);
+  await git(repository.root, ['branch', force ? '-D' : '-d', branch]);
+}

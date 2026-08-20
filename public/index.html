@@ -12,6 +12,7 @@
     <nav>
       <a class="active" href="#overview">Overview</a>
       <a href="#projects">Projects</a>
+      <a href="#ideas">Ideas</a>
       <a href="#tasks">Tasks</a>
       <a href="#agents">Agents</a>
       <a href="#integrations">Integrations</a>
@@ -23,7 +24,7 @@
   <main>
     <header>
       <div><p class="eyebrow">SELF-HOSTED AI OPERATIONS</p><h1>Mission control</h1></div>
-      <div class="header-actions"><button id="refresh">Refresh</button><button class="primary" id="new-project">+ Project</button></div>
+      <div class="header-actions"><button id="refresh">Refresh</button><button id="new-idea">+ Idea</button><button class="primary" id="new-project">+ Project</button></div>
     </header>
 
     <section class="metrics" id="overview">
@@ -45,15 +46,27 @@
     </section>
 
     <section class="grid two">
+      <article class="panel" id="ideas">
+        <div class="panel-head"><div><p class="eyebrow">IDEA PIPELINE</p><h2>From thought to product</h2></div><button id="new-idea-inline">+ Idea</button></div>
+        <div id="idea-list" class="stack"></div>
+      </article>
       <article class="panel" id="tasks">
         <div class="panel-head"><div><p class="eyebrow">TASK FLOW</p><h2>Queue</h2></div><button id="new-task">+ Task</button></div>
         <div id="task-list" class="stack"></div>
       </article>
+    </section>
+
+    <section class="grid two">
       <article class="panel" id="integrations">
         <div class="panel-head"><div><p class="eyebrow">INTEGRATIONS</p><h2>Runtime links</h2></div></div>
         <div class="integration-row"><div><strong>OpenCode</strong><p>HTTP/SSE runner adapter</p></div><div class="status" id="opencode-status">Checking…</div></div>
         <div class="integration-row"><div><strong>GitHub</strong><p>PR, CI, issues and review</p></div><div class="status pending">planned M2</div></div>
-        <div class="integration-row"><div><strong>ACP</strong><p>generic agent protocol</p></div><div class="status pending">planned M1</div></div>
+        <div class="integration-row"><div><strong>ACP</strong><p>generic agent protocol</p></div><div class="status pending">planned</div></div>
+      </article>
+      <article class="panel" id="automations">
+        <div class="panel-head"><div><p class="eyebrow">AUTONOMY</p><h2>Control loop</h2></div><span class="pill">M1</span></div>
+        <p class="panel-copy">Autonomous projects continuously reconcile agent runs, schedule ready work, request independent supervisor review, retry within budgets, and optionally merge approved work.</p>
+        <div id="autonomy-list" class="stack"></div>
       </article>
     </section>
 
@@ -69,7 +82,21 @@
       <label>Name<input name="name" required placeholder="Norge World Engine"></label>
       <label>Local repository path<input name="repoPath" placeholder="C:\\projects\\nwe or /srv/nwe"></label>
       <label>GitHub repository<input name="repository" placeholder="owner/repository"></label>
+      <label>Base branch<input name="baseBranch" value="main"></label>
+      <label>Autonomy mode<select name="autonomyMode"><option value="manual">Manual</option><option value="assisted">Assisted</option><option value="autonomous">Autonomous</option></select></label>
+      <label class="check"><input type="checkbox" name="autoAnalyzeIdeas"> Automatically analyze new ideas</label>
+      <label class="check"><input type="checkbox" name="autoMerge"> Auto-merge after independent supervisor approval</label>
       <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="idea-dialog">
+    <form method="dialog" id="idea-form">
+      <h2>Capture idea</h2>
+      <label>Project<select name="projectId" id="idea-project" required></select></label>
+      <label>Idea<input name="title" required placeholder="Add autonomous release notes"></label>
+      <label>Context<textarea name="description" rows="6" placeholder="What should exist when this is finished? Constraints, thoughts, rough notes..."></textarea></label>
+      <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Save idea</button></div>
     </form>
   </dialog>
 

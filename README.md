@@ -1,29 +1,50 @@
 # AI Dashboard
 
-Self-hosted control center for AI-assisted software development.
+Self-hosted control center for AI-assisted and autonomous software development.
 
-AI Dashboard is intended to become one place to understand projects, delegate work to AI coding agents, watch active runs, manage isolated Git worktrees, review diffs and CI, and connect GitHub, OpenCode and other agent backends without locking the product to one model or harness.
+AI Dashboard is intended to become one place to capture ideas, understand projects, delegate work to AI coding agents, run bounded autonomous loops, manage isolated Git worktrees, independently review agent output, inspect evidence and connect GitHub, OpenCode and other agent backends without locking the product to one model or harness.
 
-> Status: bootstrap / pre-alpha.
+> Status: pre-alpha / active M1 development.
 
-## Product direction
+## Current product flow
 
-AI Dashboard owns the stable concepts **Project -> Task -> Run -> Agent -> Workspace -> Evidence**. Runner-specific concepts stay behind adapters. OpenCode is the first runner because it exposes a strong local HTTP API, not because the product depends on it.
+```text
+Idea -> AI planner -> task graph -> worker -> checkpoint -> supervisor
+     -> approve / changes requested / blocked -> merge or next iteration
+```
 
-Core product areas:
+The worker does not approve its own work. A separate supervisor agent verifies the checkpoint. The control plane performs merge/cleanup only after the supervisor verdict and Git integrity checks pass.
 
-- Project overview and project-state summaries
-- Task board with priorities, dependencies, blocking and agent assignment
-- Agent fleet: status, runner, model, task, branch, worktree, logs and usage
-- OpenCode integration through its headless HTTP server
-- Pluggable runner interface for OpenCode, ACP agents, Codex, Claude Code and local agents
-- Git worktree isolation per delegated task
-- GitHub issues, pull requests, reviews, Actions/CI and merge state
-- Deployment state and external service integrations
-- Live logs, diffs, tests, tokens, cost and run history
-- Automations and event-driven workflows
-- Local-first/self-hosted operation with explicit security boundaries
-- Mobile-friendly web UI
+## Project autonomy
+
+Projects can currently run in three modes:
+
+- **manual** — user explicitly starts planning, workers, review and merge
+- **assisted** — AI planning/review is available while execution remains user-directed
+- **autonomous** — ready work can be scheduled automatically, reviewed independently, retried within budgets and optionally merged
+
+Autonomous policies include concurrency, maximum worker iterations, maximum run duration, retry budget, optional auto-analysis of new ideas and optional auto-merge.
+
+## What works now
+
+- responsive local dashboard
+- project registration and autonomy policy
+- durable idea inbox
+- AI planning run for an idea
+- planner result -> generated tasks/dependencies/acceptance criteria
+- task delegation into isolated Git worktrees
+- OpenCode sessions scoped to each workspace
+- machine-readable `AI_DASHBOARD_RESULT` contracts
+- periodic run reconciliation against OpenCode messages/status
+- control-plane run timeout and retry limits
+- successful worker checkpoint commits
+- independent supervisor runs
+- supervisor `approve / changes_requested / blocked` verdicts
+- bounded worker <-> supervisor iteration loop
+- supervisor integrity check: review is rejected if it mutates the reviewed checkpoint
+- clean-base, fast-forward-only local merge
+- optional post-merge worktree/branch cleanup
+- SSE control-plane event stream
 
 ## Primary references
 
@@ -32,11 +53,11 @@ Core product areas:
 - Codeman — https://github.com/Ark0N/Codeman
 - OpenCode — https://github.com/anomalyco/opencode
 
-See `docs/01-product-plan.md` and `docs/03-inspiration-and-attribution.md`.
+See `docs/01-product-plan.md`, `docs/02-architecture.md` and `docs/03-inspiration-and-attribution.md`.
 
-## Run the bootstrap
+## Run
 
-Requirements: Node.js 22+.
+Requirements: Node.js 22+ and Git. OpenCode is optional for boot but required for agent execution.
 
 ```bash
 cp .env.example .env
@@ -45,23 +66,39 @@ npm start
 
 Open http://127.0.0.1:7331.
 
-OpenCode is optional for startup. When `opencode serve` is available at `OPENCODE_URL`, the dashboard reports its live health and session counts. A registered project with a valid local `repoPath` can be delegated from the task list; AI Dashboard creates an isolated Git worktree and an OpenCode session scoped to that workspace.
+Run OpenCode separately, for example with `opencode serve`, and point `OPENCODE_URL` at that loopback/private endpoint.
 
 ## Current API
 
 - `GET /api/health`
 - `GET /api/state`
 - `POST /api/projects`
+- `PATCH /api/projects/:id`
+- `POST /api/ideas`
+- `POST /api/ideas/:id/analyze`
 - `POST /api/tasks`
 - `POST /api/tasks/:id/delegate`
+- `POST /api/tasks/:id/review`
+- `POST /api/tasks/:id/merge`
+- `POST /api/projects/:id/autonomy/tick`
 - `POST /api/runs/:id/abort`
 - `GET /api/runs/:id/diff`
 - `GET /api/integrations/opencode`
 - `GET /api/events` (SSE)
 
-## Security
+## Safety model
 
-Coding-agent runners can execute commands and modify source code. Runner APIs are expected to remain loopback-only by default. Remote access should sit behind an authenticated private network or hardened reverse proxy; do not expose a raw OpenCode/agent server directly to the public internet.
+Coding-agent runners can execute commands and modify source code. Runner APIs are expected to remain loopback-only by default. Remote access should sit behind authenticated private networking or a hardened reverse proxy.
+
+Autonomous merge is off by default. When enabled in the bootstrap it is still constrained to a clean local base repository, the configured base branch and fast-forward-only merge after independent supervisor approval.
+
+## Tests
+
+```bash
+npm test
+```
+
+The suite covers state persistence, idea/autonomy policy, result-contract parsing, OpenCode request shape, autonomous scheduling and real temporary Git worktree/commit/merge/cleanup behavior.
 
 ## Plan
 

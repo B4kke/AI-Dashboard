@@ -35,3 +35,24 @@ test('task requires a valid project', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('projects persist autonomy policy and ideas have their own lifecycle', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-'));
+  try {
+    const store = new StateStore(join(dir, 'state.json'));
+    await store.load();
+    const project = await store.addProject({
+      name: 'Autonomous project',
+      autonomy: { mode: 'autonomous', autoAnalyzeIdeas: true, autoMerge: true, maxTaskIterations: 3 },
+    });
+    const idea = await store.addIdea({ projectId: project.id, title: 'Build a thing', description: 'rough thought' });
+    await store.updateIdea(idea.id, { state: 'planning' });
+    const snapshot = store.snapshot();
+    assert.equal(snapshot.schemaVersion, 2);
+    assert.equal(snapshot.projects[0].autonomy.mode, 'autonomous');
+    assert.equal(snapshot.projects[0].autonomy.maxTaskIterations, 3);
+    assert.equal(snapshot.ideas[0].state, 'planning');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

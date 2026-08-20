@@ -32,3 +32,29 @@ test('createTaskWorktree creates an isolated branch outside the repo', async () 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('approved work can be committed, fast-forward merged and cleaned up safely', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-merge-'));
+  const repo = join(dir, 'repo');
+  const worktrees = join(dir, 'worktrees');
+  try {
+    await exec('git', ['init', '-b', 'main', repo]);
+    await exec('git', ['-C', repo, 'config', 'user.name', 'AI Dashboard Test']);
+    await exec('git', ['-C', repo, 'config', 'user.email', 'test@example.invalid']);
+    await writeFile(join(repo, 'README.md'), 'base\n');
+    await exec('git', ['-C', repo, 'add', 'README.md']);
+    await exec('git', ['-C', repo, 'commit', '-m', 'base']);
+    const { commitWorktree, mergeTaskBranch, deleteTaskBranch } = await import('../server/git/worktrees.mjs');
+    const result = await createTaskWorktree({ repoPath: repo, taskId: 'task-merge-1234', title: 'Merge work', worktreeRoot: worktrees });
+    await writeFile(join(result.worktreePath, 'feature.txt'), 'approved\n');
+    const commit = await commitWorktree({ worktreePath: result.worktreePath, message: 'ai: merge work' });
+    assert.equal(commit.committed, true);
+    const merged = await mergeTaskBranch({ repoPath: repo, branch: result.branch, baseBranch: 'main' });
+    assert.equal(await readFile(join(repo, 'feature.txt'), 'utf8'), 'approved\n');
+    await removeTaskWorktree({ repoPath: repo, worktreePath: result.worktreePath });
+    await deleteTaskBranch({ repoPath: repo, branch: result.branch });
+    assert.ok(merged.head);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
