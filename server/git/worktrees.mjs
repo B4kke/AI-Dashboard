@@ -85,10 +85,40 @@ export async function worktreeStatus(worktreePath) {
 export async function commitWorktree({ worktreePath, message }) {
   const status = await worktreeStatus(worktreePath);
   if (!status) return { committed: false, head: await git(worktreePath, ['rev-parse', 'HEAD']) };
-  // The worktree is dedicated to one delegated task; checkpoint its task-scoped changes before independent review.
   await git(worktreePath, ['add', '-A']);
   await git(worktreePath, ['commit', '-m', message]);
   return { committed: true, head: await git(worktreePath, ['rev-parse', 'HEAD']) };
+}
+
+export async function checkpointEvidence({ worktreePath, head }) {
+  const resolvedHead = head || await git(worktreePath, ['rev-parse', 'HEAD']);
+  const parent = await git(worktreePath, ['rev-parse', `${resolvedHead}^`]);
+  const nameStatus = await git(worktreePath, ['diff', '--name-status', parent, resolvedHead, '--']);
+  const stat = await git(worktreePath, ['diff', '--stat', parent, resolvedHead, '--']);
+  const numstat = await git(worktreePath, ['diff', '--numstat', parent, resolvedHead, '--']);
+  const files = nameStatus ? nameStatus.split('\n').map((line) => {
+    const [status, ...rest] = line.split('\t');
+    return { status, path: rest.join('\t') };
+  }) : [];
+  let additions = 0;
+  let deletions = 0;
+  if (numstat) {
+    for (const line of numstat.split('\n')) {
+      const [added, deleted] = line.split('\t');
+      if (/^\d+$/.test(added)) additions += Number(added);
+      if (/^\d+$/.test(deleted)) deletions += Number(deleted);
+    }
+  }
+  return {
+    head: resolvedHead,
+    parent,
+    changed: files.length > 0,
+    files,
+    fileCount: files.length,
+    additions,
+    deletions,
+    stat,
+  };
 }
 
 export async function gitRemoteUrl({ worktreePath, remote = 'origin' }) {
