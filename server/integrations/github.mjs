@@ -1,4 +1,6 @@
 const DEFAULT_API = 'https://api.github.com';
+const CHECK_RUN_PAGE_SIZE = 100;
+const MAX_CHECK_RUN_PAGES = 10;
 
 export function parseGitHubRepository(value) {
   const input = String(value || '').trim().replace(/\.git$/i, '');
@@ -139,18 +141,44 @@ export class GitHubClient {
     return this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${Number(number)}`);
   }
 
+  async completeCheckRuns(root) {
+    const first = await this.request(`${root}/check-runs?per_page=${CHECK_RUN_PAGE_SIZE}`);
+    const all = Array.isArray(first?.check_runs) ? [...first.check_runs] : [];
+    const reportedTotal = Number(first?.total_count);
+
+    // GitHub normally returns total_count. Small mock/compatibility servers may omit it; a short first page
+    // is still unambiguously complete, while a full page without a count is not safe to treat as complete.
+    if (!Number.isFinite(reportedTotal)) {
+      if (all.length < CHECK_RUN_PAGE_SIZE) return all;
+      throw new Error(`GitHub check-runs completeness is unknown: received a full ${CHECK_RUN_PAGE_SIZE}-item page without total_count`);
+    }
+    if (reportedTotal <= all.length) return all;
+
+    for (let page = 2; page <= MAX_CHECK_RUN_PAGES && all.length < reportedTotal; page += 1) {
+      const value = await this.request(`${root}/check-runs?per_page=${CHECK_RUN_PAGE_SIZE}&page=${page}`);
+      const batch = Array.isArray(value?.check_runs) ? value.check_runs : [];
+      all.push(...batch);
+      if (!batch.length) break;
+    }
+
+    if (all.length < reportedTotal) {
+      throw new Error(`GitHub check-runs evidence truncated: GitHub reports ${reportedTotal} checks but only ${all.length} were collected`);
+    }
+    return all;
+  }
+
   async commitChecks({ repository, sha }) {
     const { owner, repo } = parseGitHubRepository(repository);
     const root = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}`;
     const [checkRunsResult, statusResult] = await Promise.allSettled([
-      this.request(`${root}/check-runs?per_page=100`),
+      this.completeCheckRuns(root),
       this.request(`${root}/status`),
     ]);
     const errors = [];
     if (checkRunsResult.status === 'rejected') errors.push(`check-runs: ${checkRunsResult.reason?.message || checkRunsResult.reason}`);
     if (statusResult.status === 'rejected') errors.push(`commit-status: ${statusResult.reason?.message || statusResult.reason}`);
     return aggregateGitHubChecks({
-      checkRuns: checkRunsResult.status === 'fulfilled' ? (checkRunsResult.value?.check_runs || []) : [],
+      checkRuns: checkRunsResult.status === 'fulfilled' ? checkRunsResult.value : [],
       combinedStatus: statusResult.status === 'fulfilled' ? statusResult.value : null,
       errors,
     });
