@@ -78,6 +78,56 @@ export class StateStore {
     return structuredClone(task);
   }
 
+  getProject(id) {
+    return structuredClone(this.state.projects.find((item) => item.id === id) || null);
+  }
+
+  getTask(id) {
+    return structuredClone(this.state.tasks.find((item) => item.id === id) || null);
+  }
+
+  getRun(id) {
+    return structuredClone(this.state.runs.find((item) => item.id === id) || null);
+  }
+
+  async updateTask(id, patch) {
+    const task = this.state.tasks.find((item) => item.id === id);
+    if (!task) throw new Error('Task not found');
+    Object.assign(task, patch, { updatedAt: new Date().toISOString() });
+    await this.#changed('task.updated', task);
+    return structuredClone(task);
+  }
+
+  async createRun(input) {
+    const now = new Date().toISOString();
+    const run = {
+      id: randomUUID(),
+      taskId: input.taskId,
+      projectId: input.projectId,
+      runner: input.runner || 'opencode',
+      status: input.status || 'preparing',
+      sessionId: null,
+      branch: null,
+      worktreePath: null,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+      startedAt: null,
+      finishedAt: null,
+    };
+    this.state.runs.push(run);
+    await this.#changed('run.created', run);
+    return structuredClone(run);
+  }
+
+  async updateRun(id, patch) {
+    const run = this.state.runs.find((item) => item.id === id);
+    if (!run) throw new Error('Run not found');
+    Object.assign(run, patch, { updatedAt: new Date().toISOString() });
+    await this.#changed('run.updated', run);
+    return structuredClone(run);
+  }
+
   async setIntegration(name, value) {
     this.state.integrations[name] = { ...value, updatedAt: new Date().toISOString() };
     await this.#changed('integration.updated', { name, ...this.state.integrations[name] });

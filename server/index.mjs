@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { EventHub } from './core/events.mjs';
 import { StateStore } from './core/state-store.mjs';
 import { OpenCodeClient } from './integrations/opencode.mjs';
+import { createTaskWorktree } from './git/worktrees.mjs';
+import { buildTaskPrompt } from './core/task-prompt.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PUBLIC = join(ROOT, 'public');
@@ -49,6 +51,41 @@ async function opencodeOverview() {
   }
 }
 
+async function delegateTask(taskId) {
+  const task = store.getTask(taskId);
+  if (!task) throw new Error('Task not found');
+  const project = store.getProject(task.projectId);
+  if (!project) throw new Error('Project not found');
+  if (!project.repoPath) throw new Error('Project needs a local repoPath before delegation');
+
+  const blockers = task.blockedBy.map((id) => store.getTask(id)).filter(Boolean);
+  if (blockers.some((item) => item.state !== 'done')) throw new Error('Task is blocked by unfinished dependencies');
+
+  let run = await store.createRun({ taskId: task.id, projectId: project.id, runner: task.runner });
+  try {
+    const workspace = await createTaskWorktree({
+      repoPath: project.repoPath,
+      taskId: task.id,
+      title: task.title,
+    });
+    run = await store.updateRun(run.id, { branch: workspace.branch, worktreePath: workspace.worktreePath });
+    const session = await opencode.createSession({ directory: workspace.worktreePath, title: `[${task.priority}] ${task.title}` });
+    if (!session?.id) throw new Error('OpenCode did not return a session id');
+    run = await store.updateRun(run.id, { sessionId: session.id, status: 'running', startedAt: new Date().toISOString() });
+    await store.updateTask(task.id, { state: 'in_progress' });
+    await opencode.promptAsync({
+      directory: workspace.worktreePath,
+      sessionId: session.id,
+      prompt: buildTaskPrompt({ project, task }),
+    });
+    return store.getRun(run.id);
+  } catch (error) {
+    await store.updateRun(run.id, { status: 'failed', error: error.message, finishedAt: new Date().toISOString() });
+    await store.updateTask(task.id, { state: 'backlog' });
+    throw error;
+  }
+}
+
 async function api(request, response, url) {
   if (request.method === 'GET' && url.pathname === '/api/health') {
     const openCode = await opencodeOverview();
@@ -83,6 +120,26 @@ async function api(request, response, url) {
 
   if (request.method === 'POST' && url.pathname === '/api/tasks') {
     return json(response, 201, await store.addTask(await body(request)));
+  }
+
+  const delegate = url.pathname.match(/^\/api\/tasks\/([^/]+)\/delegate$/);
+  if (request.method === 'POST' && delegate) {
+    return json(response, 202, await delegateTask(decodeURIComponent(delegate[1])));
+  }
+
+  const abortRun = url.pathname.match(/^\/api\/runs\/([^/]+)\/abort$/);
+  if (request.method === 'POST' && abortRun) {
+    const run = store.getRun(decodeURIComponent(abortRun[1]));
+    if (!run) throw new Error('Run not found');
+    if (run.sessionId && run.worktreePath) await opencode.abort({ directory: run.worktreePath, sessionId: run.sessionId });
+    return json(response, 200, await store.updateRun(run.id, { status: 'aborted', finishedAt: new Date().toISOString() }));
+  }
+
+  const runDiff = url.pathname.match(/^\/api\/runs\/([^/]+)\/diff$/);
+  if (request.method === 'GET' && runDiff) {
+    const run = store.getRun(decodeURIComponent(runDiff[1]));
+    if (!run?.sessionId || !run?.worktreePath) throw new Error('Run does not have an OpenCode session');
+    return json(response, 200, await opencode.diff({ directory: run.worktreePath, sessionId: run.sessionId }));
   }
 
   return false;

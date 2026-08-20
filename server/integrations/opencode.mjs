@@ -15,29 +15,43 @@ export class OpenCodeClient {
     this.timeoutMs = timeoutMs;
   }
 
-  async request(path, { directory } = {}) {
+  async request(path, { method = 'GET', body, directory, timeoutMs = this.timeoutMs } = {}) {
     const headers = { accept: 'application/json' };
+    if (body !== undefined) headers['content-type'] = 'application/json';
     if (this.authorization) headers.authorization = this.authorization;
     if (directory) headers['x-opencode-directory'] = directory;
 
     const response = await fetch(`${this.baseUrl}${path}`, {
+      method,
       headers,
-      signal: AbortSignal.timeout(this.timeoutMs),
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!response.ok) throw new Error(`OpenCode ${path} returned HTTP ${response.status}`);
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 500);
+      throw new Error(`OpenCode ${method} ${path} returned HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
+    }
+    if (response.status === 204) return null;
     return response.json();
   }
 
-  health() {
-    return this.request('/global/health');
+  health() { return this.request('/global/health'); }
+  sessions(directory) { return this.request('/session', { directory }); }
+  sessionStatus(directory) { return this.request('/session/status', { directory }); }
+  createSession({ directory, title }) { return this.request('/session', { method: 'POST', directory, body: { title } }); }
+  promptAsync({ directory, sessionId, prompt, agent, model }) {
+    const body = { parts: [{ type: 'text', text: prompt }] };
+    if (agent) body.agent = agent;
+    if (model) body.model = model;
+    return this.request(`/session/${encodeURIComponent(sessionId)}/prompt_async`, {
+      method: 'POST', directory, body, timeoutMs: 10_000,
+    });
   }
-
-  sessions(directory) {
-    return this.request('/session', { directory });
+  abort({ directory, sessionId }) {
+    return this.request(`/session/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', directory, body: {} });
   }
-
-  sessionStatus(directory) {
-    return this.request('/session/status', { directory });
+  diff({ directory, sessionId }) {
+    return this.request(`/session/${encodeURIComponent(sessionId)}/diff`, { directory });
   }
 
   async overview(directory) {

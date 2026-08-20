@@ -45,14 +45,17 @@ npm start
 
 Open http://127.0.0.1:7331.
 
-OpenCode is optional for startup. When `opencode serve` is available at `OPENCODE_URL`, the dashboard reports its live health and session counts.
+OpenCode is optional for startup. When `opencode serve` is available at `OPENCODE_URL`, the dashboard reports its live health and session counts. A registered project with a valid local `repoPath` can be delegated from the task list; AI Dashboard creates an isolated Git worktree and an OpenCode session scoped to that workspace.
 
-## Current M0 API
+## Current API
 
 - `GET /api/health`
 - `GET /api/state`
 - `POST /api/projects`
 - `POST /api/tasks`
+- `POST /api/tasks/:id/delegate`
+- `POST /api/runs/:id/abort`
+- `GET /api/runs/:id/diff`
 - `GET /api/integrations/opencode`
 - `GET /api/events` (SSE)
 

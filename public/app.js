@@ -23,10 +23,10 @@ function render() {
     <div class="row-card"><div><div class="title">${escapeHtml(project.name)}</div><div class="meta">${escapeHtml(project.repository || project.repoPath || 'workspace not bound')}</div></div><span class="tag">${escapeHtml(project.status)}</span></div>`).join('') : empty('No projects yet. Register the first workspace.');
 
   $('task-list').innerHTML = state.tasks.length ? state.tasks.map((task) => `
-    <div class="row-card"><div><div class="title">${escapeHtml(task.title)}</div><div class="meta">${escapeHtml(task.runner)} · ${escapeHtml(task.agentRole || 'unassigned role')}</div></div><span class="tag">${escapeHtml(task.priority)} · ${escapeHtml(task.state)}</span></div>`).join('') : empty('Task queue is empty.');
+    <div class="row-card"><div><div class="title">${escapeHtml(task.title)}</div><div class="meta">${escapeHtml(task.runner)} · ${escapeHtml(task.agentRole || 'unassigned role')}</div></div><div class="row-actions"><span class="tag">${escapeHtml(task.priority)} · ${escapeHtml(task.state)}</span>${task.state === 'backlog' ? `<button class="delegate" data-task="${task.id}">Delegate</button>` : ''}</div></div>`).join('') : empty('Task queue is empty.');
 
   $('run-list').innerHTML = state.runs.length ? state.runs.map((run) => `
-    <div class="row-card"><div><div class="title">${escapeHtml(run.agentRole || run.runner)}</div><div class="meta">${escapeHtml(run.taskId || 'run')}</div></div><span class="tag">${escapeHtml(run.status)}</span></div>`).join('') : empty('No agent runs yet. M1 will create the first real run.');
+    <div class="row-card"><div><div class="title">${escapeHtml(run.runner)}</div><div class="meta">${escapeHtml(run.branch || run.sessionId || run.taskId || 'run')}</div></div><div class="row-actions"><span class="tag">${escapeHtml(run.status)}</span>${run.status === 'running' ? `<button class="abort" data-run="${run.id}">Abort</button>` : ''}</div></div>`).join('') : empty('No agent runs yet. Delegate a task to create the first real run.');
 
   $('task-project').innerHTML = state.projects.map((project) => `<option value="${project.id}">${escapeHtml(project.name)}</option>`).join('');
 }
@@ -65,6 +65,35 @@ $('clear-events').addEventListener('click', () => { $('events').textContent = ''
 $('new-project').addEventListener('click', () => $('project-dialog').showModal());
 $('new-task').addEventListener('click', () => state.projects.length ? $('task-dialog').showModal() : alert('Create a project first.'));
 
+$('task-list').addEventListener('click', async (event) => {
+  const button = event.target.closest('button.delegate');
+  if (!button) return;
+  button.disabled = true;
+  button.textContent = 'Delegating…';
+  try {
+    const run = await api(`/api/tasks/${encodeURIComponent(button.dataset.task)}/delegate`, { method: 'POST' });
+    appendEvent(`run delegated  ${run.id}`);
+    await refresh();
+  } catch (error) {
+    appendEvent(`delegation failed  ${error.message}`);
+    alert(error.message);
+    await refresh();
+  }
+});
+
+$('run-list').addEventListener('click', async (event) => {
+  const button = event.target.closest('button.abort');
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await api(`/api/runs/${encodeURIComponent(button.dataset.run)}/abort`, { method: 'POST' });
+    await refresh();
+  } catch (error) {
+    appendEvent(`abort failed  ${error.message}`);
+    await refresh();
+  }
+});
+
 $('project-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.currentTarget));
@@ -84,7 +113,7 @@ $('task-form').addEventListener('submit', async (event) => {
 });
 
 const stream = new EventSource('/api/events');
-for (const type of ['project.created', 'task.created', 'integration.updated']) {
+for (const type of ['project.created', 'task.created', 'task.updated', 'run.created', 'run.updated', 'integration.updated']) {
   stream.addEventListener(type, (event) => {
     const value = JSON.parse(event.data);
     appendEvent(`${type}  ${JSON.stringify(value.payload)}`);
