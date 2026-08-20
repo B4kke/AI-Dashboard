@@ -1,45 +1,105 @@
 # AI Dashboard
 
-Self-hosted control center for AI-assisted and autonomous software development.
+Self-hosted control center for AI-assisted and autonomous project work.
 
-AI Dashboard connects existing projects/repositories, project work, AI coding agents, isolated Git worktrees, GitHub/CI evidence and bounded autonomous control loops without locking the product to one model or runner.
+AI Dashboard connects existing projects/repositories, project tasks, AI coding harnesses, model providers, direct research runs, isolated Git worktrees, GitHub/CI evidence and bounded autonomous control loops without locking the product to one model or runner.
 
-> Status: pre-alpha / active M2 development.
+> Status: pre-alpha / active M2 + early M3 development.
 
 ## Product model
 
-**Project is the root object.** Existing repositories can be registered and worked on directly. Ideas are optional project objects for brainstorming; they are not required to create or delegate work.
+**Project is the root object.** Existing repositories can be registered and worked on directly. Ideas are optional project objects for brainstorming; they are not required to create tasks, run agents or research a project.
+
+A project now has several independent work entry points:
 
 ```text
-Existing project / repository
+Project / existing repository
   |
-  +-> direct Task ----------------------------+
-  +-> manual agent instruction ---------------+--> Worker -> checkpoint
-  +-> GitHub issue / CI event (next) ---------+             |
-  +-> optional Idea -> AI Planner ------------+             v
-                                                        GitHub publish
-                                                             |
-                                                             v
-                                                            PR
-                                                             |
-                                                             v
-                                                             CI
-                                                             |
-                                                             v
-                                                        Supervisor
-                                                        /    |    \
-                                                   changes approve blocked
-                                                      |      |       |
-                                                      +------|-------+
-                                                             v
-                                                       merge / cleanup
+  +-> Task -> coding harness -> checkpoint -> GitHub/CI -> supervisor -> merge
+  |
+  +-> Research -> direct model -> persisted report/evidence
+  |
+  +-> optional Idea -> planner -> generated normal Tasks
+  |
+  +-> GitHub/CI/event work (expanding in M2/M4)
 ```
 
-Local-only repositories skip the GitHub publish/CI stages and keep the local supervisor + fast-forward merge flow.
+## Harness != Provider != Model
+
+AI Dashboard treats these as separate concepts.
+
+- **Harness** controls how an agent works: OpenCode today; Codex, Claude Code, ACP and other adapters later.
+- **Provider** exposes models: LM Studio, NVIDIA API Catalog/NIM, or another OpenAI-compatible endpoint.
+- **Model** is the concrete model selected for one task/run.
+
+Example coding run:
+
+```text
+harness = opencode
+model   = lmstudio/qwen/qwen3-coder
+```
+
+Example direct research run:
+
+```text
+harness  = direct-model
+provider = nvidia
+model    = meta/llama-...
+```
+
+The exact model is persisted on a Run when execution starts, so changing a project default later does not rewrite run history.
+
+### Project model policy
+
+A project may define separate defaults for:
+
+- coding worker
+- idea/planning agent
+- supervisor agent
+- direct research
+
+Individual Tasks can override the coding model. The supervisor can use a different model than the worker, which is useful when independent verification should not reuse the same model configuration.
+
+## Model providers
+
+The direct-model provider registry uses one OpenAI-compatible adapter. Built-in profiles:
+
+- **LM Studio** — default `http://127.0.0.1:1234/v1`
+- **NVIDIA API Catalog / NIM** — default `https://integrate.api.nvidia.com/v1`
+
+Custom OpenAI-compatible endpoints can be registered from the dashboard. The provider registry stores an environment-variable **name** for credentials, not the secret value itself.
+
+Provider model discovery uses `GET /models`. Direct research uses `POST /chat/completions`.
+
+OpenCode model discovery is separate and comes from OpenCode's own provider catalog. Coding model choices therefore reflect what the connected OpenCode instance can actually use.
+
+## Direct Research Runs
+
+Research Runs are for project analysis that does not need a coding harness.
+
+```text
+Research request
+  -> choose project
+  -> choose direct provider/model
+  -> collect bounded read-only repository context
+  -> model analysis
+  -> persist report + model + usage + context-file evidence
+```
+
+The current repository-context collector:
+
+- prefers README/AGENTS/project metadata, docs and query-relevant file paths
+- excludes `.git`, `node_modules`, builds, coverage and common generated/vendor directories
+- bounds scanned files, selected files and total context size
+- records which files were supplied to the model
+
+Research Runs do **not** create a worktree, branch or commit and do not enter the coding autonomy loop.
+
+Current limitation: this first research slice is project/repository-context research. Web search, MCP tools, external documents and multi-step research agents are future extensions of the same Research Run model.
 
 ## Existing repositories
 
-Existing codebases are a primary use case. Register a local `repoPath`, an optional GitHub `owner/repository`, and the base branch. Tasks can then be created and delegated directly without creating an Idea first.
+Existing codebases are a primary use case. Register a local `repoPath`, an optional GitHub `owner/repository`, and the base branch. Tasks and Research Runs can then be created directly without creating an Idea first.
 
 The current bootstrap treats one local repository as a project's primary workspace. First-class multi-repository projects are planned later.
 
@@ -63,6 +123,8 @@ Projects can run in three modes:
 
 Autonomy remains bounded by concurrency, iteration, run-time and retry budgets. Auto-merge is opt-in.
 
+Direct Research Runs are currently user-triggered and intentionally separate from this coding autonomy loop.
+
 ## GitHub feedback loop
 
 For a project with a GitHub repository binding, a successful worker result follows:
@@ -78,31 +140,31 @@ worker success
   -> CI success: independent supervisor
   -> verify PR head/CI again after review
   -> optional GitHub merge using expected head SHA
-  -> remote/local branch + worktree cleanup
+  -> branch/worktree cleanup
 ```
 
-The control plane refuses autonomous review/merge if the PR head moves away from the reviewed worker checkpoint. GitHub API credentials are used only by the GitHub REST adapter; Git pushes rely on the machine's existing SSH agent or Git credential helper. Credentials are never inserted into remote URLs.
-
-A configurable `ciDiscoverySeconds` grace period (default 30s) prevents a newly-created PR from being treated as “no CI” before GitHub has had time to create checks.
+The control plane refuses autonomous review/merge if the PR head moves away from the reviewed worker checkpoint. GitHub API credentials are used only by the GitHub REST adapter; Git pushes rely on the machine's existing SSH agent or Git credential helper.
 
 ## What works now
 
 - responsive local dashboard
 - registration of existing local projects/repositories
-- direct task creation and OpenCode delegation
+- direct Task creation and OpenCode delegation
+- model selection per Task and persisted model per Run
+- project defaults for coding/planning/supervisor/research models
+- OpenCode provider/model discovery
+- OpenAI-compatible direct-model provider registry
+- LM Studio and NVIDIA provider profiles
+- custom provider registration and `/models` discovery
+- read-only direct Research Runs with persisted report/context/usage
 - optional Idea inbox and AI planner
 - task dependencies and acceptance criteria from planning
 - isolated Git worktrees and bounded worker iterations
-- machine-readable planner/worker/supervisor result contracts
-- OpenCode session/message/status reconciliation
 - independent supervisor with read-only checkpoint integrity gate
-- safe task-branch publication with exact checkpoint verification
-- GitHub PR create/reuse and CI/check ingestion
+- GitHub branch publish / PR / CI feedback loop
 - CI failure -> bounded autonomous repair loop
-- GitHub PR head/CI integrity checks before and after supervisor review
-- expected-SHA guarded GitHub merge with configurable merge method
+- expected-SHA guarded GitHub merge
 - local-only fast-forward merge path
-- optional local/remote branch and worktree cleanup
 - SSE control-plane event stream
 
 ## Primary references
@@ -116,7 +178,7 @@ See `docs/01-product-plan.md`, `docs/02-architecture.md`, `docs/03-inspiration-a
 
 ## Run
 
-Requirements: Node.js 22+ and Git. OpenCode is optional for boot but required for agent execution.
+Requirements: Node.js 22+ and Git. OpenCode is optional for dashboard/research startup but required for coding-agent execution.
 
 ```bash
 cp .env.example .env
@@ -125,21 +187,44 @@ npm start
 
 `npm start` and `npm run dev` load `.env` using Node's built-in env-file support.
 
-Run OpenCode separately (for example `opencode serve`) and point `OPENCODE_URL` at the loopback/private endpoint.
+Important environment variables include:
 
-For GitHub REST operations set either `GITHUB_TOKEN` in `.env` or `GH_TOKEN` in the process environment. Configure normal Git authentication separately on the host (SSH agent or credential helper) so `git push` can authenticate without storing credentials in AI Dashboard.
+```text
+OPENCODE_URL=http://127.0.0.1:4096
+GITHUB_TOKEN=
+LMSTUDIO_URL=http://127.0.0.1:1234/v1
+LMSTUDIO_API_KEY=
+NVIDIA_API_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_API_KEY=
+```
+
+For GitHub pushes, configure normal host Git authentication separately (SSH agent or credential helper).
 
 Open http://127.0.0.1:7331.
 
 ## Current API
 
+Core:
+
 - `GET /api/health`
 - `GET /api/state`
 - `POST /api/projects`
 - `PATCH /api/projects/:id`
+- `POST /api/tasks`
 - `POST /api/ideas`
 - `POST /api/ideas/:id/analyze`
-- `POST /api/tasks`
+
+Models / research:
+
+- `GET /api/model-providers`
+- `POST /api/model-providers`
+- `POST /api/model-providers/:id/discover`
+- `GET /api/integrations/opencode/models`
+- `POST /api/research`
+- `POST /api/research/:id/retry`
+
+Coding / GitHub loop:
+
 - `POST /api/tasks/:id/delegate`
 - `POST /api/tasks/:id/publish`
 - `POST /api/tasks/:id/github/refresh`
@@ -154,9 +239,11 @@ Open http://127.0.0.1:7331.
 
 ## Safety model
 
-Coding-agent runners can execute commands and modify source code. Runner APIs stay loopback/private by default. Git operations use argument arrays rather than shell interpolation and network Git operations have finite timeouts with terminal prompting disabled.
+Coding harnesses can execute commands and modify source code. Runner APIs stay loopback/private by default. Workers cannot self-approve; the control plane owns merge/cleanup gates.
 
-Workers cannot self-approve. Supervisor approval is rejected if the reviewed worktree/HEAD changes. GitHub-backed tasks additionally require the PR head to remain pinned to the worker checkpoint and CI to remain acceptable at the final merge gate.
+Direct provider URLs are privileged configuration because the dashboard will make server-side HTTP requests to them. Do not expose provider-configuration endpoints to untrusted users.
+
+Research Runs are deliberately read-only in this slice: they receive bounded file content but no Git/worktree mutation capability.
 
 ## Tests
 
@@ -164,7 +251,7 @@ Workers cannot self-approve. Supervisor approval is rejected if the reviewed wor
 npm test
 ```
 
-The suite covers persistence/migration, autonomy scheduling, result contracts, OpenCode request shape, GitHub repository/remote parsing, PR/CI normalization, real Git worktree/commit/merge/cleanup and a real task-branch push into a temporary bare Git remote.
+The suite covers state migration, autonomy scheduling, result contracts, OpenCode model request shape/catalog discovery, OpenAI-compatible provider discovery/chat, project research context selection, direct Research Runs, GitHub PR/CI normalization and real Git worktree/push/merge behavior.
 
 ## Plan
 
