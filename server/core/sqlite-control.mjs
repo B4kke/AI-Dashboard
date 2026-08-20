@@ -66,6 +66,11 @@ export class SqliteControlStore {
   async save(state) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      const current = this.db.prepare('SELECT revision FROM control_state WHERE id = 1').get();
+      const incomingRevision = Number(state?.revision || 0);
+      if (current && incomingRevision < Number(current.revision || 0)) {
+        throw new Error(`State revision regression: database=${current.revision}, incoming=${incomingRevision}`);
+      }
       this.#writeSnapshot(state);
       this.db.exec('COMMIT');
     } catch (error) {
