@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
-import { createTaskWorktree, removeTaskWorktree, slugifyTask } from '../server/git/worktrees.mjs';
+import { checkpointEvidence, createTaskWorktree, removeTaskWorktree, slugifyTask } from '../server/git/worktrees.mjs';
 
 const exec = promisify(execFile);
 
@@ -28,6 +28,32 @@ test('createTaskWorktree creates an isolated branch outside the repo', async () 
     assert.match(result.branch, /^ai\/do-work-/);
     assert.equal(await readFile(join(result.worktreePath, 'README.md'), 'utf8'), 'base\n');
     await removeTaskWorktree({ repoPath: repo, worktreePath: result.worktreePath, force: true });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkpoint evidence is generated from Git rather than agent claims', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-evidence-'));
+  const repo = join(dir, 'repo');
+  const worktrees = join(dir, 'worktrees');
+  try {
+    await exec('git', ['init', '-b', 'main', repo]);
+    await exec('git', ['-C', repo, 'config', 'user.name', 'AI Dashboard Test']);
+    await exec('git', ['-C', repo, 'config', 'user.email', 'test@example.invalid']);
+    await writeFile(join(repo, 'README.md'), 'base\n');
+    await exec('git', ['-C', repo, 'add', 'README.md']);
+    await exec('git', ['-C', repo, 'commit', '-m', 'base']);
+    const { commitWorktree } = await import('../server/git/worktrees.mjs');
+    const result = await createTaskWorktree({ repoPath: repo, taskId: 'task-evidence-1', title: 'Evidence', worktreeRoot: worktrees });
+    await writeFile(join(result.worktreePath, 'feature.txt'), 'one\ntwo\n');
+    const commit = await commitWorktree({ worktreePath: result.worktreePath, message: 'ai: evidence' });
+    const evidence = await checkpointEvidence({ worktreePath: result.worktreePath, head: commit.head });
+    assert.equal(evidence.changed, true);
+    assert.equal(evidence.fileCount, 1);
+    assert.equal(evidence.files[0].path, 'feature.txt');
+    assert.equal(evidence.additions, 2);
+    assert.equal(evidence.deletions, 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
