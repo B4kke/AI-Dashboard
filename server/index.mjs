@@ -4,6 +4,7 @@ import { EventHub } from './core/events.mjs';
 import { StateStore } from './core/state-store.mjs';
 import { SqliteControlStore } from './core/sqlite-control.mjs';
 import { AutonomyEngine } from './core/autonomy-engine.mjs';
+import { decorateControlPlane } from './core/control-guards.mjs';
 import { OpenCodeClient } from './integrations/opencode.mjs';
 import { GitHubClient } from './integrations/github.mjs';
 import { createResearchService } from './research/service.mjs';
@@ -32,7 +33,8 @@ const github = new GitHubClient();
 await store.load();
 const research = createResearchService({ store, opencode });
 await research.initialize();
-const orchestrator = createOrchestrator({ store, opencode, github, locks: sqlite });
+const baseOrchestrator = createOrchestrator({ store, opencode, github, locks: sqlite });
+const orchestrator = decorateControlPlane({ orchestrator: baseOrchestrator, store, locks: sqlite });
 const recovery = await orchestrator.recover();
 if (recovery.length) console.log(`AI Dashboard recovered ${recovery.length} state transition(s)`);
 
