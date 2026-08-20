@@ -21,6 +21,12 @@ function secondsSince(iso) {
   return (Date.now() - new Date(iso).getTime()) / 1000;
 }
 
+function publicationIdentityMatches(project, worker, evidence) {
+  return evidence?.headSha === worker?.checkpointHead
+    && evidence?.headBranch === worker?.branch
+    && evidence?.baseBranch === (project?.baseBranch || 'main');
+}
+
 export function decorateControlPlane({ orchestrator, store, locks, github = null, opencode = null }) {
   async function startWorker(taskId) {
     const { task, project } = projectForTask(store, taskId);
@@ -119,6 +125,66 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
     return value;
   }
 
+  async function recoverPublishedPullRequest(task, project) {
+    if (!github || !project?.repository) return null;
+    const worker = orchestrator.latestWorker?.(task.id) || null;
+    if (!worker?.checkpointHead || !worker?.branch) return null;
+
+    const pull = await github.findOpenPullRequest({
+      repository: project.repository,
+      headBranch: worker.branch,
+      baseBranch: project.baseBranch || 'main',
+    });
+    if (!pull?.number) return null;
+
+    const evidence = await github.pullRequestEvidence({ repository: project.repository, number: pull.number });
+    if (!publicationIdentityMatches(project, worker, evidence)) {
+      const message = 'Found an existing GitHub PR after publish uncertainty, but its head/base identity does not match the verified worker checkpoint.';
+      await store.updateTask(task.id, {
+        state: 'needs_input',
+        supervisorFeedback: message,
+        publication: { ...(task.publication || {}), provider: 'github', repository: project.repository, prNumber: pull.number, prUrl: evidence.url || pull.html_url || null, ...evidence, lastError: message, lastCheckedAt: new Date().toISOString() },
+      });
+      return null;
+    }
+
+    const now = new Date().toISOString();
+    const lastError = evidence.ci?.state === 'error' ? (evidence.ci.errors || []).join('; ') : null;
+    const publication = {
+      ...(task.publication || {}),
+      provider: 'github', repository: project.repository, prNumber: pull.number, prUrl: evidence.url || pull.html_url || null,
+      headSha: worker.checkpointHead, headBranch: worker.branch, baseBranch: project.baseBranch || 'main',
+      state: evidence.state || 'open', ci: evidence.ci, publishedAt: task.publication?.publishedAt || now,
+      lastCheckedAt: now, lastError,
+    };
+    await store.updateTask(task.id, {
+      state: 'awaiting_ci',
+      publication,
+      supervisorFeedback: lastError || 'Recovered an existing GitHub PR after a lost/failed publish acknowledgement.',
+    });
+    return publication;
+  }
+
+  async function publishTask(taskId) {
+    const { task, project } = projectForTask(store, taskId);
+    try {
+      return await orchestrator.publishTask(taskId);
+    } catch (error) {
+      try {
+        const recovered = await recoverPublishedPullRequest(store.getTask(taskId) || task, project);
+        if (recovered) return recovered;
+      } catch (recoveryError) {
+        const current = store.getTask(taskId);
+        if (current) {
+          await store.updateTask(taskId, {
+            supervisorFeedback: `${current.supervisorFeedback || `GitHub publish failed: ${error.message}`} Recovery lookup also failed: ${recoveryError.message}`,
+          }).catch(() => {});
+        }
+      }
+      throw error;
+    }
+  }
+
   async function reconcilePublishedTask(taskId) {
     const { task } = projectForTask(store, taskId);
     const nextCheckAt = task.publication?.nextCheckAt ? Date.parse(task.publication.nextCheckAt) : 0;
@@ -177,6 +243,7 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
   async function recover() {
     const uncertainBefore = store.snapshot().runs.filter((run) => run.status === 'dispatch_unknown' || run.dispatchUncertain === true);
     const actions = await orchestrator.recover();
+
     for (const run of uncertainBefore) {
       const current = store.getRun(run.id);
       if (!current?.sessionId || !current?.taskId || ['completed', 'merged', 'aborted'].includes(current.status)) continue;
@@ -187,6 +254,23 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
       });
       actions.push({ type: 'run.dispatch_recovered', runId: current.id, taskId: current.taskId });
     }
+
+    const publishCandidates = store.snapshot().tasks.filter((task) => (
+      task.state === 'needs_input'
+      && task.publication?.provider === 'github'
+      && !task.publication?.prNumber
+    ));
+    for (const task of publishCandidates) {
+      const project = store.getProject(task.projectId);
+      if (!project?.repository) continue;
+      try {
+        const recovered = await recoverPublishedPullRequest(task, project);
+        if (recovered) actions.push({ type: 'task.publish_recovered', taskId: task.id, prNumber: recovered.prNumber });
+      } catch {
+        // Remain fail-closed in needs_input. A later restart/manual publish can retry the read-repair.
+      }
+    }
+
     return actions;
   }
 
@@ -212,5 +296,5 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
     return { projects, abandonedCount: projects.reduce((sum, project) => sum + project.worktrees.filter((worktree) => worktree.abandoned).length, 0) };
   }
 
-  return { ...orchestrator, startWorker, reconcileRun, reconcilePublishedTask, mergeApprovedTask, recover, workspaceInventory };
+  return { ...orchestrator, startWorker, reconcileRun, publishTask, reconcilePublishedTask, mergeApprovedTask, recover, workspaceInventory };
 }
