@@ -9,17 +9,8 @@ const DEFAULT_AUTONOMY = Object.freeze({
   ciDiscoverySeconds: 30, requireCi: true, mergeMethod: 'squash', deleteRemoteBranch: true,
 });
 
-const DEFAULT_MODEL_POLICY = Object.freeze({
-  codingModel: null,
-  planningModel: null,
-  supervisorModel: null,
-  researchModel: null,
-});
-
-const EMPTY_STATE = Object.freeze({
-  schemaVersion: 5,
-  projects: [], ideas: [], tasks: [], agents: [], runs: [], researchRuns: [], modelProviders: [], integrations: {},
-});
+const DEFAULT_MODEL_POLICY = Object.freeze({ codingModel: null, planningModel: null, supervisorModel: null, researchModel: null });
+const EMPTY_STATE = Object.freeze({ schemaVersion: 5, projects: [], ideas: [], tasks: [], agents: [], runs: [], researchRuns: [], modelProviders: [], integrations: {} });
 
 function cloneEmpty() { return structuredClone(EMPTY_STATE); }
 function stringList(value) { return Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : []; }
@@ -47,35 +38,41 @@ function autonomy(input = {}) {
 }
 
 export class StateStore {
-  constructor(filePath, { onChange = () => {} } = {}) {
-    this.filePath = filePath; this.onChange = onChange; this.state = cloneEmpty(); this.writeChain = Promise.resolve();
+  constructor(filePath, { onChange = () => {}, persistence = null } = {}) {
+    this.filePath = filePath;
+    this.onChange = onChange;
+    this.persistence = persistence;
+    this.state = cloneEmpty();
+    this.writeChain = Promise.resolve();
+  }
+
+  persistenceInfo() {
+    return this.persistence?.info?.() || { type: 'json', durable: false, path: this.filePath };
   }
 
   async load() {
     try {
-      const parsed = JSON.parse(await readFile(this.filePath, 'utf8'));
-      this.state = { ...cloneEmpty(), ...parsed, schemaVersion: 5 };
+      let parsed;
+      if (this.persistence) parsed = await this.persistence.load();
+      else parsed = JSON.parse(await readFile(this.filePath, 'utf8'));
+      if (parsed) this.state = { ...cloneEmpty(), ...parsed, schemaVersion: 5 };
+      else this.state = cloneEmpty();
       this.state.projects = this.state.projects.map((project) => ({
-        ...project,
-        autonomy: autonomy(project.autonomy),
-        modelPolicy: modelPolicy(project.modelPolicy),
-        verificationCommands: stringList(project.verificationCommands),
+        ...project, autonomy: autonomy(project.autonomy), modelPolicy: modelPolicy(project.modelPolicy), verificationCommands: stringList(project.verificationCommands),
       }));
       if (!Array.isArray(this.state.ideas)) this.state.ideas = [];
       if (!Array.isArray(this.state.researchRuns)) this.state.researchRuns = [];
       if (!Array.isArray(this.state.modelProviders)) this.state.modelProviders = [];
       this.state.tasks = this.state.tasks.map((task) => ({
-        publication: null,
-        model: null,
-        verificationCommands: stringList(task.verificationCommands),
-        allowNoChange: task.allowNoChange === true,
-        ...task,
+        publication: null, model: null, verificationCommands: stringList(task.verificationCommands), allowNoChange: task.allowNoChange === true, ...task,
       }));
       this.state.runs = this.state.runs.map((run) => ({ model: null, evidence: null, ...run }));
       await this.#persist();
     } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      await this.#persist();
+      if (!this.persistence && error.code === 'ENOENT') {
+        this.state = cloneEmpty();
+        await this.#persist();
+      } else throw error;
     }
     return this.snapshot();
   }
@@ -88,8 +85,8 @@ export class StateStore {
     const project = {
       id: randomUUID(), name: input.name.trim(), repoPath: input.repoPath?.trim() || null,
       repository: input.repository?.trim() || null, baseBranch: input.baseBranch?.trim() || 'main', status: 'active',
-      autonomy: autonomy(input.autonomy), modelPolicy: modelPolicy(input.modelPolicy),
-      verificationCommands: stringList(input.verificationCommands), createdAt: now, updatedAt: now,
+      autonomy: autonomy(input.autonomy), modelPolicy: modelPolicy(input.modelPolicy), verificationCommands: stringList(input.verificationCommands),
+      createdAt: now, updatedAt: now,
     };
     this.state.projects.push(project); await this.#changed('project.created', project); return structuredClone(project);
   }
@@ -110,8 +107,8 @@ export class StateStore {
     if (!input?.title?.trim()) throw new Error('Idea title is required');
     const now = new Date().toISOString();
     const idea = {
-      id: randomUUID(), projectId: project.id, title: input.title.trim(), description: input.description?.trim() || '',
-      state: input.state || 'inbox', summary: null, questions: [], risks: [], planningTaskId: null, generatedTaskIds: [], createdAt: now, updatedAt: now,
+      id: randomUUID(), projectId: project.id, title: input.title.trim(), description: input.description?.trim() || '', state: input.state || 'inbox',
+      summary: null, questions: [], risks: [], planningTaskId: null, generatedTaskIds: [], createdAt: now, updatedAt: now,
     };
     this.state.ideas.push(idea); await this.#changed('idea.created', idea); return structuredClone(idea);
   }
@@ -133,9 +130,8 @@ export class StateStore {
       kind: ['planning', 'work', 'review'].includes(input.kind) ? input.kind : 'work', title: input.title.trim(), description: input.description?.trim() || '',
       priority: ['P0', 'P1', 'P2', 'P3'].includes(input.priority) ? input.priority : 'P2', state: input.state || 'backlog',
       runner: input.runner || 'opencode', model: input.model?.trim?.() || project.modelPolicy?.codingModel || null,
-      agentRole: input.agentRole?.trim() || null, blockedBy: stringList(input.blockedBy),
-      acceptanceCriteria: stringList(input.acceptanceCriteria), verificationCommands: taskCommands,
-      allowNoChange: input.allowNoChange === true,
+      agentRole: input.agentRole?.trim() || null, blockedBy: stringList(input.blockedBy), acceptanceCriteria: stringList(input.acceptanceCriteria),
+      verificationCommands: taskCommands, allowNoChange: input.allowNoChange === true,
       iteration: Number(input.iteration || 0), supervisorFeedback: null, publication: null, createdAt: now, updatedAt: now,
     };
     this.state.tasks.push(task); await this.#changed('task.created', task); return structuredClone(task);
@@ -196,10 +192,9 @@ export class StateStore {
     if (!input?.prompt?.trim()) throw new Error('Research prompt is required');
     const now = new Date().toISOString();
     const run = {
-      id: randomUUID(), projectId: project.id, kind: 'research', harness: 'direct-model',
-      model: input.model?.trim?.() || project.modelPolicy?.researchModel || null,
-      prompt: input.prompt.trim(), status: 'queued', report: null, reasoning: null, usage: null,
-      contextFiles: [], contextStats: null, error: null, createdAt: now, updatedAt: now, startedAt: null, finishedAt: null,
+      id: randomUUID(), projectId: project.id, kind: 'research', harness: 'direct-model', model: input.model?.trim?.() || project.modelPolicy?.researchModel || null,
+      prompt: input.prompt.trim(), status: 'queued', report: null, reasoning: null, usage: null, contextFiles: [], contextStats: null,
+      error: null, createdAt: now, updatedAt: now, startedAt: null, finishedAt: null,
     };
     this.state.researchRuns.push(run); await this.#changed('research.created', run); return structuredClone(run);
   }
@@ -219,6 +214,10 @@ export class StateStore {
   async #changed(type, payload) { await this.#persist(); this.onChange(type, structuredClone(payload)); }
   async #persist() {
     this.writeChain = this.writeChain.then(async () => {
+      if (this.persistence) {
+        await this.persistence.save(this.state);
+        return;
+      }
       await mkdir(dirname(this.filePath), { recursive: true });
       const temp = `${this.filePath}.tmp`;
       await writeFile(temp, `${JSON.stringify(this.state, null, 2)}\n`, 'utf8');
