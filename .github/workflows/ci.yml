@@ -25,8 +25,7 @@ jobs:
 
       - name: Syntax checks
         run: |
-          node --check server/index.mjs
-          node --check server/core/autonomy-engine.mjs
+          find server test -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
           node --check public/app.js
 
       - name: Tests
