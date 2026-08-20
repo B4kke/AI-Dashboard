@@ -39,7 +39,37 @@ test('workspace inventory marks unowned ai worktree as abandoned', async () => {
     const inventory = await guarded.workspaceInventory();
     assert.equal(inventory.abandonedCount, 1);
     const found = inventory.projects.find((item) => item.projectId === project.id).worktrees.find((item) => item.path === worktree.worktreePath);
-    assert.equal(found.abandoned, true);
-    assert.equal(found.ownerRunId, null);
+    assert.equal(found.abandoned, true); assert.equal(found.ownerRunId, null);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('merge replay recognizes a PR already merged before local state persisted', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-remote-recovery-'));
+  const remote = join(dir, 'remote.git'); const seed = join(dir, 'seed'); const repo = join(dir, 'repo');
+  try {
+    await exec('git', ['init', '--bare', remote]);
+    await exec('git', ['init', '-b', 'main', seed]);
+    await exec('git', ['-C', seed, 'config', 'user.name', 'AI Dashboard Test']); await exec('git', ['-C', seed, 'config', 'user.email', 'test@example.invalid']);
+    await writeFile(join(seed, 'README.md'), 'base\n'); await exec('git', ['-C', seed, 'add', '.']); await exec('git', ['-C', seed, 'commit', '-m', 'base']);
+    await exec('git', ['-C', seed, 'remote', 'add', 'origin', remote]); await exec('git', ['-C', seed, 'push', '-u', 'origin', 'main']);
+    await exec('git', ['clone', '--branch', 'main', remote, repo]);
+
+    const store = new StateStore(join(dir, 'state.json')); await store.load();
+    const project = await store.addProject({ name: 'Remote recovery', repoPath: repo, repository: 'owner/repo', baseBranch: 'main' });
+    const task = await store.addTask({ projectId: project.id, title: 'Already merged', state: 'ready_to_merge', acceptanceCriteria: ['merged'], verificationCommands: ['node --version'] });
+    await store.updateTask(task.id, { publication: { provider: 'github', repository: 'owner/repo', prNumber: 9, state: 'open' } });
+
+    let innerMergeCalled = false;
+    const guarded = decorateControlPlane({
+      orchestrator: { mergeApprovedTask: async () => { innerMergeCalled = true; throw new Error('must not run'); }, latestWorker: () => null },
+      store,
+      locks,
+      github: { pullRequestEvidence: async () => ({ number: 9, merged: true, state: 'closed', headSha: 'abc', headBranch: 'ai/task', baseBranch: 'main', ci: { state: 'success', complete: true } }) },
+    });
+    const result = await guarded.mergeApprovedTask(task.id);
+    assert.equal(innerMergeCalled, false);
+    assert.equal(result.recoveredExternalMerge, true);
+    assert.equal(store.getTask(task.id).state, 'done');
+    assert.equal(store.getProject(project.id).status, 'active');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
