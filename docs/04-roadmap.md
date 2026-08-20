@@ -29,13 +29,13 @@ Implemented:
 - local fast-forward merge and cleanup
 - manual controls in UI
 
-Still needed before M1 is considered closed:
+Still needed before M1 is closed:
 
 - fuller run/evidence viewer in UI
 - recovery for process restart during active run
 - explicit abandoned-worktree inventory/cleanup command
 - end-to-end integration test against a real OpenCode server
-- structured log/usage capture
+- structured coding-run usage/cost capture
 
 ## M2 — GitHub feedback loop — ACTIVE
 
@@ -68,14 +68,40 @@ Still needed before M2 is closed:
 - base-branch synchronization/rebase strategy when the target moves
 - explicit GitHub rate-limit/backoff handling
 
-## M3 — Agent platform
+## M3 — Agent & model platform — ACTIVE
+
+Implemented first slice:
+
+- `Harness != Provider != Model` domain separation
+- selected model persisted on each coding Run
+- project model policy with separate coding/planning/supervisor/research defaults
+- per-Task coding model override
+- correct OpenCode `{ providerID, modelID }` request shape
+- OpenCode provider/model catalog discovery
+- generic OpenAI-compatible direct provider adapter
+- built-in LM Studio provider profile
+- built-in NVIDIA API Catalog/NIM provider profile
+- custom OpenAI-compatible provider registration
+- provider `/models` discovery and cached model metadata
+- provider credentials referenced by environment-variable name rather than stored secret value
+- direct read-only Research Run domain/history
+- bounded repository context collection for research
+- research report + provider/model + token usage + context-file evidence persistence
+- Research UI and provider/model controls
+
+Still needed:
 
 - reusable agent definitions and role registry
-- runner abstraction beyond OpenCode
+- runner abstraction implementation beyond OpenCode
 - ACP adapter
-- Codex / Claude Code / local runner adapters
-- model/provider policy
-- usage and cost ledger
+- Codex / Claude Code / local harness adapters
+- harness capability matrix (model override, tools, resume, permissions, etc.)
+- model capability metadata (tool use, context length, reasoning, vision)
+- usage and cost ledger across coding + research
+- provider health/backoff/rate-limit state
+- streamed direct-model responses
+- research web/MCP/tool integrations
+- multi-step research agent mode with explicit tool/evidence policy
 - richer evidence gates
 - supervisor policies per project/task class
 - sub-agent hierarchy / super-agent fleet views
