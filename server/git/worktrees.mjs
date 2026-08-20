@@ -19,16 +19,17 @@ async function git(cwd, args, { timeoutMs = 60_000 } = {}) {
   return stdout.trim();
 }
 
+function safeRef(value, label = 'Git ref') {
+  const ref = String(value || '').trim();
+  if (!ref || ref.startsWith('-') || /[\u0000-\u0020\u007f~^:?*\\[\\]]/.test(ref) || ref.includes('..') || ref.includes('@{')) {
+    throw new Error(`${label} is invalid`);
+  }
+  return ref;
+}
+
 export function slugifyTask(value) {
-  const slug = String(value || 'task')
-    .toLowerCase()
-    .replaceAll('æ', 'ae')
-    .replaceAll('ø', 'o')
-    .replaceAll('å', 'a')
-    .normalize('NFKD')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 42);
+  const slug = String(value || 'task').toLowerCase().replaceAll('æ', 'ae').replaceAll('ø', 'o').replaceAll('å', 'a')
+    .normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 42);
   return slug || 'task';
 }
 
@@ -54,19 +55,33 @@ export async function createTaskWorktree({ repoPath, taskId, title, baseRef = 'H
   const branch = `ai/${slug}-${shortId}`;
   const worktreePath = join(worktreeRoot, repoKey, `${slug}-${shortId}`);
   await mkdir(join(worktreeRoot, repoKey), { recursive: true });
+  const safeBase = baseRef === 'HEAD' ? 'HEAD' : safeRef(baseRef, 'Base ref');
 
   let branchExists = true;
-  try {
-    await git(repository.root, ['rev-parse', '--verify', `refs/heads/${branch}`]);
-  } catch {
-    branchExists = false;
-  }
+  try { await git(repository.root, ['rev-parse', '--verify', `refs/heads/${branch}`]); }
+  catch { branchExists = false; }
 
-  const args = branchExists
-    ? ['worktree', 'add', worktreePath, branch]
-    : ['worktree', 'add', '-b', branch, worktreePath, baseRef];
+  const args = branchExists ? ['worktree', 'add', worktreePath, branch] : ['worktree', 'add', '-b', branch, worktreePath, safeBase];
   await git(repository.root, args);
-  return { branch, worktreePath, baseRef, repositoryRoot: repository.root };
+  return { branch, worktreePath, baseRef: safeBase, repositoryRoot: repository.root };
+}
+
+export async function listRepositoryWorktrees(repoPath) {
+  const repository = await inspectRepository(repoPath);
+  const output = await git(repository.root, ['worktree', 'list', '--porcelain']);
+  if (!output) return [];
+  return output.split(/\n\n+/).map((block) => {
+    const item = { path: null, head: null, branch: null, bare: false, detached: false, prunable: false };
+    for (const line of block.split('\n')) {
+      if (line.startsWith('worktree ')) item.path = line.slice(9);
+      else if (line.startsWith('HEAD ')) item.head = line.slice(5);
+      else if (line.startsWith('branch ')) item.branch = line.slice(7).replace(/^refs\/heads\//, '');
+      else if (line === 'bare') item.bare = true;
+      else if (line === 'detached') item.detached = true;
+      else if (line.startsWith('prunable')) item.prunable = true;
+    }
+    return item;
+  }).filter((item) => item.path);
 }
 
 export async function removeTaskWorktree({ repoPath, worktreePath, force = false }) {
@@ -78,9 +93,7 @@ export async function removeTaskWorktree({ repoPath, worktreePath, force = false
   await git(repository.root, ['worktree', 'prune']);
 }
 
-export async function worktreeStatus(worktreePath) {
-  return git(worktreePath, ['status', '--porcelain=v1']);
-}
+export async function worktreeStatus(worktreePath) { return git(worktreePath, ['status', '--porcelain=v1']); }
 
 export async function commitWorktree({ worktreePath, message }) {
   const status = await worktreeStatus(worktreePath);
@@ -96,29 +109,10 @@ export async function checkpointEvidence({ worktreePath, head }) {
   const nameStatus = await git(worktreePath, ['diff', '--name-status', parent, resolvedHead, '--']);
   const stat = await git(worktreePath, ['diff', '--stat', parent, resolvedHead, '--']);
   const numstat = await git(worktreePath, ['diff', '--numstat', parent, resolvedHead, '--']);
-  const files = nameStatus ? nameStatus.split('\n').map((line) => {
-    const [status, ...rest] = line.split('\t');
-    return { status, path: rest.join('\t') };
-  }) : [];
-  let additions = 0;
-  let deletions = 0;
-  if (numstat) {
-    for (const line of numstat.split('\n')) {
-      const [added, deleted] = line.split('\t');
-      if (/^\d+$/.test(added)) additions += Number(added);
-      if (/^\d+$/.test(deleted)) deletions += Number(deleted);
-    }
-  }
-  return {
-    head: resolvedHead,
-    parent,
-    changed: files.length > 0,
-    files,
-    fileCount: files.length,
-    additions,
-    deletions,
-    stat,
-  };
+  const files = nameStatus ? nameStatus.split('\n').map((line) => { const [status, ...rest] = line.split('\t'); return { status, path: rest.join('\t') }; }) : [];
+  let additions = 0; let deletions = 0;
+  if (numstat) for (const line of numstat.split('\n')) { const [added, deleted] = line.split('\t'); if (/^\d+$/.test(added)) additions += Number(added); if (/^\d+$/.test(deleted)) deletions += Number(deleted); }
+  return { head: resolvedHead, parent, changed: files.length > 0, files, fileCount: files.length, additions, deletions, stat };
 }
 
 export async function gitRemoteUrl({ worktreePath, remote = 'origin' }) {
@@ -127,25 +121,39 @@ export async function gitRemoteUrl({ worktreePath, remote = 'origin' }) {
 }
 
 export async function pushTaskBranch({ worktreePath, branch, remote = 'origin', timeoutMs = 120_000 }) {
-  if (!branch || branch.startsWith('-') || /[\u0000-\u001f\u007f]/.test(branch)) throw new Error('Invalid task branch');
+  safeRef(branch, 'Task branch');
   if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw new Error('Invalid Git remote name');
   await git(worktreePath, ['push', '--set-upstream', remote, branch], { timeoutMs });
   return { branch, remote, head: await git(worktreePath, ['rev-parse', 'HEAD']) };
 }
 
+export async function syncBaseBranch({ repoPath, baseBranch = 'main', remote = 'origin', timeoutMs = 120_000 }) {
+  const base = safeRef(baseBranch, 'Base branch');
+  if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw new Error('Invalid Git remote name');
+  const repository = await inspectRepository(repoPath);
+  const status = await git(repository.root, ['status', '--porcelain=v1']);
+  if (status) throw new Error('Base repository has uncommitted changes; refusing remote sync');
+  const current = await git(repository.root, ['branch', '--show-current']);
+  if (current !== base) throw new Error(`Base repository must be on ${base}; currently on ${current || 'detached HEAD'}`);
+  await git(repository.root, ['fetch', '--no-tags', remote, base], { timeoutMs });
+  await git(repository.root, ['merge', '--ff-only', `${remote}/${base}`]);
+  return { branch: base, head: await git(repository.root, ['rev-parse', 'HEAD']), remote };
+}
+
 export async function mergeTaskBranch({ repoPath, branch, baseBranch = 'main' }) {
+  const taskBranch = safeRef(branch, 'Task branch');
+  const base = safeRef(baseBranch, 'Base branch');
   const repository = await inspectRepository(repoPath);
   const status = await git(repository.root, ['status', '--porcelain=v1']);
   if (status) throw new Error('Base repository has uncommitted changes; refusing autonomous merge');
   const current = await git(repository.root, ['branch', '--show-current']);
-  if (current !== baseBranch) {
-    throw new Error(`Base repository must be on ${baseBranch}; currently on ${current || 'detached HEAD'}`);
-  }
-  await git(repository.root, ['merge', '--ff-only', branch]);
-  return { head: await git(repository.root, ['rev-parse', 'HEAD']), branch: baseBranch };
+  if (current !== base) throw new Error(`Base repository must be on ${base}; currently on ${current || 'detached HEAD'}`);
+  await git(repository.root, ['merge', '--ff-only', taskBranch]);
+  return { head: await git(repository.root, ['rev-parse', 'HEAD']), branch: base };
 }
 
 export async function deleteTaskBranch({ repoPath, branch, force = false }) {
+  const taskBranch = safeRef(branch, 'Task branch');
   const repository = await inspectRepository(repoPath);
-  await git(repository.root, ['branch', force ? '-D' : '-d', branch]);
+  await git(repository.root, ['branch', force ? '-D' : '-d', taskBranch]);
 }
