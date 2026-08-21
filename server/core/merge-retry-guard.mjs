@@ -27,6 +27,13 @@ function mergePolicy(project) {
   return { maxAttempts, baseSeconds };
 }
 
+function retryDelaySeconds(error, policy, attempts) {
+  const exponential = policy.baseSeconds * (2 ** Math.max(0, attempts - 1));
+  const serverHint = Number(error?.retryAfterSeconds);
+  const hinted = Number.isFinite(serverHint) && serverHint >= 0 ? serverHint : 0;
+  return Math.min(3600, Math.max(exponential, hinted));
+}
+
 export function decorateMergeRetry({ orchestrator, store }) {
   async function mergeApprovedTask(taskId) {
     const task = store.getTask(taskId);
@@ -99,7 +106,7 @@ export function decorateMergeRetry({ orchestrator, store }) {
         throw error;
       }
 
-      const delaySeconds = Math.min(900, policy.baseSeconds * (2 ** Math.max(0, attempts - 1)));
+      const delaySeconds = retryDelaySeconds(error, policy, attempts);
       const nextAttemptAt = new Date(Date.now() + delaySeconds * 1000).toISOString();
       await store.updateTask(taskId, {
         state: 'ready_to_merge',
@@ -119,4 +126,4 @@ export function decorateMergeRetry({ orchestrator, store }) {
   return { ...orchestrator, mergeApprovedTask };
 }
 
-export { httpStatus, isTransientMergeError, mergePolicy };
+export { httpStatus, isTransientMergeError, mergePolicy, retryDelaySeconds };
