@@ -2,7 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { OpenCodeClient } from '../server/integrations/opencode.mjs';
+import { OpenCodeClient, normalizeOpenCodeUrl } from '../server/integrations/opencode.mjs';
+
+test('OpenCode endpoint URLs reject embedded credentials, query parameters and fragments', () => {
+  assert.equal(normalizeOpenCodeUrl('http://127.0.0.1:4096/'), 'http://127.0.0.1:4096');
+  assert.throws(() => normalizeOpenCodeUrl('http://user:secret@127.0.0.1:4096'), /must not contain credentials/);
+  assert.throws(() => normalizeOpenCodeUrl('http://127.0.0.1:4096?token=secret'), /must not contain credentials/);
+  assert.throws(() => normalizeOpenCodeUrl('file:///tmp/opencode.sock'), /must use http or https/);
+});
 
 test('OpenCode client creates scoped session and sends provider/model object', async () => {
   const seen = [];
@@ -23,6 +30,22 @@ test('OpenCode client creates scoped session and sends provider/model object', a
     assert.equal(seen[0].directory, '/tmp/worktree');
     assert.equal(seen[1].body.parts[0].text, 'Do the task');
     assert.deepEqual(seen[1].body.model, { providerID: 'lmstudio', modelID: 'qwen/qwen3-coder' });
+  } finally { server.close(); await once(server, 'close'); }
+});
+
+test('OpenCode HTTP failures do not surface arbitrary runner response bodies', async () => {
+  const server = createServer((req, res) => {
+    res.statusCode = 500;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ error: 'echoed-prompt-or-secret-that-must-not-leak' }));
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  try {
+    const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+    await assert.rejects(
+      () => client.health(),
+      (error) => /HTTP 500/.test(error.message) && !error.message.includes('echoed-prompt-or-secret-that-must-not-leak'),
+    );
   } finally { server.close(); await once(server, 'close'); }
 });
 
