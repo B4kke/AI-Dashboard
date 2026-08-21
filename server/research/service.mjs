@@ -1,5 +1,5 @@
 import { builtinProviderDefinitions, formatModelRef, normalizeModelRef, normalizeProviderDefinition, OpenAICompatibleProvider } from '../integrations/model-provider.mjs';
-import { buildResearchMessages, collectProjectContext } from './context.mjs';
+import { buildExplorationMessages, buildResearchMessages, collectProjectContext } from './context.mjs';
 
 function providerView(provider) {
   return {
@@ -59,6 +59,54 @@ export function createResearchService({ store, opencode }) {
     }
   }
 
+  async function executeExplorationRun(runId) {
+    let run = store.getExplorationRun(runId);
+    if (!run) return;
+    const exploration = store.getExploration(run.explorationId);
+    try {
+      if (!exploration) throw new Error('Exploration not found');
+      const model = normalizeModelRef(run.model);
+      if (!model) throw new Error('Exploration model is required');
+      const providerClient = client(model.providerID);
+      run = await store.updateExplorationRun(run.id, { status: 'running', startedAt: new Date().toISOString(), error: null });
+      const response = await providerClient.chat({
+        model: model.modelID,
+        messages: buildExplorationMessages({ exploration, kind: run.kind }),
+        temperature: run.kind === 'research' ? 0.15 : 0.25,
+        maxTokens: 6144,
+      });
+      await store.updateExplorationRun(run.id, {
+        status: 'completed',
+        report: response.text,
+        reasoning: response.reasoning,
+        usage: response.usage,
+        resolvedModel: `${model.providerID}/${response.rawModel || model.modelID}`,
+        finishedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      await store.updateExplorationRun(run.id, { status: 'failed', error: error.message, finishedAt: new Date().toISOString() }).catch(() => {});
+    }
+  }
+
+  async function startExplorationRun(input) {
+    const exploration = store.getExploration(input?.explorationId);
+    if (!exploration) throw new Error('Valid explorationId is required');
+    if (exploration.promotedProjectId) throw new Error('Exploration is already promoted; use project research for further analysis');
+    const model = input?.model?.trim?.() || exploration.model;
+    if (!model) throw new Error('Choose an exploration model in provider/model format');
+    formatModelRef(model);
+    if (model !== exploration.model) await store.updateExploration(exploration.id, { model });
+    const run = await store.createExplorationRun({ explorationId: exploration.id, kind: input.kind, model, prompt: exploration.notes || exploration.title });
+    queueMicrotask(() => executeExplorationRun(run.id));
+    return run;
+  }
+
+  async function retryExplorationRun(id) {
+    const previous = store.getExplorationRun(id);
+    if (!previous) throw new Error('Exploration run not found');
+    return startExplorationRun({ explorationId: previous.explorationId, kind: previous.kind, model: previous.model });
+  }
+
   async function executeResearch(runId) {
     let run = store.getResearchRun(runId);
     if (!run) return;
@@ -113,5 +161,15 @@ export function createResearchService({ store, opencode }) {
     return opencode.availableModels(directory);
   }
 
-  return { initialize, listProviders, upsertProvider, discoverProvider, startResearch, retryResearch, openCodeModels };
+  return {
+    initialize,
+    listProviders,
+    upsertProvider,
+    discoverProvider,
+    startExplorationRun,
+    retryExplorationRun,
+    startResearch,
+    retryResearch,
+    openCodeModels,
+  };
 }
