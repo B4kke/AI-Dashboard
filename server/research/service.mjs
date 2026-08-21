@@ -9,7 +9,22 @@ function providerView(provider) {
 }
 
 export function createResearchService({ store, opencode }) {
+  async function recoverInterruptedDirectModelRuns() {
+    const snapshot = store.snapshot();
+    const now = new Date().toISOString();
+    const message = 'Direct-model request was interrupted by a control-plane restart. The prior provider outcome is unknown; automatic replay is blocked to avoid duplicate model calls/cost. Retry explicitly.';
+    for (const run of snapshot.explorationRuns || []) {
+      if (!['queued', 'running'].includes(run.status)) continue;
+      await store.updateExplorationRun(run.id, { status: 'failed', error: message, finishedAt: now });
+    }
+    for (const run of snapshot.researchRuns || []) {
+      if (!['queued', 'running'].includes(run.status)) continue;
+      await store.updateResearchRun(run.id, { status: 'failed', error: message, finishedAt: now });
+    }
+  }
+
   async function initialize() {
+    await recoverInterruptedDirectModelRuns();
     for (const definition of builtinProviderDefinitions()) {
       if (!store.getModelProvider(definition.id)) {
         await store.upsertModelProvider({ ...definition, lastModels: [], lastError: null, lastDiscoveryAt: null, source: 'builtin' });
