@@ -6,26 +6,27 @@ import { tmpdir } from 'node:os';
 import { StateStore } from '../server/core/state-store.mjs';
 import { decorateGitHubIntegrity } from '../server/core/github-integrity-guard.mjs';
 
-async function fixture(headSha) {
+async function fixture(headSha, { baseSha = 'base-1', merged = true } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-integrity-'));
   const store = new StateStore(join(dir, 'state.json'));
   await store.load();
   const project = await store.addProject({ name: 'Integrity', repoPath: dir, repository: 'owner/repo', baseBranch: 'main' });
-  const task = await store.addTask({ projectId: project.id, title: 'Reviewed work', state: 'ready_to_merge' });
+  const task = await store.addTask({ projectId: project.id, title: 'Reviewed work', state: merged ? 'ready_to_merge' : 'awaiting_ci' });
   await store.updateTask(task.id, {
-    publication: { provider: 'github', repository: 'owner/repo', prNumber: 17, headSha: 'checkpoint-1', headBranch: 'ai/task', baseBranch: 'main' },
+    publication: { provider: 'github', repository: 'owner/repo', prNumber: 17, headSha: 'checkpoint-1', headBranch: 'ai/task', baseBranch: 'main', publishedBaseSha: 'base-1' },
   });
   let innerCalls = 0;
   const orchestrator = {
     latestWorker: () => ({ checkpointHead: 'checkpoint-1', branch: 'ai/task' }),
-    async reconcilePublishedTask() { innerCalls += 1; return { state: 'merged_external' }; },
+    async publishTask() { innerCalls += 1; return store.getTask(task.id).publication; },
+    async reconcilePublishedTask() { innerCalls += 1; return { state: merged ? 'merged_external' : 'pending' }; },
     async mergeApprovedTask() { innerCalls += 1; return { provider: 'github' }; },
   };
   const github = {
     async pullRequestEvidence() {
       return {
-        number: 17, state: 'closed', merged: true, draft: false,
-        headSha, headBranch: 'ai/task', baseBranch: 'main', mergeSha: 'merge-17',
+        number: 17, state: merged ? 'closed' : 'open', merged, draft: false,
+        headSha, headBranch: 'ai/task', baseSha, baseBranch: 'main', mergeSha: merged ? 'merge-17' : null,
         ci: { state: 'success', complete: true, checks: [], failed: [], pending: [], errors: [] },
       };
     },
@@ -43,12 +44,10 @@ test('externally merged PR with moved head blocks project instead of marking tas
     assert.equal(f.store.getTask(f.task.id).state, 'needs_input');
     assert.equal(f.store.getProject(f.project.id).status, 'blocked');
     assert.match(f.store.getTask(f.task.id).publication.integrityError, /does not match/);
-  } finally {
-    await rm(f.dir, { recursive: true, force: true });
-  }
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 
-test('externally merged PR with the reviewed checkpoint may continue normal recovery', async () => {
+test('externally merged PR with the reviewed checkpoint and same base may continue normal recovery', async () => {
   const f = await fixture('checkpoint-1');
   try {
     const guarded = decorateGitHubIntegrity({ orchestrator: f.orchestrator, store: f.store, github: f.github });
@@ -56,9 +55,42 @@ test('externally merged PR with the reviewed checkpoint may continue normal reco
     assert.equal(result.state, 'merged_external');
     assert.equal(f.innerCalls(), 1);
     assert.equal(f.store.getProject(f.project.id).status, 'active');
-  } finally {
-    await rm(f.dir, { recursive: true, force: true });
-  }
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});
+
+test('unmerged PR whose base moved after publication is blocked before review', async () => {
+  const f = await fixture('checkpoint-1', { baseSha: 'base-2', merged: false });
+  try {
+    const guarded = decorateGitHubIntegrity({ orchestrator: f.orchestrator, store: f.store, github: f.github });
+    const result = await guarded.reconcilePublishedTask(f.task.id);
+    assert.equal(result.state, 'integrity_blocked');
+    assert.equal(f.innerCalls(), 0);
+    assert.equal(f.store.getTask(f.task.id).state, 'needs_input');
+    assert.equal(f.store.getProject(f.project.id).status, 'active');
+    assert.match(f.store.getTask(f.task.id).supervisorFeedback, /base branch moved/i);
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});
+
+test('externally merged PR against a moved base blocks project autonomy', async () => {
+  const f = await fixture('checkpoint-1', { baseSha: 'base-2', merged: true });
+  try {
+    const guarded = decorateGitHubIntegrity({ orchestrator: f.orchestrator, store: f.store, github: f.github });
+    const result = await guarded.mergeApprovedTask(f.task.id);
+    assert.equal(result.state, 'integrity_blocked');
+    assert.equal(f.store.getProject(f.project.id).status, 'blocked');
+    assert.match(f.store.getTask(f.task.id).supervisorFeedback, /unreviewed base/i);
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});
+
+test('publication captures immutable base SHA baseline before autonomous CI/review', async () => {
+  const f = await fixture('checkpoint-1', { baseSha: 'base-1', merged: false });
+  try {
+    await f.store.updateTask(f.task.id, { publication: { provider: 'github', repository: 'owner/repo', prNumber: 17, headSha: 'checkpoint-1', headBranch: 'ai/task', baseBranch: 'main' } });
+    const guarded = decorateGitHubIntegrity({ orchestrator: f.orchestrator, store: f.store, github: f.github });
+    const publication = await guarded.publishTask(f.task.id);
+    assert.equal(publication.publishedBaseSha, 'base-1');
+    assert.equal(f.store.getTask(f.task.id).publication.publishedBaseSha, 'base-1');
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 
 test('active CI backoff reaches the inner guard without an extra GitHub evidence request', async () => {
@@ -74,15 +106,11 @@ test('active CI backoff reaches the inner guard without an extra GitHub evidence
     const guarded = decorateGitHubIntegrity({
       store,
       github: { async pullRequestEvidence() { githubCalls += 1; throw new Error('must not be called during backoff'); } },
-      orchestrator: {
-        async reconcilePublishedTask() { innerCalls += 1; return { state: 'backoff', nextCheckAt }; },
-      },
+      orchestrator: { async reconcilePublishedTask() { innerCalls += 1; return { state: 'backoff', nextCheckAt }; } },
     });
     const result = await guarded.reconcilePublishedTask(task.id);
     assert.equal(result.state, 'backoff');
     assert.equal(innerCalls, 1);
     assert.equal(githubCalls, 0);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
