@@ -1,6 +1,8 @@
 const DEFAULT_API = 'https://api.github.com';
 const CHECK_RUN_PAGE_SIZE = 100;
 const MAX_CHECK_RUN_PAGES = 10;
+const RULE_PAGE_SIZE = 100;
+const MAX_RULE_PAGES = 10;
 
 export function parseGitHubRepository(value) {
   const input = String(value || '').trim().replace(/\.git$/i, '');
@@ -34,6 +36,13 @@ function checkState(check) {
   return 'failure';
 }
 
+function legacyStatusState(status) {
+  const state = status?.state || null;
+  if (state === 'success') return 'success';
+  if (state === 'pending') return 'pending';
+  return 'failure';
+}
+
 export function aggregateGitHubChecks({ checkRuns = [], combinedStatus = null, errors = [] } = {}) {
   const checks = checkRuns.map((check) => ({
     id: check.id,
@@ -42,10 +51,27 @@ export function aggregateGitHubChecks({ checkRuns = [], combinedStatus = null, e
     conclusion: check.conclusion || null,
     state: checkState(check),
     url: check.html_url || check.details_url || null,
+    appId: Number.isInteger(check?.app?.id) ? check.app.id : null,
+    source: 'check-run',
   }));
+
+  const legacyStatuses = Array.isArray(combinedStatus?.statuses) ? combinedStatus.statuses : [];
+  for (const status of legacyStatuses) {
+    checks.push({
+      id: status.id ?? `status:${status.context || status.description || checks.length}`,
+      name: status.context || status.description || 'commit status',
+      status: status.state || null,
+      conclusion: status.state || null,
+      state: legacyStatusState(status),
+      url: status.target_url || null,
+      appId: null,
+      source: 'commit-status',
+    });
+  }
+
   const legacyState = combinedStatus?.state || null;
-  if (legacyState && legacyState !== 'success') {
-    checks.push({ id: 'combined-status', name: 'commit status', status: legacyState, conclusion: legacyState, state: legacyState === 'pending' ? 'pending' : 'failure', url: null });
+  if (!legacyStatuses.length && legacyState && legacyState !== 'success') {
+    checks.push({ id: 'combined-status', name: 'commit status', status: legacyState, conclusion: legacyState, state: legacyState === 'pending' ? 'pending' : 'failure', url: null, appId: null, source: 'combined-status' });
   }
 
   const normalizedErrors = errors.filter(Boolean).map((error) => String(error));
@@ -66,6 +92,66 @@ export function aggregateGitHubChecks({ checkRuns = [], combinedStatus = null, e
   };
 }
 
+function normalizeRequiredCheck(value, source) {
+  if (typeof value === 'string') return { context: value, integrationId: null, source };
+  const context = value?.context || null;
+  if (!context) return null;
+  const integrationId = Number.isInteger(value.integration_id) ? value.integration_id
+    : Number.isInteger(value.app_id) ? value.app_id : null;
+  return { context, integrationId, source };
+}
+
+export function normalizeBranchMergePolicy({ branch, rules = [], protection = null } = {}) {
+  const requiredChecks = [];
+  let strictRequiredChecks = false;
+  let mergeQueueRequired = false;
+  let requiredWorkflowCount = 0;
+
+  for (const rule of Array.isArray(rules) ? rules : []) {
+    if (rule?.type === 'required_status_checks') {
+      strictRequiredChecks ||= rule.parameters?.strict_required_status_checks_policy === true;
+      for (const item of rule.parameters?.required_status_checks || []) {
+        const normalized = normalizeRequiredCheck(item, `ruleset:${rule.ruleset_id || 'unknown'}`);
+        if (normalized) requiredChecks.push(normalized);
+      }
+    } else if (rule?.type === 'merge_queue') {
+      mergeQueueRequired = true;
+    } else if (rule?.type === 'workflows') {
+      requiredWorkflowCount += Array.isArray(rule.parameters?.workflows) ? rule.parameters.workflows.length : 1;
+    }
+  }
+
+  const classic = protection?.required_status_checks || null;
+  if (classic) {
+    strictRequiredChecks ||= classic.strict === true;
+    const items = Array.isArray(classic.checks) && classic.checks.length ? classic.checks : (classic.contexts || []);
+    for (const item of items) {
+      const normalized = normalizeRequiredCheck(item, 'branch-protection');
+      if (normalized) requiredChecks.push(normalized);
+    }
+  }
+
+  const unique = [];
+  const seen = new Set();
+  for (const item of requiredChecks) {
+    const key = `${item.context}\u0000${item.integrationId ?? '*'}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+
+  return {
+    branch: branch || null,
+    protected: Boolean(protection) || (Array.isArray(rules) && rules.length > 0),
+    requiredChecks: unique,
+    strictRequiredChecks,
+    mergeQueueRequired,
+    requiredWorkflowCount,
+    rulesCount: Array.isArray(rules) ? rules.length : 0,
+    classicProtection: Boolean(protection),
+  };
+}
+
 export class GitHubClient {
   constructor({
     baseUrl = process.env.GITHUB_API_URL || DEFAULT_API,
@@ -77,7 +163,7 @@ export class GitHubClient {
     this.timeoutMs = timeoutMs;
   }
 
-  async request(path, { method = 'GET', body, timeoutMs = this.timeoutMs } = {}) {
+  async request(path, { method = 'GET', body, timeoutMs = this.timeoutMs, allowNotFound = false } = {}) {
     const headers = {
       accept: 'application/vnd.github+json',
       'x-github-api-version': '2022-11-28',
@@ -92,8 +178,14 @@ export class GitHubClient {
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
+      if (allowNotFound && response.status === 404) return null;
       const detail = (await response.text()).slice(0, 800);
-      throw new Error(`GitHub ${method} ${path} returned HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
+      const error = new Error(`GitHub ${method} ${path} returned HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
+      error.name = 'GitHubHttpError';
+      error.status = response.status;
+      const retryAfter = Number(response.headers.get('retry-after'));
+      if (Number.isFinite(retryAfter) && retryAfter >= 0) error.retryAfterSeconds = retryAfter;
+      throw error;
     }
     if (response.status === 204) return null;
     return response.json();
@@ -146,8 +238,6 @@ export class GitHubClient {
     const all = Array.isArray(first?.check_runs) ? [...first.check_runs] : [];
     const reportedTotal = Number(first?.total_count);
 
-    // GitHub normally returns total_count. Small mock/compatibility servers may omit it; a short first page
-    // is still unambiguously complete, while a full page without a count is not safe to treat as complete.
     if (!Number.isFinite(reportedTotal)) {
       if (all.length < CHECK_RUN_PAGE_SIZE) return all;
       throw new Error(`GitHub check-runs completeness is unknown: received a full ${CHECK_RUN_PAGE_SIZE}-item page without total_count`);
@@ -184,6 +274,37 @@ export class GitHubClient {
     });
   }
 
+  async completeBranchRules({ repository, branch }) {
+    const { owner, repo } = parseGitHubRepository(repository);
+    const encodedBranch = encodeURIComponent(branch);
+    const all = [];
+    for (let page = 1; page <= MAX_RULE_PAGES; page += 1) {
+      const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/rules/branches/${encodedBranch}?per_page=${RULE_PAGE_SIZE}&page=${page}`);
+      if (!Array.isArray(value)) throw new Error('GitHub branch rules response was not an array');
+      all.push(...value);
+      if (value.length < RULE_PAGE_SIZE) return all;
+    }
+    throw new Error(`GitHub branch rules evidence may be truncated after ${MAX_RULE_PAGES * RULE_PAGE_SIZE} rules`);
+  }
+
+  async branchMergePolicy({ repository, branch }) {
+    const { owner, repo } = parseGitHubRepository(repository);
+    const encodedBranch = encodeURIComponent(branch);
+    const [rulesResult, protectionResult] = await Promise.allSettled([
+      this.completeBranchRules({ repository, branch }),
+      this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodedBranch}/protection`, { allowNotFound: true }),
+    ]);
+    const errors = [];
+    if (rulesResult.status === 'rejected') errors.push(`branch-rules: ${rulesResult.reason?.message || rulesResult.reason}`);
+    if (protectionResult.status === 'rejected') errors.push(`branch-protection: ${protectionResult.reason?.message || protectionResult.reason}`);
+    if (errors.length) return { branch, errors, complete: false };
+    return {
+      ...normalizeBranchMergePolicy({ branch, rules: rulesResult.value, protection: protectionResult.value }),
+      errors: [],
+      complete: true,
+    };
+  }
+
   async pullRequestEvidence({ repository, number }) {
     const pull = await this.pullRequest({ repository, number });
     const sha = pull?.head?.sha || null;
@@ -196,10 +317,12 @@ export class GitHubClient {
       state: pull?.state || null,
       draft: pull?.draft === true,
       merged: pull?.merged === true || Boolean(pull?.merged_at),
+      mergeSha: pull?.merge_commit_sha || null,
       mergeable: pull?.mergeable ?? null,
       mergeableState: pull?.mergeable_state || null,
       headSha: sha,
       headBranch: pull?.head?.ref || null,
+      baseSha: pull?.base?.sha || null,
       baseBranch: pull?.base?.ref || null,
       ci,
     };
