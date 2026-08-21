@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { StateStore } from '../server/core/state-store.mjs';
-import { decorateMergeRetry, isTransientMergeError } from '../server/core/merge-retry-guard.mjs';
+import { decorateMergeRetry, isTransientMergeError, retryDelaySeconds } from '../server/core/merge-retry-guard.mjs';
 
 async function fixture({ maxMergeAttempts = 3, mergeRetrySeconds = 5 } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-merge-retry-'));
@@ -90,4 +90,12 @@ test('merge error classification only retries transient network, rate-limit and 
   assert.equal(isTransientMergeError(new Error('GitHub PUT /merge returned HTTP 409')), false);
   assert.equal(isTransientMergeError(new Error('GitHub PUT /merge returned HTTP 422')), false);
   assert.equal(isTransientMergeError(new Error('GitHub PUT /merge returned HTTP 403: branch protection')), false);
+});
+
+test('GitHub Retry-After overrides a shorter local exponential merge delay', () => {
+  const error = new Error('GitHub PUT /merge returned HTTP 429');
+  error.status = 429;
+  error.retryAfterSeconds = 120;
+  assert.equal(retryDelaySeconds(error, { baseSeconds: 10 }, 1), 120);
+  assert.equal(retryDelaySeconds(error, { baseSeconds: 90 }, 2), 180);
 });
