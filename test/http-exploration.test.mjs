@@ -29,6 +29,7 @@ test('Exploration HTTP flow creates, analyzes and promotes idempotently into one
       listProviders: async () => [],
       startExplorationRun: async (input) => { analyzeCalls.push(input); return { id: 'run-http', ...input, status: 'queued' }; },
       retryExplorationRun: async () => ({}),
+      promoteExploration: async (id, input) => store.promoteExploration(id, input),
       openCodeModels: async () => [],
     },
     github: { token: null, baseUrl: 'https://api.github.test' },
@@ -42,6 +43,9 @@ test('Exploration HTTP flow creates, analyzes and promotes idempotently into one
       body: JSON.stringify({ title: 'Unattached idea', notes: 'Explore this first.', model: 'demo/model' }),
     });
     assert.equal(created.response.status, 201);
+    assert.equal(created.response.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(created.response.headers.get('x-frame-options'), 'DENY');
+    assert.match(created.response.headers.get('content-security-policy'), /frame-ancestors 'none'/);
     assert.equal(created.value.title, 'Unattached idea');
     assert.equal(store.snapshot().projects.length, 0);
 
