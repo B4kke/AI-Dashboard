@@ -6,6 +6,7 @@ import { SqliteControlStore } from './core/sqlite-control.mjs';
 import { AutonomyEngine } from './core/autonomy-engine.mjs';
 import { decorateControlPlane } from './core/control-guards.mjs';
 import { decorateGitHubIntegrity } from './core/github-integrity-guard.mjs';
+import { decorateGitHubPolicy } from './core/github-policy-guard.mjs';
 import { decorateMergeRetry } from './core/merge-retry-guard.mjs';
 import { OpenCodeClient } from './integrations/opencode.mjs';
 import { GitHubClient } from './integrations/github.mjs';
@@ -35,7 +36,8 @@ await research.initialize();
 const baseOrchestrator = createOrchestrator({ store, opencode, github, locks: sqlite });
 const guardedOrchestrator = decorateControlPlane({ orchestrator: baseOrchestrator, store, locks: sqlite, github, opencode });
 const integrityOrchestrator = decorateGitHubIntegrity({ orchestrator: guardedOrchestrator, store, github });
-const orchestrator = decorateMergeRetry({ orchestrator: integrityOrchestrator, store });
+const policyOrchestrator = decorateGitHubPolicy({ orchestrator: integrityOrchestrator, store, github });
+const orchestrator = decorateMergeRetry({ orchestrator: policyOrchestrator, store });
 const recovery = await orchestrator.recover();
 if (recovery.length) console.log(`AI Dashboard recovered ${recovery.length} state transition(s)`);
 
