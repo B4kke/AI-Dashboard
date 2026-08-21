@@ -44,6 +44,18 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
     const providerDiscover = url.pathname.match(/^\/api\/model-providers\/([^/]+)\/discover$/);
     if (request.method === 'POST' && providerDiscover) return json(response, 200, await research.discoverProvider(decodeURIComponent(providerDiscover[1])));
 
+    if (request.method === 'POST' && url.pathname === '/api/explorations') return json(response, 201, await store.addExploration(await body(request)));
+    const explorationPatch = url.pathname.match(/^\/api\/explorations\/([^/]+)$/);
+    if (request.method === 'PATCH' && explorationPatch) return json(response, 200, await store.updateExploration(decodeURIComponent(explorationPatch[1]), await body(request)));
+    const explorationAnalyze = url.pathname.match(/^\/api\/explorations\/([^/]+)\/analyze$/);
+    if (request.method === 'POST' && explorationAnalyze) {
+      return json(response, 202, await research.startExplorationRun({ explorationId: decodeURIComponent(explorationAnalyze[1]), ...(await body(request)) }));
+    }
+    const explorationPromote = url.pathname.match(/^\/api\/explorations\/([^/]+)\/promote$/);
+    if (request.method === 'POST' && explorationPromote) return json(response, 200, await store.promoteExploration(decodeURIComponent(explorationPromote[1]), await body(request)));
+    const explorationRetry = url.pathname.match(/^\/api\/exploration-runs\/([^/]+)\/retry$/);
+    if (request.method === 'POST' && explorationRetry) return json(response, 202, await research.retryExplorationRun(decodeURIComponent(explorationRetry[1])));
+
     if (request.method === 'POST' && url.pathname === '/api/research') return json(response, 202, await research.startResearch(await body(request)));
     const researchRetry = url.pathname.match(/^\/api\/research\/([^/]+)\/retry$/);
     if (request.method === 'POST' && researchRetry) return json(response, 202, await research.retryResearch(decodeURIComponent(researchRetry[1])));
@@ -99,8 +111,12 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       if (url.pathname.startsWith('/api/')) { const handled = await api(request, response, url); if (handled === false) json(response, 404, { error: 'API route not found' }); return; }
       if (!(await staticFile(response, url.pathname))) { response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }); response.end('Not found\n'); }
     } catch (error) {
-      const status = /not found/i.test(error.message) ? 404 : /already in progress|cannot .* from state|requires at least one/i.test(error.message) ? 409 : 500;
-      json(response, status, { error: error.message });
+      const message = String(error?.message || error || 'Request failed');
+      const status = /not found/i.test(message) ? 404
+        : /already in progress|cannot .* from state|requires at least one|already promoted|integrity review|required$/i.test(message) ? 409
+        : /required|valid .*id|choose .*model|invalid|request body too large|JSON/i.test(message) ? 400
+        : 500;
+      json(response, status, { error: message });
     }
   });
 }
