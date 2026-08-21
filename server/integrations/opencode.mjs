@@ -28,8 +28,9 @@ export class OpenCodeClient {
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
-      const detail = (await response.text()).slice(0, 500);
-      throw new Error(`OpenCode ${method} ${path} returned HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
+      // OpenCode errors are persisted on Runs by the control plane. Do not copy arbitrary response bodies
+      // into state because a runner/plugin may echo prompt or credential material in an error payload.
+      throw new Error(`OpenCode ${method} ${path} returned HTTP ${response.status}`);
     }
     if (response.status === 204) return null;
     return response.json();
