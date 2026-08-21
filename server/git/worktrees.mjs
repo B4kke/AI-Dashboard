@@ -45,6 +45,13 @@ export async function mergeBase({ worktreePath, left = 'HEAD', right }) {
   return head;
 }
 
+export async function commitTreeSha({ worktreePath, ref = 'HEAD' }) {
+  const safe = ref === 'HEAD' ? 'HEAD' : safeRef(ref, 'Commit ref');
+  const tree = await git(worktreePath, ['rev-parse', `${safe}^{tree}`]);
+  if (!/^[0-9a-f]{40,64}$/i.test(tree)) throw new Error('Git commit tree did not resolve to a tree SHA');
+  return tree;
+}
+
 export async function createTaskWorktree({ repoPath, taskId, title, baseRef = 'HEAD', worktreeRoot = defaultWorktreeRoot() }) {
   const repository = await inspectRepository(repoPath);
   const shortId = String(taskId).replace(/[^a-zA-Z0-9]/g, '').slice(-8) || createHash('sha1').update(String(taskId)).digest('hex').slice(0, 8);
