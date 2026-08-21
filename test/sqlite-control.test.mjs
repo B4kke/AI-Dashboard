@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SqliteControlStore } from '../server/core/sqlite-control.mjs';
-import { StateStore } from '../server/core/state-store.mjs';
+import { SCHEMA_VERSION, StateStore } from '../server/core/state-store.mjs';
 
 test('SQLite control state survives reopen and journals transitions with revisions', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-sqlite-'));
@@ -28,7 +28,7 @@ test('SQLite control state survives reopen and journals transitions with revisio
     assert.equal(await sqlite2.importJsonIfEmpty(legacy), false);
     const store2 = new StateStore(legacy, { persistence: sqlite2 }); await store2.load();
     const snapshot = store2.snapshot();
-    assert.equal(snapshot.schemaVersion, 5); assert.equal(snapshot.revision, 3);
+    assert.equal(snapshot.schemaVersion, SCHEMA_VERSION); assert.equal(snapshot.revision, 3);
     assert.ok(snapshot.projects.some((item) => item.id === 'legacy'));
     assert.equal(snapshot.projects.find((item) => item.id === project.id).name, 'Durable');
     assert.equal(store2.getTask(task.id).state, 'needs_input');
@@ -52,14 +52,14 @@ test('stale bootstrap snapshot cannot overwrite a newer committed revision', asy
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-revision-')); const dbPath = join(dir, 'control.sqlite');
   try {
     const sqlite = await new SqliteControlStore(dbPath).initialize();
-    await sqlite.save({ schemaVersion: 5, revision: 1, projects: [{ id: 'p1', name: 'rev1' }] });
+    await sqlite.save({ schemaVersion: SCHEMA_VERSION, revision: 1, projects: [{ id: 'p1', name: 'rev1' }] });
     await sqlite.saveWithEvent(
-      { schemaVersion: 5, revision: 2, projects: [{ id: 'p1', name: 'rev2' }] },
+      { schemaVersion: SCHEMA_VERSION, revision: 2, projects: [{ id: 'p1', name: 'rev2' }] },
       'project.updated',
       { id: 'p1', name: 'rev2' },
     );
     await assert.rejects(
-      () => sqlite.save({ schemaVersion: 5, revision: 1, projects: [{ id: 'p1', name: 'stale' }] }),
+      () => sqlite.save({ schemaVersion: SCHEMA_VERSION, revision: 1, projects: [{ id: 'p1', name: 'stale' }] }),
       /State revision regression/,
     );
     const current = await sqlite.load();
