@@ -13,11 +13,11 @@ async function fixture(headSha, { baseSha = 'base-1', merged = true } = {}) {
   const project = await store.addProject({ name: 'Integrity', repoPath: dir, repository: 'owner/repo', baseBranch: 'main' });
   const task = await store.addTask({ projectId: project.id, title: 'Reviewed work', state: merged ? 'ready_to_merge' : 'awaiting_ci' });
   await store.updateTask(task.id, {
-    publication: { provider: 'github', repository: 'owner/repo', prNumber: 17, headSha: 'checkpoint-1', headBranch: 'ai/task', baseBranch: 'main', publishedBaseSha: 'base-1' },
+    publication: { provider: 'github', repository: 'owner/repo', prNumber: 17, headSha: 'checkpoint-1', headBranch: 'ai/task', baseBranch: 'main', workerBaseSha: 'base-1', publishedBaseSha: 'base-1' },
   });
   let innerCalls = 0;
   const orchestrator = {
-    latestWorker: () => ({ checkpointHead: 'checkpoint-1', branch: 'ai/task' }),
+    latestWorker: () => ({ checkpointHead: 'checkpoint-1', branch: 'ai/task', worktreePath: dir }),
     async publishTask() { innerCalls += 1; return store.getTask(task.id).publication; },
     async reconcilePublishedTask() { innerCalls += 1; return { state: merged ? 'merged_external' : 'pending' }; },
     async mergeApprovedTask() { innerCalls += 1; return { provider: 'github' }; },
@@ -67,7 +67,7 @@ test('unmerged PR whose base moved after publication is blocked before review', 
     assert.equal(f.innerCalls(), 0);
     assert.equal(f.store.getTask(f.task.id).state, 'needs_input');
     assert.equal(f.store.getProject(f.project.id).status, 'active');
-    assert.match(f.store.getTask(f.task.id).supervisorFeedback, /base branch moved/i);
+    assert.match(f.store.getTask(f.task.id).supervisorFeedback, /Git-proven baseline/i);
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 
@@ -82,14 +82,33 @@ test('externally merged PR against a moved base blocks project autonomy', async 
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 
-test('publication captures immutable base SHA baseline before autonomous CI/review', async () => {
+test('publication captures Git-proven worker merge-base before autonomous CI/review', async () => {
   const f = await fixture('checkpoint-1', { baseSha: 'base-1', merged: false });
   try {
     await f.store.updateTask(f.task.id, { publication: { provider: 'github', repository: 'owner/repo', prNumber: 17, headSha: 'checkpoint-1', headBranch: 'ai/task', baseBranch: 'main' } });
-    const guarded = decorateGitHubIntegrity({ orchestrator: f.orchestrator, store: f.store, github: f.github });
+    const guarded = decorateGitHubIntegrity({
+      orchestrator: f.orchestrator, store: f.store, github: f.github,
+      resolveWorkerBaseSha: async () => 'base-1',
+    });
     const publication = await guarded.publishTask(f.task.id);
+    assert.equal(publication.workerBaseSha, 'base-1');
     assert.equal(publication.publishedBaseSha, 'base-1');
-    assert.equal(f.store.getTask(f.task.id).publication.publishedBaseSha, 'base-1');
+    assert.equal(f.store.getTask(f.task.id).publication.workerBaseSha, 'base-1');
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});
+
+test('base movement between worker execution and PR publication is blocked immediately', async () => {
+  const f = await fixture('checkpoint-1', { baseSha: 'base-2', merged: false });
+  try {
+    await f.store.updateTask(f.task.id, { publication: { provider: 'github', repository: 'owner/repo', prNumber: 17, headSha: 'checkpoint-1', headBranch: 'ai/task', baseBranch: 'main' } });
+    const guarded = decorateGitHubIntegrity({
+      orchestrator: f.orchestrator, store: f.store, github: f.github,
+      resolveWorkerBaseSha: async () => 'base-1',
+    });
+    const result = await guarded.publishTask(f.task.id);
+    assert.equal(result.state, 'integrity_blocked');
+    assert.equal(f.store.getTask(f.task.id).state, 'needs_input');
+    assert.match(f.store.getTask(f.task.id).supervisorFeedback, /base moved before publication/i);
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 
