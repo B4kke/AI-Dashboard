@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const FORBIDDEN = /[\u0000-\u001f\u007f|&;<>`$(){}]/;
+const SECRET_ENV_NAME = /(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|PRIVATE[_-]?KEY|AUTH(?:ORIZATION)?|CREDENTIAL)/i;
 
 export function parseVerificationCommand(value) {
   const input = String(value || '').trim();
@@ -35,8 +36,21 @@ export function parseVerificationCommand(value) {
   return { command: parts[0], args: parts.slice(1), display: input };
 }
 
+function redactSecretPatterns(value, env = process.env) {
+  let text = String(value || '');
+  for (const [name, secret] of Object.entries(env || {})) {
+    if (!SECRET_ENV_NAME.test(name) || typeof secret !== 'string' || secret.length < 8) continue;
+    text = text.split(secret).join('[REDACTED]');
+  }
+  text = text
+    .replace(/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]')
+    .replace(/\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b/g, '[REDACTED TOKEN]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{12,}=*/gi, 'Bearer [REDACTED]');
+  return text;
+}
+
 function bounded(value, limit = 12_000) {
-  const text = String(value || '');
+  const text = redactSecretPatterns(value);
   return text.length <= limit ? text : `${text.slice(0, limit)}\n...[truncated]`;
 }
 
@@ -48,6 +62,7 @@ export async function runVerificationCommands({ cwd, commands = [], timeoutMs = 
       : { command: value?.command, args: Array.isArray(value?.args) ? value.args.map(String) : [], display: value?.display || [value?.command, ...(value?.args || [])].filter(Boolean).join(' ') };
     if (!parsed.command || parsed.command.startsWith('-')) throw new Error('Invalid verification executable');
     const startedAt = new Date().toISOString();
+    const safeDisplay = bounded(parsed.display, 2_000);
     try {
       const { stdout, stderr } = await execFileAsync(parsed.command, parsed.args, {
         cwd,
@@ -57,10 +72,10 @@ export async function runVerificationCommands({ cwd, commands = [], timeoutMs = 
         maxBuffer: 4 * 1024 * 1024,
         env: { ...process.env, CI: process.env.CI || '1', GIT_TERMINAL_PROMPT: '0' },
       });
-      results.push({ command: parsed.display, status: 'passed', exitCode: 0, stdout: bounded(stdout), stderr: bounded(stderr), startedAt, finishedAt: new Date().toISOString() });
+      results.push({ command: safeDisplay, status: 'passed', exitCode: 0, stdout: bounded(stdout), stderr: bounded(stderr), startedAt, finishedAt: new Date().toISOString() });
     } catch (error) {
       results.push({
-        command: parsed.display,
+        command: safeDisplay,
         status: 'failed',
         exitCode: Number.isInteger(error.code) ? error.code : null,
         signal: error.signal || null,
@@ -79,3 +94,5 @@ export async function runVerificationCommands({ cwd, commands = [], timeoutMs = 
     ok: results.length > 0 && results.every((item) => item.status === 'passed'),
   };
 }
+
+export { redactSecretPatterns };
