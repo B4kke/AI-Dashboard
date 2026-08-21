@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
-import { checkpointEvidence, createTaskWorktree, listRepositoryWorktrees, mergeBase, removeTaskWorktree, slugifyTask, syncBaseBranch } from '../server/git/worktrees.mjs';
+import { checkpointEvidence, commitTreeSha, createTaskWorktree, listRepositoryWorktrees, mergeBase, removeTaskWorktree, slugifyTask, syncBaseBranch } from '../server/git/worktrees.mjs';
 
 const exec = promisify(execFile);
 
@@ -33,7 +33,7 @@ test('createTaskWorktree creates an isolated branch outside the repo and invento
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test('checkpoint evidence is generated from Git rather than agent claims', async () => {
+test('checkpoint evidence and tree SHA are generated from Git rather than agent claims', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-evidence-'));
   const repo = join(dir, 'repo'); const worktrees = join(dir, 'worktrees');
   try {
@@ -46,7 +46,10 @@ test('checkpoint evidence is generated from Git rather than agent claims', async
     await writeFile(join(result.worktreePath, 'feature.txt'), 'one\ntwo\n');
     const commit = await commitWorktree({ worktreePath: result.worktreePath, message: 'ai: evidence' });
     const evidence = await checkpointEvidence({ worktreePath: result.worktreePath, head: commit.head });
+    const tree = await commitTreeSha({ worktreePath: result.worktreePath, ref: commit.head });
+    const nativeTree = (await exec('git', ['-C', result.worktreePath, 'rev-parse', `${commit.head}^{tree}`])).stdout.trim();
     assert.equal(evidence.changed, true); assert.equal(evidence.fileCount, 1); assert.equal(evidence.files[0].path, 'feature.txt'); assert.equal(evidence.additions, 2); assert.equal(evidence.deletions, 0);
+    assert.equal(tree, nativeTree); assert.match(tree, /^[0-9a-f]{40,64}$/i);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
