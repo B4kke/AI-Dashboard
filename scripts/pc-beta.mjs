@@ -17,7 +17,10 @@ const ACTIVE_RUN_STATES = new Set(['preparing', 'dispatch_unknown', 'running', '
 
 function clean(value) { return String(value ?? '').trim(); }
 function sleep(ms) { return new Promise((resolveSleep) => setTimeout(resolveSleep, ms)); }
-function shortId(value) { return clean(value).replace(/[^a-zA-Z0-9]/g, '').slice(0, 10) || 'beta'; }
+function shortId(value) {
+  const compact = clean(value).replace(/[^a-zA-Z0-9]/g, '');
+  return compact ? compact.slice(-10) : 'beta';
+}
 function isoCompact() { return new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14); }
 
 export function parseBetaArgs(argv = process.argv.slice(2)) {
@@ -67,7 +70,7 @@ export function buildBetaTaskSpecs(sessionId) {
     },
     ciRepair: {
       title: `PC beta CI repair ${token}`,
-      description: 'This is a staged beta-test task. On worker iteration 1 only, create beta-ci.txt containing exactly ci-red and do not alter beta/ci-policy.mjs or the GitHub workflow. When this task returns after the deliberate CI failure, replace beta-ci.txt with exactly ci-green. The final repository state must be ci-green. Do not bypass or weaken the CI policy.',
+      description: 'This is a staged beta-test task. On worker iteration 1 only, the intended temporary checkpoint is beta-ci.txt containing exactly ci-red; report that implementation normally and do not alter beta/ci-policy.mjs or the GitHub workflow. The control plane will deliberately receive a GitHub CI failure. When this task returns on a later worker iteration with CI feedback, replace beta-ci.txt with exactly ci-green. The final repository state must be ci-green. Do not bypass or weaken the CI policy.',
       acceptanceCriteria: [
         'beta-ci.txt contains exactly ci-green in the final accepted checkpoint',
         'the existing beta CI policy passes without modifying beta/ci-policy.mjs or the workflow',
@@ -75,10 +78,10 @@ export function buildBetaTaskSpecs(sessionId) {
     },
     supervisorReject: {
       title: `PC beta supervisor rejection ${token}`,
-      description: 'This is a staged supervisor beta-test task. On worker iteration 1 only, create beta-review.txt containing exactly reject-me, even though that deliberately fails the final acceptance criterion. Do not fix it until the independent supervisor requests changes. On a later worker iteration after supervisor feedback, replace the content with exactly approved. Keep all other files unchanged.',
+      description: 'This is a staged supervisor beta-test task. On worker iteration 1 only, the intended temporary checkpoint is beta-review.txt containing exactly reject-me; report that implementation normally even though it deliberately violates the final repository criterion. Do not fix it until the independent supervisor requests changes. On a later worker iteration after supervisor feedback, replace the content with exactly approved. Keep all other files unchanged.',
       acceptanceCriteria: [
         'beta-review.txt contains exactly approved in the final accepted checkpoint',
-        'an independent supervisor rejects the deliberately incorrect first checkpoint before any merge',
+        'existing control-plane verification passes',
       ],
     },
     restart: {
