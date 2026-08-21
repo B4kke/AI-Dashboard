@@ -63,6 +63,7 @@ export async function collectProjectContext({ repoPath, query, maxFiles = 18, ma
 
 export function buildResearchMessages({ project, query, context }) {
   const sections = context.files.map((file) => `--- ${file.path}${file.truncated ? ' (truncated)' : ''} ---\n${file.content}`).join('\n\n');
+  const brief = project.brief ? `\nProject bootstrap brief:\n${String(project.brief).slice(0, 20_000)}\n` : '';
   return [
     {
       role: 'system',
@@ -70,12 +71,52 @@ export function buildResearchMessages({ project, query, context }) {
         'You are a research analyst working inside an existing software/project repository.',
         'Do not propose code edits unless the user asks for them. Do not claim you inspected files that are not in the provided context.',
         'Ground important project-specific claims by naming the source file paths.',
+        'Treat a bootstrap brief as historical intent, not as proof that the repository implements it.',
         'Separate facts, inferences, risks, and recommendations. State uncertainty explicitly.',
       ].join(' '),
     },
     {
       role: 'user',
-      content: `Project: ${project.name}\nResearch request: ${query}\n\nRepository context (${context.files.length} selected files; ${context.scannedFiles} scanned):\n\n${sections}`,
+      content: `Project: ${project.name}${brief}\nResearch request: ${query}\n\nRepository context (${context.files.length} selected files; ${context.scannedFiles} scanned):\n\n${sections}`,
+    },
+  ];
+}
+
+export function buildExplorationMessages({ exploration, kind = 'analysis' }) {
+  const researchStyle = kind === 'research';
+  return [
+    {
+      role: 'system',
+      content: [
+        'You are the pre-project analyst for a self-hosted AI project control center.',
+        'The user has captured an idea that is not attached to any Project or repository yet.',
+        'Produce a decision-quality report that can later become the bootstrap brief for a new Project.',
+        researchStyle
+          ? 'This run is research-style analysis using only the model knowledge available in this request. You do not have live web browsing, source retrieval, or repository tools in this slice.'
+          : 'This run is feasibility and product analysis using only the model knowledge available in this request.',
+        'Never fabricate URLs, citations, source checks, benchmarks, or claims that you performed external research.',
+        'Clearly separate established facts, model-knowledge assumptions, inferences, risks, and things that should be verified with external research later.',
+        'Prefer concrete scope boundaries and verifiable next steps over speculative feature lists.',
+      ].join(' '),
+    },
+    {
+      role: 'user',
+      content: [
+        `Exploration: ${exploration.title}`,
+        '',
+        exploration.notes || '(No additional notes supplied.)',
+        '',
+        'Return a concise but substantive report with these sections:',
+        '1. Executive summary',
+        '2. Problem / opportunity',
+        '3. Goals and non-goals',
+        '4. Feasibility and key assumptions',
+        '5. Viable approaches and tradeoffs',
+        '6. Recommended direction',
+        '7. Risks / unknowns / what needs external verification',
+        '8. Project bootstrap brief',
+        '9. Recommended first decisions or tasks (proposals only; do not execute them)',
+      ].join('\n'),
     },
   ];
 }
