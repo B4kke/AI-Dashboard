@@ -29,6 +29,11 @@ test('worktree paths from Git for Windows canonicalize to Node Windows paths', (
     worktreePathKey('C:/USERS/MARIUS/worktrees/task', { platform: 'win32' }),
     worktreePathKey('c:\\users\\marius\\worktrees\\task', { platform: 'win32' }),
   );
+  const expandShortWindowsPath = (value) => value.replace('RUNNER~1', 'runneradmin');
+  assert.equal(
+    worktreePathKey('C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\task', { platform: 'win32', realpath: expandShortWindowsPath }),
+    worktreePathKey('C:/Users/runneradmin/AppData/Local/Temp/task', { platform: 'win32', realpath: expandShortWindowsPath }),
+  );
 });
 
 test('createTaskWorktree creates an isolated branch outside the repo and inventory sees it', async () => {

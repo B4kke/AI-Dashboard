@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, win32 } from 'node:path';
 import { mkdir } from 'node:fs/promises';
@@ -38,9 +39,17 @@ export function canonicalWorktreePath(value, { platform = process.platform } = {
 
 export function worktreePathKey(value, options = {}) {
   const canonical = canonicalWorktreePath(value, options);
-  return options.platform === 'win32' || (!options.platform && process.platform === 'win32')
-    ? canonical?.toLowerCase() || null
-    : canonical;
+  const platform = options.platform || process.platform;
+  if (platform !== 'win32' || !canonical) return canonical;
+
+  let identity = canonical;
+  try {
+    const realpath = options.realpath || realpathSync.native;
+    identity = canonicalWorktreePath(realpath(canonical), { platform }) || canonical;
+  } catch {
+    // Missing/prunable worktrees still need a stable lexical identity.
+  }
+  return identity.toLowerCase();
 }
 
 export function parseRepositoryWorktrees(output, options = {}) {
