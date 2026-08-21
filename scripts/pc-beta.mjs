@@ -3,12 +3,12 @@ import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 
 const execFileAsync = promisify(execFile);
-const ROOT = resolve(new URL('..', import.meta.url).pathname);
+const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const DEFAULT_DASHBOARD_PORT = 7332;
 const DEFAULT_TIMEOUT_MS = 12 * 60_000;
 const POLL_MS = 1_500;
@@ -150,7 +150,7 @@ class BetaHarness {
 
   async scenario(name, fn, { required = true } = {}) {
     const previous = this.session.scenarios[name];
-    if (previous?.status === 'passed' && this.config.resume) {
+    if (previous?.status === 'passed' && this.config.resume && name !== 'opencode_health') {
       this.log(`${name}: already passed; preserving evidence`);
       return previous;
     }
@@ -291,7 +291,7 @@ class BetaHarness {
   }
 
   async ensureOpenCode() {
-    if (await this.openCodeConnected()) return { owned: false, connected: true };
+    if (await this.openCodeConnected()) return { owned: this.openCodeOwned, connected: true };
     if (!this.config.manageOpenCode) {
       const error = new Error('OpenCode is not healthy. Start `opencode serve` or rerun with --manage-opencode.');
       error.blocked = true;
@@ -303,14 +303,6 @@ class BetaHarness {
     this.openCodeLog = this.attachLogs(this.openCode, this.config.openCodeLog, 'opencode');
     await this.waitFor('managed OpenCode health', () => this.openCodeConnected(), { timeoutMs: 45_000 });
     return { owned: true, connected: true, command: [command, ...args] };
-  }
-
-  async restartOpenCode() {
-    if (!this.openCodeOwned) throw Object.assign(new Error('OpenCode outage automation requires a harness-owned OpenCode process (--manage-opencode).'), { blocked: true });
-    await this.stopChild(this.openCode, 'OpenCode');
-    this.openCode = null;
-    this.openCodeOwned = false;
-    await this.ensureOpenCode();
   }
 
   async prepareRepository() {
@@ -445,7 +437,7 @@ class BetaHarness {
     await this.patchProject({ mode: 'manual', autoMerge: false });
     const task = await this.createTask(spec);
     await this.api(`/api/tasks/${encodeURIComponent(task.id)}/delegate`, { method: 'POST', body: {} });
-    const awaiting = await this.waitTask(task.id, ['awaiting_publish'], { tick: false });
+    await this.waitTask(task.id, ['awaiting_publish'], { tick: false });
     await this.api(`/api/tasks/${encodeURIComponent(task.id)}/publish`, { method: 'POST', body: {} });
     const state = await this.state();
     return this.taskEvidence(state, task.id);
@@ -458,6 +450,14 @@ class BetaHarness {
     await git(this.config.repoPath, ['commit', '-m', `PC beta move base ${label}`]);
     await git(this.config.repoPath, ['push', 'origin', this.session.baseBranch]);
     return { path, head: await git(this.config.repoPath, ['rev-parse', 'HEAD']) };
+  }
+
+  async waitTaskRunsIdle(taskId, timeoutMs = 90_000) {
+    return this.waitFor(`task ${taskId} active runs to settle`, async () => {
+      const state = await this.state();
+      const evidence = this.taskEvidence(state, taskId);
+      return evidence.runs.some((run) => ACTIVE_RUN_STATES.has(run.status)) ? null : evidence;
+    }, { timeoutMs, tick: true });
   }
 
   async cleanupProcesses() {
@@ -527,6 +527,8 @@ class BetaHarness {
       }, { timeoutMs: this.config.timeoutMs });
       const afterRunIds = recovered.workers.map((run) => run.id);
       if (afterRunIds.some((id) => !beforeRunIds.includes(id))) throw new Error('Dashboard restart created an additional worker Run instead of reconciling the persisted run');
+      await this.patchProject({ mode: 'manual', autoMerge: false });
+      await this.waitTaskRunsIdle(task.id).catch(() => recovered);
       return { summary: `restart preserved worker identity; resulting task state ${recovered.task.state}`, taskId: task.id, workerRunIds: afterRunIds, taskState: recovered.task.state };
     });
 
@@ -545,7 +547,8 @@ class BetaHarness {
         return evidence.workers.some((run) => ACTIVE_RUN_STATES.has(run.status)) ? evidence : null;
       }, { timeoutMs: 90_000 });
       const workerIds = active.workers.map((run) => run.id);
-      await this.stopChild(this.openCode, 'OpenCode'); this.openCode = null;
+      await this.stopChild(this.openCode, 'OpenCode');
+      this.openCode = null;
       await sleep(2_000);
       await this.tick().catch(() => {});
       const during = this.taskEvidence(await this.state(), task.id);
@@ -553,7 +556,10 @@ class BetaHarness {
       if (during.workers.some((run) => !workerIds.includes(run.id))) throw new Error('OpenCode outage created a duplicate worker Run');
       this.openCodeOwned = false;
       await this.ensureOpenCode();
-      return { summary: `runner outage failed closed with task state ${during.task.state}`, taskId: task.id, workerRunIds: workerIds, taskState: during.task.state };
+      await this.patchProject({ mode: 'manual', autoMerge: false });
+      const settled = await this.waitTaskRunsIdle(task.id, this.config.timeoutMs);
+      if (settled.workers.some((run) => !workerIds.includes(run.id))) throw new Error('OpenCode recovery created a duplicate worker Run');
+      return { summary: `runner outage failed closed and preserved worker identity; task=${settled.task.state}`, taskId: task.id, workerRunIds: workerIds, taskState: settled.task.state };
     }, { required: false });
 
     await this.scenario('moved_base_branch', async () => {
@@ -569,7 +575,7 @@ class BetaHarness {
     });
 
     await this.scenario('abandoned_worktree', async () => {
-      await this.patchProject({ mode: 'manual', autoMerge: false, status: 'active' }).catch(() => {});
+      await this.patchProject({ mode: 'manual', autoMerge: false }).catch(() => {});
       const branch = `ai/pc-beta-abandoned-${shortId(this.session.id)}`;
       const path = join(this.config.runtimeDir, `abandoned-${shortId(this.session.id)}`);
       if (!(await exists(path))) await git(this.config.repoPath, ['worktree', 'add', '-b', branch, path, this.session.baseBranch]);
@@ -580,7 +586,7 @@ class BetaHarness {
     });
 
     await this.scenario('github_api_outage', async () => {
-      await this.patchProject({ mode: 'manual', autoMerge: false, status: 'active' }).catch(() => {});
+      await this.patchProject({ mode: 'manual', autoMerge: false }).catch(() => {});
       const evidence = await this.manualWorkerToPublish(specs.githubOutage);
       const originalApi = process.env.GITHUB_API_URL;
       await this.restartDashboard({ GITHUB_API_URL: 'http://127.0.0.1:9' });
@@ -620,12 +626,16 @@ async function loadOrCreateSession(config) {
 async function main() {
   const args = parseBetaArgs();
   const repository = clean(process.env.AI_DASHBOARD_BETA_REPOSITORY);
-  const repoPath = resolve(clean(process.env.AI_DASHBOARD_BETA_REPO_PATH));
+  const repoPathInput = clean(process.env.AI_DASHBOARD_BETA_REPO_PATH);
   if (!repository || repository.split('/').length !== 2) throw new Error('Set AI_DASHBOARD_BETA_REPOSITORY=owner/repository for a disposable GitHub repo');
-  if (!clean(process.env.AI_DASHBOARD_BETA_REPO_PATH)) throw new Error('Set AI_DASHBOARD_BETA_REPO_PATH to the local clone of the disposable repo');
+  if (!repoPathInput) throw new Error('Set AI_DASHBOARD_BETA_REPO_PATH to the local clone of the disposable repo');
+  const repoPath = resolve(repoPathInput);
 
   const runtimeDir = resolve(process.env.AI_DASHBOARD_BETA_DIR || join(ROOT, '.ai-dashboard-beta'));
   const sessionFile = join(runtimeDir, 'session.json');
+  if (args.mode !== 'resume' && await exists(sessionFile)) {
+    throw new Error(`Existing beta session found at ${sessionFile}. Use --resume to preserve/reuse it, or set AI_DASHBOARD_BETA_DIR to a new directory for a fresh run.`);
+  }
   const dashboardPort = Number(process.env.AI_DASHBOARD_BETA_PORT || DEFAULT_DASHBOARD_PORT);
   const config = {
     mode: args.mode === 'resume' ? 'full' : args.mode,
@@ -646,6 +656,9 @@ async function main() {
     dashboardUrl: `http://127.0.0.1:${dashboardPort}`,
   };
   const session = await loadOrCreateSession(config);
+  if (session.repository !== repository || resolve(session.repoPath) !== repoPath) {
+    throw new Error(`Resume configuration mismatch: session targets ${session.repository} at ${session.repoPath}; current environment targets ${repository} at ${repoPath}`);
+  }
   config.mode = session.mode;
   const harness = new BetaHarness(config, session);
   process.once('SIGINT', () => harness.cleanupProcesses().finally(() => process.exit(130)));
