@@ -60,33 +60,40 @@ Implemented and isolated/integration-test verified:
 - bounded/shell-free Git branch push using host credential helper or SSH agent
 - create or reuse task PRs
 - publish read-repair after lost GitHub acknowledgement, only when branch/base/head identity matches the verified checkpoint
-- normalized GitHub PR/head evidence
-- check-runs + commit-status ingestion
+- normalized GitHub PR/head/base/merge evidence
+- check-runs + individual commit-status context ingestion
 - check-runs pagination; failures beyond the first 100 checks cannot be hidden
 - GitHub CI API failure becomes `error`/incomplete evidence, never `none`
 - `requireCi=true` by default for GitHub-backed projects
 - CI discovery grace period for newly-created PRs
 - CI outage polling backoff preserved across integrity guards
 - CI failure -> bounded autonomous worker repair loop
+- bounded GitHub Actions failure diagnostics using workflow/job/failed-step metadata; raw job logs are intentionally not persisted or added to prompts
 - supervisor receives machine-generated worker + GitHub/CI evidence
 - PR head/base and CI revalidated after supervisor approval
+- GitHub active branch rules + classic branch-protection evidence are read fail-closed
+- required status-check contexts must exist and be successful; GitHub App/integration identity is enforced when specified
+- merge-queue rules and opaque required-workflow rules block direct autonomous merge rather than being bypassed
 - expected-head-SHA guarded GitHub merge
+- durable bounded merge retry/backoff for transient network/5xx/rate-limit failures; non-transient merge conflicts stop immediately
 - externally merged PR recovery only succeeds when the merged PR head/base still matches the independently reviewed checkpoint
 - externally merged identity drift blocks project autonomy for integrity review
+- worker/PR base lineage is proven with Git `merge-base`, not timestamps: base movement before publication or after publication blocks autonomous review/merge until work is re-synced and revalidated
 - configurable merge method (`squash` default)
 - optional remote branch + local worktree/branch cleanup
 - base branch `fetch + ff-only` sync before new GitHub-backed worker work and after remote merge
 - manual Publish / Refresh CI / Review / Merge controls in dashboard
 - deterministic full-loop CI test: Task -> worker -> real Git worktree/commit/push -> PR test double -> CI failure -> repair -> CI success -> supervisor -> merge
+- current PR hardening suite: 72 tests passing on Node 22, including merge retry, required-check/ruleset policy, CI diagnostics, and worker/base SHA lineage
 
 Still needed before M2 is closed:
 
 - one real disposable GitHub repository/PR/Actions dogfood combined with a real OpenCode worker
 - repeat that real loop across CI failure/repair, process restart, OpenCode outage, moved base branch and supervisor rejection
-- durable merge-attempt backoff/budget for transient GitHub merge failures (CI polling already has backoff)
-- required-check / branch-protection awareness rather than relying only on observed aggregate checks plus GitHub merge refusal
-- richer check/job/log evidence for diagnosing real CI failures
-- confirm remote merge SHA / reviewed checkpoint lineage in real GitHub dogfood evidence
+- prove branch-rules/required-check behavior against a real protected GitHub branch, not only deterministic HTTP test doubles
+- prove GitHub Actions job/step diagnostics against a real failed Actions run
+- confirm remote merge SHA / reviewed checkpoint / Git-proven base lineage against real GitHub merge evidence
+- evaluate whether a safely redacted raw log tail is needed after real dogfood; raw Actions logs remain deliberately excluded until secret-redaction guarantees are credible
 
 Deferred while hardening is the priority:
 
