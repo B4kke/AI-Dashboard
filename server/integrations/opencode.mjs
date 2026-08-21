@@ -5,6 +5,14 @@ function basicAuth(username, password) {
   return `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
 }
 
+export function normalizeOpenCodeUrl(value) {
+  let url;
+  try { url = new URL(String(value || '').trim()); } catch { throw new Error('OpenCode URL must be absolute'); }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('OpenCode URL must use http or https');
+  if (url.username || url.password || url.search || url.hash) throw new Error('OpenCode URL must not contain credentials, query parameters or fragments');
+  return url.toString().replace(/\/$/, '');
+}
+
 export class OpenCodeClient {
   constructor({
     baseUrl = process.env.OPENCODE_URL || 'http://127.0.0.1:4096',
@@ -12,7 +20,7 @@ export class OpenCodeClient {
     password = process.env.OPENCODE_SERVER_PASSWORD || '',
     timeoutMs = 2500,
   } = {}) {
-    this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.baseUrl = normalizeOpenCodeUrl(baseUrl);
     this.authorization = basicAuth(username, password);
     this.timeoutMs = timeoutMs;
   }
