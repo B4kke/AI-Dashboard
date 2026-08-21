@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
-import { checkpointEvidence, createTaskWorktree, listRepositoryWorktrees, removeTaskWorktree, slugifyTask, syncBaseBranch } from '../server/git/worktrees.mjs';
+import { checkpointEvidence, createTaskWorktree, listRepositoryWorktrees, mergeBase, removeTaskWorktree, slugifyTask, syncBaseBranch } from '../server/git/worktrees.mjs';
 
 const exec = promisify(execFile);
 
@@ -47,6 +47,29 @@ test('checkpoint evidence is generated from Git rather than agent claims', async
     const commit = await commitWorktree({ worktreePath: result.worktreePath, message: 'ai: evidence' });
     const evidence = await checkpointEvidence({ worktreePath: result.worktreePath, head: commit.head });
     assert.equal(evidence.changed, true); assert.equal(evidence.fileCount, 1); assert.equal(evidence.files[0].path, 'feature.txt'); assert.equal(evidence.additions, 2); assert.equal(evidence.deletions, 0);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('mergeBase proves the worker checkpoint ancestry even after local base advances', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-merge-base-'));
+  const repo = join(dir, 'repo'); const worktrees = join(dir, 'worktrees');
+  try {
+    await exec('git', ['init', '-b', 'main', repo]);
+    await exec('git', ['-C', repo, 'config', 'user.name', 'AI Dashboard Test']);
+    await exec('git', ['-C', repo, 'config', 'user.email', 'test@example.invalid']);
+    await writeFile(join(repo, 'README.md'), 'base\n'); await exec('git', ['-C', repo, 'add', '.']); await exec('git', ['-C', repo, 'commit', '-m', 'base']);
+    const base = (await exec('git', ['-C', repo, 'rev-parse', 'HEAD'])).stdout.trim();
+    const { commitWorktree } = await import('../server/git/worktrees.mjs');
+    const worker = await createTaskWorktree({ repoPath: repo, taskId: 'task-base-1', title: 'Base lineage', worktreeRoot: worktrees });
+    await writeFile(join(worker.worktreePath, 'feature.txt'), 'worker\n');
+    const checkpoint = await commitWorktree({ worktreePath: worker.worktreePath, message: 'ai: worker checkpoint' });
+
+    await writeFile(join(repo, 'main-only.txt'), 'advanced\n'); await exec('git', ['-C', repo, 'add', '.']); await exec('git', ['-C', repo, 'commit', '-m', 'advance main']);
+    const advanced = (await exec('git', ['-C', repo, 'rev-parse', 'HEAD'])).stdout.trim();
+    assert.notEqual(advanced, base);
+
+    const provenBase = await mergeBase({ worktreePath: worker.worktreePath, left: checkpoint.head, right: 'main' });
+    assert.equal(provenBase, base);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
