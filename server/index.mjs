@@ -9,6 +9,7 @@ import { decorateCiDiagnostics } from './core/ci-diagnostics-guard.mjs';
 import { decorateGitHubIntegrity } from './core/github-integrity-guard.mjs';
 import { decorateGitHubPolicy } from './core/github-policy-guard.mjs';
 import { decorateMergeRetry } from './core/merge-retry-guard.mjs';
+import { createRecoverableOpenCode, decorateOpenCodeDispatchRecovery } from './core/opencode-dispatch-safety.mjs';
 import { decorateRunAdmission } from './core/run-admission-guard.mjs';
 import { OpenCodeClient } from './integrations/opencode.mjs';
 import { GitHubClient } from './integrations/github.mjs';
@@ -29,14 +30,16 @@ const importedLegacy = await sqlite.importJsonIfEmpty(legacyDataFile);
 if (importedLegacy) console.log(`AI Dashboard imported legacy JSON state into ${dbFile}`);
 
 const store = new StateStore(legacyDataFile, { persistence: sqlite, onChange: (type, payload) => events.publish(type, payload) });
-const opencode = new OpenCodeClient();
+const rawOpenCode = new OpenCodeClient();
 const github = new GitHubClient();
 
 await store.load();
+const opencode = createRecoverableOpenCode({ client: rawOpenCode, store });
 const research = createResearchService({ store, opencode });
 await research.initialize();
 const baseOrchestrator = createOrchestrator({ store, opencode, github, locks: sqlite });
-const guardedOrchestrator = decorateControlPlane({ orchestrator: baseOrchestrator, store, locks: sqlite, github, opencode });
+const dispatchOrchestrator = decorateOpenCodeDispatchRecovery({ orchestrator: baseOrchestrator, store, opencode });
+const guardedOrchestrator = decorateControlPlane({ orchestrator: dispatchOrchestrator, store, locks: sqlite, github, opencode });
 const admittedOrchestrator = decorateRunAdmission({ orchestrator: guardedOrchestrator, store, locks: sqlite });
 const diagnosticOrchestrator = decorateCiDiagnostics({ orchestrator: admittedOrchestrator, store, github });
 const integrityOrchestrator = decorateGitHubIntegrity({ orchestrator: diagnosticOrchestrator, store, github });
