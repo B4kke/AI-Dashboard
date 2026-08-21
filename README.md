@@ -176,6 +176,7 @@ worker checkpoint
 Fail-closed rules include:
 
 - check/status API outage is `error`/incomplete, never "no CI"
+- pending/error CI reconciliation uses bounded persisted backoff instead of polling GitHub on every autonomy tick
 - required checks must actually exist and succeed
 - required integration identity is enforced when GitHub supplies it
 - merge queue / opaque required-workflow rules block direct autonomous merge

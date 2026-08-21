@@ -176,6 +176,8 @@ GitHub-backed Tasks collect:
 
 Check/status API failures are represented as incomplete/error evidence, never as "no CI". Required checks that are missing after discovery grace fail closed.
 
+Pending/discovering CI and transient evidence errors set a persisted `nextCheckAt` with bounded backoff. Autonomy ticks inside that window do not spend another GitHub evidence request; a restart preserves the same polling budget.
+
 Transient merge failures use bounded durable retry/backoff. Non-transient conflicts stop instead of looping.
 
 ## Persistence and transaction model

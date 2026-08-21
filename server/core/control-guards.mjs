@@ -1,4 +1,4 @@
-import { deleteTaskBranch, listRepositoryWorktrees, removeTaskWorktree, syncBaseBranch } from '../git/worktrees.mjs';
+import { deleteTaskBranch, listRepositoryWorktrees, removeTaskWorktree, syncBaseBranch, worktreePathKey } from '../git/worktrees.mjs';
 
 const DISPATCH_GRACE_SECONDS = 30;
 
@@ -194,11 +194,17 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
     if (result?.state === 'error' || refreshed?.publication?.ci?.state === 'error') {
       const attempts = Math.min(8, Number(refreshed.publication?.ciErrorAttempts || 0) + 1);
       const delaySeconds = Math.min(300, 5 * (2 ** (attempts - 1)));
-      await store.updateTask(taskId, { publication: { ...refreshed.publication, ciErrorAttempts: attempts, nextCheckAt: new Date(Date.now() + delaySeconds * 1000).toISOString() } });
+      await store.updateTask(taskId, { publication: { ...refreshed.publication, ciErrorAttempts: attempts, ciPollAttempts: 0, nextCheckAt: new Date(Date.now() + delaySeconds * 1000).toISOString() } });
       return { ...result, backoffSeconds: delaySeconds };
     }
-    if (refreshed?.publication && (refreshed.publication.ciErrorAttempts || refreshed.publication.nextCheckAt)) {
-      await store.updateTask(taskId, { publication: { ...refreshed.publication, ciErrorAttempts: 0, nextCheckAt: null } });
+    if (refreshed?.state === 'awaiting_ci' && ['pending', 'discovering', 'blocked'].includes(result?.state)) {
+      const attempts = Math.min(6, Number(refreshed.publication?.ciPollAttempts || 0) + 1);
+      const delaySeconds = Math.min(60, 5 * (2 ** (attempts - 1)));
+      await store.updateTask(taskId, { publication: { ...refreshed.publication, ciErrorAttempts: 0, ciPollAttempts: attempts, nextCheckAt: new Date(Date.now() + delaySeconds * 1000).toISOString() } });
+      return { ...result, backoffSeconds: delaySeconds };
+    }
+    if (refreshed?.publication && (refreshed.publication.ciErrorAttempts || refreshed.publication.ciPollAttempts || refreshed.publication.nextCheckAt)) {
+      await store.updateTask(taskId, { publication: { ...refreshed.publication, ciErrorAttempts: 0, ciPollAttempts: 0, nextCheckAt: null } });
     }
     return result;
   }
@@ -276,7 +282,7 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
 
   async function workspaceInventory() {
     const snapshot = store.snapshot();
-    const owned = new Map(snapshot.runs.filter((run) => run.worktreePath).map((run) => [run.worktreePath, run]));
+    const owned = new Map(snapshot.runs.filter((run) => run.worktreePath).map((run) => [worktreePathKey(run.worktreePath), run]));
     const projects = [];
     for (const project of snapshot.projects.filter((item) => item.repoPath)) {
       try {
@@ -284,7 +290,7 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
         projects.push({
           projectId: project.id, projectName: project.name, repoPath: project.repoPath,
           worktrees: worktrees.map((worktree) => {
-            const run = owned.get(worktree.path) || null;
+            const run = owned.get(worktreePathKey(worktree.path)) || null;
             const managedBranch = worktree.branch?.startsWith('ai/') === true;
             return { ...worktree, managedBranch, ownerRunId: run?.id || null, ownerTaskId: run?.taskId || null, abandoned: managedBranch && !run };
           }),

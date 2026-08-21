@@ -43,6 +43,44 @@ test('workspace inventory marks unowned ai worktree as abandoned', async () => {
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('pending GitHub CI polling backs off instead of spending API budget every autonomy tick', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-ci-poll-'));
+  try {
+    const store = new StateStore(join(dir, 'state.json')); await store.load();
+    const project = await store.addProject({ name: 'CI polling', repoPath: dir, repository: 'owner/repo' });
+    const task = await store.addTask({ projectId: project.id, title: 'Wait for CI', state: 'awaiting_ci' });
+    await store.updateTask(task.id, { publication: { provider: 'github', repository: 'owner/repo', prNumber: 2 } });
+    let innerCalls = 0;
+    const guarded = decorateControlPlane({
+      orchestrator: {
+        async reconcilePublishedTask(id) {
+          innerCalls += 1;
+          const current = store.getTask(id);
+          await store.updateTask(id, { publication: { ...current.publication, ci: { state: 'pending', complete: true } } });
+          return { state: 'pending' };
+        },
+      },
+      store,
+      locks,
+    });
+
+    const first = await guarded.reconcilePublishedTask(task.id);
+    assert.equal(first.state, 'pending');
+    assert.equal(first.backoffSeconds, 5);
+    assert.equal(store.getTask(task.id).publication.ciPollAttempts, 1);
+    assert.ok(Date.parse(store.getTask(task.id).publication.nextCheckAt) > Date.now());
+
+    const skipped = await guarded.reconcilePublishedTask(task.id);
+    assert.equal(skipped.state, 'backoff');
+    assert.equal(innerCalls, 1);
+
+    await store.updateTask(task.id, { publication: { ...store.getTask(task.id).publication, nextCheckAt: new Date(Date.now() - 1_000).toISOString() } });
+    const second = await guarded.reconcilePublishedTask(task.id);
+    assert.equal(second.backoffSeconds, 10);
+    assert.equal(innerCalls, 2);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('merge replay recognizes a PR already merged before local state persisted', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-remote-recovery-'));
   const remote = join(dir, 'remote.git'); const seed = join(dir, 'seed'); const repo = join(dir, 'repo');

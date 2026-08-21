@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, win32 } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { promisify } from 'node:util';
 
@@ -30,8 +30,38 @@ export function defaultWorktreeRoot() {
   return resolve(configured);
 }
 
+export function canonicalWorktreePath(value, { platform = process.platform } = {}) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  return platform === 'win32' ? win32.resolve(raw.replaceAll('/', '\\')) : resolve(raw);
+}
+
+export function worktreePathKey(value, options = {}) {
+  const canonical = canonicalWorktreePath(value, options);
+  return options.platform === 'win32' || (!options.platform && process.platform === 'win32')
+    ? canonical?.toLowerCase() || null
+    : canonical;
+}
+
+export function parseRepositoryWorktrees(output, options = {}) {
+  const text = String(output || '').trim();
+  if (!text) return [];
+  return text.split(/\r?\n\r?\n+/).map((block) => {
+    const item = { path: null, head: null, branch: null, bare: false, detached: false, prunable: false };
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith('worktree ')) item.path = canonicalWorktreePath(line.slice(9), options);
+      else if (line.startsWith('HEAD ')) item.head = line.slice(5);
+      else if (line.startsWith('branch ')) item.branch = line.slice(7).replace(/^refs\/heads\//, '');
+      else if (line === 'bare') item.bare = true;
+      else if (line === 'detached') item.detached = true;
+      else if (line.startsWith('prunable')) item.prunable = true;
+    }
+    return item;
+  }).filter((item) => item.path);
+}
+
 export async function inspectRepository(repoPath) {
-  const root = await git(repoPath, ['rev-parse', '--show-toplevel']);
+  const root = canonicalWorktreePath(await git(repoPath, ['rev-parse', '--show-toplevel']));
   const branch = await git(repoPath, ['branch', '--show-current']);
   const head = await git(repoPath, ['rev-parse', 'HEAD']);
   return { root, branch: branch || null, head };
@@ -56,7 +86,7 @@ export async function createTaskWorktree({ repoPath, taskId, title, baseRef = 'H
   const repository = await inspectRepository(repoPath);
   const shortId = String(taskId).replace(/[^a-zA-Z0-9]/g, '').slice(-8) || createHash('sha1').update(String(taskId)).digest('hex').slice(0, 8);
   const slug = slugifyTask(title); const repoKey = createHash('sha256').update(repository.root).digest('hex').slice(0, 12);
-  const branch = `ai/${slug}-${shortId}`; const worktreePath = join(worktreeRoot, repoKey, `${slug}-${shortId}`);
+  const branch = `ai/${slug}-${shortId}`; const worktreePath = canonicalWorktreePath(join(worktreeRoot, repoKey, `${slug}-${shortId}`));
   await mkdir(join(worktreeRoot, repoKey), { recursive: true });
   const safeBase = baseRef === 'HEAD' ? 'HEAD' : safeRef(baseRef, 'Base ref');
   let branchExists = true;
@@ -67,16 +97,7 @@ export async function createTaskWorktree({ repoPath, taskId, title, baseRef = 'H
 
 export async function listRepositoryWorktrees(repoPath) {
   const repository = await inspectRepository(repoPath); const output = await git(repository.root, ['worktree', 'list', '--porcelain']);
-  if (!output) return [];
-  return output.split(/\n\n+/).map((block) => {
-    const item = { path: null, head: null, branch: null, bare: false, detached: false, prunable: false };
-    for (const line of block.split('\n')) {
-      if (line.startsWith('worktree ')) item.path = line.slice(9); else if (line.startsWith('HEAD ')) item.head = line.slice(5);
-      else if (line.startsWith('branch ')) item.branch = line.slice(7).replace(/^refs\/heads\//, ''); else if (line === 'bare') item.bare = true;
-      else if (line === 'detached') item.detached = true; else if (line.startsWith('prunable')) item.prunable = true;
-    }
-    return item;
-  }).filter((item) => item.path);
+  return parseRepositoryWorktrees(output);
 }
 
 export async function removeTaskWorktree({ repoPath, worktreePath, force = false }) {

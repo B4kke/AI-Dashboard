@@ -55,6 +55,9 @@ AI_DASHBOARD_BETA_SUPERVISOR_MODEL=provider/model
 # Required for a FULL beta if Exploration analysis/promotion is to count as passed.
 # It must refer to a configured direct-model provider such as the built-in LM Studio/NVIDIA profiles.
 AI_DASHBOARD_BETA_DIRECT_MODEL=provider/model
+
+# Optional. Defaults to 5000 ms to avoid spending GitHub API budget on a 1-second autonomy loop.
+AI_DASHBOARD_BETA_AUTONOMY_INTERVAL_MS=5000
 ```
 
 The exact repository confirmation is intentional. If `AI_DASHBOARD_BETA_CONFIRM_DISPOSABLE` does not exactly equal `AI_DASHBOARD_BETA_REPOSITORY`, the harness refuses Git mutations.
@@ -125,6 +128,8 @@ AI_DASHBOARD_BETA_DIR=.ai-dashboard-beta/run-2
 ```
 
 Resume reuses the same SQLite/session evidence and skips already-passed destructive scenarios, while rechecking OpenCode health. Repository/path mismatches are rejected rather than silently resuming against a different target.
+
+The harness retries transient loopback failures (`ECONNRESET`, timeout and related socket errors) up to four attempts with linear backoff for read-only dashboard requests. It does not blindly replay mutating requests after an ambiguous connection loss; those remain fail-closed so a lost response cannot silently create duplicate work.
 
 The report result is one of:
 

@@ -11,12 +11,68 @@ const execFileAsync = promisify(execFile);
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const DEFAULT_DASHBOARD_PORT = 7332;
 const DEFAULT_TIMEOUT_MS = 12 * 60_000;
+const DEFAULT_AUTONOMY_INTERVAL_MS = 5_000;
 const POLL_MS = 1_500;
 const TERMINAL_TASK_STATES = new Set(['done', 'needs_input']);
 const ACTIVE_RUN_STATES = new Set(['preparing', 'dispatch_unknown', 'running', 'retrying']);
+const TRANSIENT_DASHBOARD_ERROR_CODES = new Set([
+  'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT',
+  'UND_ERR_BODY_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_SOCKET',
+]);
 
 function clean(value) { return String(value ?? '').trim(); }
 function sleep(ms) { return new Promise((resolveSleep) => setTimeout(resolveSleep, ms)); }
+export function parseBetaAutonomyInterval(value) {
+  if (!clean(value)) return DEFAULT_AUTONOMY_INTERVAL_MS;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1_000 || parsed > 60_000) {
+    throw new Error('AI_DASHBOARD_BETA_AUTONOMY_INTERVAL_MS must be an integer from 1000 to 60000');
+  }
+  return parsed;
+}
+
+export function dashboardNetworkErrorCode(error) {
+  const queue = [error];
+  const seen = new Set();
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || typeof current !== 'object' || seen.has(current)) continue;
+    seen.add(current);
+    if (typeof current.code === 'string' && current.code) return current.code.toUpperCase();
+    if (current.name === 'TimeoutError') return 'ETIMEDOUT';
+    if (current.cause) queue.push(current.cause);
+    if (Array.isArray(current.errors)) queue.push(...current.errors);
+  }
+  return null;
+}
+
+export async function fetchDashboardWithRetry(url, init = {}, {
+  timeoutMs = 20_000,
+  maxAttempts = 4,
+  retryTransient,
+  fetchImpl = globalThis.fetch,
+  sleepImpl = sleep,
+  consume = async (response) => response,
+  onRetry = () => {},
+} = {}) {
+  const method = String(init.method || 'GET').toUpperCase();
+  const retrySafe = retryTransient ?? ['GET', 'HEAD'].includes(method);
+  const attempts = Math.max(1, Number(maxAttempts) || 1);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      return await consume(response);
+    } catch (error) {
+      const code = dashboardNetworkErrorCode(error);
+      if (!retrySafe || !TRANSIENT_DASHBOARD_ERROR_CODES.has(code) || attempt >= attempts) throw error;
+      const delayMs = 250 * attempt;
+      onRetry({ attempt, nextAttempt: attempt + 1, maxAttempts: attempts, code, delayMs });
+      await sleepImpl(delayMs);
+    }
+  }
+  throw new Error('Dashboard request exhausted without a response');
+}
+
 function shortId(value) {
   const compact = clean(value).replace(/[^a-zA-Z0-9]/g, '');
   return compact ? compact.slice(-10) : 'beta';
@@ -178,22 +234,29 @@ class BetaHarness {
     }
   }
 
-  async api(path, { method = 'GET', body, allowError = false, timeoutMs = 20_000 } = {}) {
+  async api(path, { method = 'GET', body, allowError = false, timeoutMs = 20_000, retryTransient } = {}) {
     let response;
+    let responseText;
     try {
-      response = await fetch(`${this.config.dashboardUrl}${path}`, {
+      const result = await fetchDashboardWithRetry(`${this.config.dashboardUrl}${path}`, {
         method,
         headers: body === undefined ? { accept: 'application/json' } : { accept: 'application/json', 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
+      }, {
+        timeoutMs,
+        retryTransient,
+        consume: async (current) => ({ response: current, text: await current.text() }),
+        onRetry: ({ nextAttempt, maxAttempts, code, delayMs }) => this.log(`dashboard ${method} ${path} transient ${code}; retry ${nextAttempt}/${maxAttempts} in ${delayMs}ms`),
       });
+      response = result.response;
+      responseText = result.text;
     } catch (error) {
-      if (allowError) return { ok: false, status: 0, value: null, error: error.message };
+      const code = dashboardNetworkErrorCode(error);
+      if (allowError) return { ok: false, status: 0, value: null, error: code ? `${error.message} (${code})` : error.message };
       throw error;
     }
-    const text = await response.text();
     let value = null;
-    try { value = text ? JSON.parse(text) : null; } catch { value = { raw: text.slice(0, 1000) }; }
+    try { value = responseText ? JSON.parse(responseText) : null; } catch { value = { raw: responseText.slice(0, 1000) }; }
     if (!response.ok && !allowError) throw new Error(value?.error || `Dashboard ${method} ${path} returned HTTP ${response.status}`);
     return allowError ? { ok: response.ok, status: response.status, value } : value;
   }
@@ -227,7 +290,7 @@ class BetaHarness {
         throw error;
       }
       return null;
-    }, { ...options, tick: options.tick !== false });
+    }, { ...options, tick: options.tick === true });
   }
 
   attachLogs(child, file, prefix) {
@@ -247,7 +310,7 @@ class BetaHarness {
       AI_DASHBOARD_PORT: String(this.config.dashboardPort),
       AI_DASHBOARD_DB: this.config.dbFile,
       AI_DASHBOARD_DATA: this.config.legacyFile,
-      AI_DASHBOARD_AUTONOMY_INTERVAL_MS: '1000',
+      AI_DASHBOARD_AUTONOMY_INTERVAL_MS: String(this.config.autonomyIntervalMs),
       ...overrides,
     };
     for (const [key, value] of Object.entries(env)) if (value === undefined || value === null) delete env[key];
@@ -430,7 +493,7 @@ class BetaHarness {
   async runAutonomousTask(spec) {
     await this.patchProject({ mode: 'autonomous', autoMerge: true });
     const task = await this.createTask(spec);
-    const { state } = await this.waitTask(task.id, ['done'], { tick: true });
+    const { state } = await this.waitTask(task.id, ['done']);
     const evidence = this.taskEvidence(state, task.id);
     this.assertMergedEvidence(evidence);
     return evidence;
@@ -646,6 +709,7 @@ async function main() {
     manageOpenCode: args.manageOpenCode || process.env.AI_DASHBOARD_BETA_MANAGE_OPENCODE === '1',
     keepProcesses: args.keepProcesses,
     timeoutMs: args.timeoutMs || Number(process.env.AI_DASHBOARD_BETA_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
+    autonomyIntervalMs: parseBetaAutonomyInterval(process.env.AI_DASHBOARD_BETA_AUTONOMY_INTERVAL_MS),
     repository,
     repoPath,
     runtimeDir,

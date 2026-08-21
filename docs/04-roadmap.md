@@ -87,7 +87,7 @@ Implemented and deterministic/integration-test verified:
 - bounded check-run pagination; later-page failures cannot be hidden
 - GitHub check/status API failure -> incomplete/error evidence, never `none`
 - `requireCi=true` default for GitHub-backed projects
-- CI discovery grace and polling backoff
+- CI discovery grace plus persisted pending/error polling backoff
 - CI failure -> bounded worker repair loop
 - bounded Actions failure diagnostics using workflow/job/failed-step metadata
 - supervisor receives machine worker + GitHub/CI evidence
@@ -105,6 +105,7 @@ Implemented and deterministic/integration-test verified:
 - base `fetch + ff-only` sync before new GitHub work and after remote merge
 - manual Publish / Refresh CI / Review / Merge controls
 - deterministic full-loop integration test: Task -> real local Git worktree/commit/push -> PR test double -> CI failure -> repair -> CI success -> supervisor -> merge
+- Linux CI plus a dedicated Windows portability test job
 - GitHub API URL and remote identity reject credential-bearing URL forms
 - arbitrary GitHub/proxy error response bodies are not persisted into task/CI state
 
