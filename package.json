@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "node --env-file-if-exists=.env --watch server/index.mjs",
     "start": "node --env-file-if-exists=.env server/index.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "beta:pc": "node --env-file-if-exists=.env scripts/pc-beta.mjs"
   }
 }
