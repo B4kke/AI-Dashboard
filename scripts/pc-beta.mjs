@@ -168,12 +168,12 @@ class BetaHarness {
       this.log(`${name}: PASS — ${result.summary}`);
       return result;
     } catch (error) {
-      const status = error?.blocked || !required ? 'blocked' : 'failed';
+      const status = error?.blocked ? 'blocked' : 'failed';
       const result = { status, startedAt: this.session.scenarios[name].startedAt, finishedAt: new Date().toISOString(), summary: error.message, evidence: error.evidence || null };
       this.session.scenarios[name] = result;
       await this.persist();
       this.log(`${name}: ${status.toUpperCase()} — ${error.message}`);
-      if (required && status === 'failed') throw error;
+      if (status === 'failed') throw error;
       return result;
     }
   }
