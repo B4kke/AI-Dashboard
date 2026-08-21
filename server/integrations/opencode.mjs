@@ -44,6 +44,13 @@ export class OpenCodeClient {
     if (parentID) body.parentID = parentID;
     return this.request('/session', { method: 'POST', directory, body });
   }
+  async findSessionByTitle({ directory, title }) {
+    const value = await this.sessions(directory);
+    const sessions = Array.isArray(value) ? value : [];
+    const matches = sessions.filter((session) => session?.title === title && session?.id);
+    if (matches.length > 1) throw new Error(`OpenCode session identity is ambiguous for title ${title}`);
+    return matches[0] || null;
+  }
   messages({ directory, sessionId, limit = 50 }) {
     return this.request(`/session/${encodeURIComponent(sessionId)}/message?limit=${encodeURIComponent(limit)}`, { directory });
   }
