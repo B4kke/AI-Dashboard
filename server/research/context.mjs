@@ -1,9 +1,30 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, relative, resolve, sep } from 'node:path';
 
-const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'coverage', 'vendor', '.cache', '.turbo']);
+const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'coverage', 'vendor', '.cache', '.turbo', '.ssh', '.secrets', 'secrets']);
 const TEXT_EXTENSIONS = new Set(['.md','.mdx','.txt','.json','.jsonc','.js','.mjs','.cjs','.ts','.tsx','.jsx','.py','.go','.rs','.java','.kt','.kts','.toml','.yaml','.yml','.css','.html','.sql','.sh','.ps1']);
 const CORE_NAMES = new Set(['README.md','AGENTS.md','package.json','pyproject.toml','Cargo.toml','go.mod']);
+
+function sensitiveFileName(name) {
+  const lower = String(name || '').toLowerCase();
+  if (lower === '.env' || lower.startsWith('.env.')) return true;
+  if (['.npmrc', '.pypirc', '.netrc', 'id_rsa', 'id_ed25519', 'credentials.json', 'secrets.json', 'secret.json'].includes(lower)) return true;
+  if (/\.(?:pem|key|p12|pfx)$/i.test(lower)) return true;
+  return /(^|[._-])(secret|secrets|credential|credentials|token|tokens|api[-_]?key|private[-_]?key|service[-_]?account)([._-]|$)/i.test(lower);
+}
+
+function containsLikelySecret(text) {
+  const value = String(text || '');
+  if (/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(value)) return true;
+  if (/\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b/.test(value)) return true;
+  const assignment = /(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)\s*["']?\s*[:=]\s*["']([^"'\r\n]{8,})["']/ig;
+  for (const match of value.matchAll(assignment)) {
+    const candidate = match[1].trim();
+    if (!candidate || /^\$\{|^\$[A-Z_]|process\.env|env\.|<[^>]+>|YOUR_|CHANGE_ME|example/i.test(candidate)) continue;
+    return true;
+  }
+  return false;
+}
 
 function terms(query) {
   return [...new Set(String(query || '').toLowerCase().split(/[^a-z0-9æøå_-]+/).filter((word) => word.length >= 3))].slice(0, 24);
@@ -27,7 +48,7 @@ async function walk(root, { maxFiles = 3000 } = {}) {
         if (!EXCLUDED_DIRS.has(entry.name)) await visit(resolve(dir, entry.name));
         continue;
       }
-      if (!entry.isFile()) continue;
+      if (!entry.isFile() || sensitiveFileName(entry.name)) continue;
       const ext = extname(entry.name).toLowerCase();
       if (!TEXT_EXTENSIONS.has(ext) && !CORE_NAMES.has(entry.name)) continue;
       files.push(resolve(dir, entry.name));
@@ -48,17 +69,19 @@ export async function collectProjectContext({ repoPath, query, maxFiles = 18, ma
 
   const selected = [];
   let total = 0;
+  let sensitiveContentSkipped = 0;
   for (const item of ranked.slice(0, Math.max(maxFiles * 4, 40))) {
     if (selected.length >= maxFiles || total >= maxChars) break;
     let text;
     try { text = await readFile(item.path, 'utf8'); } catch { continue; }
+    if (containsLikelySecret(text)) { sensitiveContentSkipped += 1; continue; }
     const remaining = maxChars - total;
     const clipped = text.slice(0, Math.min(remaining, 20_000));
     if (!clipped.trim()) continue;
     selected.push({ path: item.rel, content: clipped, truncated: clipped.length < text.length });
     total += clipped.length;
   }
-  return { root, files: selected, totalChars: total, scannedFiles: candidates.length };
+  return { root, files: selected, totalChars: total, scannedFiles: candidates.length, sensitiveContentSkipped };
 }
 
 export function buildResearchMessages({ project, query, context }) {
