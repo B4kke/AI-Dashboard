@@ -4,6 +4,14 @@ const MAX_CHECK_RUN_PAGES = 10;
 const RULE_PAGE_SIZE = 100;
 const MAX_RULE_PAGES = 10;
 
+function normalizeGitHubApiUrl(value) {
+  let url;
+  try { url = new URL(String(value || '').trim()); } catch { throw new Error('GitHub API URL must be absolute'); }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('GitHub API URL must use http or https');
+  if (url.username || url.password || url.search || url.hash) throw new Error('GitHub API URL must not contain credentials, query parameters or fragments');
+  return url.toString().replace(/\/$/, '');
+}
+
 export function parseGitHubRepository(value) {
   const input = String(value || '').trim().replace(/\.git$/i, '');
   const match = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]{1,100})$/.exec(input);
@@ -21,7 +29,7 @@ export function parseGitHubRemote(value) {
   try {
     const url = new URL(raw);
     if (url.hostname.toLowerCase() !== 'github.com') return null;
-    if (url.password) return null;
+    if (url.username || url.password || url.search || url.hash) return null;
     const parts = url.pathname.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '').split('/');
     if (parts.length !== 2) return null;
     return parseGitHubRepository(parts.join('/'));
@@ -158,7 +166,7 @@ export class GitHubClient {
     token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '',
     timeoutMs = 8000,
   } = {}) {
-    this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.baseUrl = normalizeGitHubApiUrl(baseUrl);
     this.token = token;
     this.timeoutMs = timeoutMs;
   }
@@ -179,8 +187,9 @@ export class GitHubClient {
     });
     if (!response.ok) {
       if (allowNotFound && response.status === 404) return null;
-      const detail = (await response.text()).slice(0, 800);
-      const error = new Error(`GitHub ${method} ${path} returned HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
+      // GitHub errors may be stored on task/publication evidence. Do not persist arbitrary remote
+      // response bodies because GitHub Enterprise/proxies can echo request or credential material.
+      const error = new Error(`GitHub ${method} ${path} returned HTTP ${response.status}`);
       error.name = 'GitHubHttpError';
       error.status = response.status;
       const retryAfter = Number(response.headers.get('retry-after'));
@@ -342,3 +351,5 @@ export class GitHubClient {
     return this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs/heads/${ref}`, { method: 'DELETE' });
   }
 }
+
+export { normalizeGitHubApiUrl };
