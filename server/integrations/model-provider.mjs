@@ -23,6 +23,8 @@ export function normalizeProviderDefinition(input) {
   let baseUrl;
   try { baseUrl = new URL(clean(input?.baseUrl)); } catch { throw new Error('Provider baseUrl must be an absolute URL'); }
   if (!['http:', 'https:'].includes(baseUrl.protocol)) throw new Error('Provider baseUrl must use http or https');
+  if (baseUrl.username || baseUrl.password) throw new Error('Provider baseUrl must not contain credentials; use an environment-variable API key');
+  if (baseUrl.search || baseUrl.hash) throw new Error('Provider baseUrl must not contain query parameters or fragments');
   const apiKeyEnv = clean(input?.apiKeyEnv) || null;
   if (apiKeyEnv && !/^[A-Z_][A-Z0-9_]*$/i.test(apiKeyEnv)) throw new Error('apiKeyEnv is invalid');
   return {
@@ -72,8 +74,10 @@ export class OpenAICompatibleProvider {
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
-      const detail = (await response.text()).slice(0, 1000);
-      throw new Error(`${this.definition.name} ${method} ${path} returned HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
+      const requestId = response.headers.get('x-request-id') || response.headers.get('request-id');
+      // Never copy a remote provider response body into an exception: vendors/proxies may echo request
+      // payloads or credentials, and these errors can later be persisted as run/provider evidence.
+      throw new Error(`${this.definition.name} ${method} ${path} returned HTTP ${response.status}${requestId ? ` (request ${requestId})` : ''}`);
     }
     if (response.status === 204) return null;
     return response.json();
