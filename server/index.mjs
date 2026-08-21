@@ -36,7 +36,7 @@ const github = new GitHubClient();
 
 await store.load();
 const opencode = createRecoverableOpenCode({ client: rawOpenCode, store });
-const research = createResearchService({ store, opencode });
+const research = createResearchService({ store, opencode, locks: sqlite });
 await research.initialize();
 const baseOrchestrator = createOrchestrator({ store, opencode, github, locks: sqlite });
 const dispatchOrchestrator = decorateOpenCodeDispatchRecovery({ orchestrator: baseOrchestrator, store, opencode });
