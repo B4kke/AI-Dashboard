@@ -31,14 +31,18 @@ test('PC beta result is fail-closed across failed, blocked and incomplete scenar
 });
 
 test('PC beta staged task specs force CI-repair and supervisor-rejection paths without weakening gates', () => {
-  const specs = buildBetaTaskSpecs('pcbeta-example');
+  const specs = buildBetaTaskSpecs('pcbeta-20260821-aaaaaaaa');
   assert.match(specs.ciRepair.description, /iteration 1/i);
   assert.match(specs.ciRepair.description, /ci-red/);
   assert.match(specs.ciRepair.description, /ci-green/);
   assert.match(specs.ciRepair.description, /Do not bypass or weaken/i);
   assert.match(specs.supervisorReject.description, /reject-me/);
   assert.match(specs.supervisorReject.description, /independent supervisor/i);
-  assert.ok(specs.supervisorReject.acceptanceCriteria.some((value) => /rejects/i.test(value)));
+  assert.ok(specs.supervisorReject.acceptanceCriteria.some((value) => /approved/i.test(value)));
+  assert.ok(specs.supervisorReject.acceptanceCriteria.every((value) => !/supervisor rejects/i.test(value)));
+
+  const other = buildBetaTaskSpecs('pcbeta-20260821-bbbbbbbb');
+  assert.notEqual(specs.happy.title, other.happy.title, 'different beta sessions must create distinct task names/paths');
 });
 
 test('PC beta report carries scenario status and machine evidence references', () => {
