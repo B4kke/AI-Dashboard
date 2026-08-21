@@ -9,8 +9,29 @@ test('model refs normalize to OpenCode provider/model objects', () => {
   assert.throws(() => normalizeModelRef('missing-slash'), /provider\/model/);
 });
 
-test('provider definitions reject non-http endpoints', () => {
+test('provider definitions reject unsafe URL forms that could persist credentials', () => {
   assert.throws(() => normalizeProviderDefinition({ id: 'bad', baseUrl: 'file:///tmp/api' }), /http or https/);
+  assert.throws(() => normalizeProviderDefinition({ id: 'bad', baseUrl: 'https://user:secret@example.com/v1' }), /must not contain credentials/);
+  assert.throws(() => normalizeProviderDefinition({ id: 'bad', baseUrl: 'https://example.com/v1?token=secret' }), /query parameters/);
+  assert.throws(() => normalizeProviderDefinition({ id: 'bad', baseUrl: 'https://example.com/v1#secret' }), /fragments/);
+});
+
+test('provider HTTP failures do not persist or surface remote response bodies', async () => {
+  const server = createServer((req, res) => {
+    res.statusCode = 401;
+    res.setHeader('x-request-id', 'req-safe-id');
+    res.end('authorization=Bearer SUPER_SECRET echoed request payload');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const provider = new OpenAICompatibleProvider({ id: 'local', name: 'Local', baseUrl: `http://127.0.0.1:${server.address().port}/v1`, local: true });
+    await assert.rejects(
+      () => provider.models(),
+      (error) => error.message.includes('HTTP 401') && error.message.includes('req-safe-id') && !error.message.includes('SUPER_SECRET'),
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test('OpenAI compatible provider discovers models and performs chat', async () => {
