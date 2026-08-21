@@ -4,6 +4,7 @@ data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
 !data/.gitkeep
+.ai-dashboard-beta/
 node_modules/
 .DS_Store
 *.log
