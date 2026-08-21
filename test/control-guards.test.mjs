@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { StateStore } from '../server/core/state-store.mjs';
 import { decorateControlPlane } from '../server/core/control-guards.mjs';
-import { createTaskWorktree } from '../server/git/worktrees.mjs';
+import { createTaskWorktree, worktreePathKey } from '../server/git/worktrees.mjs';
 
 const exec = promisify(execFile);
 const locks = { withLock: async (_key, fn) => fn() };
@@ -38,7 +38,8 @@ test('workspace inventory marks unowned ai worktree as abandoned', async () => {
     const guarded = decorateControlPlane({ orchestrator: {}, store, locks });
     const inventory = await guarded.workspaceInventory();
     assert.equal(inventory.abandonedCount, 1);
-    const found = inventory.projects.find((item) => item.projectId === project.id).worktrees.find((item) => item.path === worktree.worktreePath);
+    const worktreeKey = worktreePathKey(worktree.worktreePath);
+    const found = inventory.projects.find((item) => item.projectId === project.id).worktrees.find((item) => worktreePathKey(item.path) === worktreeKey);
     assert.equal(found.abandoned, true); assert.equal(found.ownerRunId, null);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

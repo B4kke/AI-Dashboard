@@ -45,7 +45,8 @@ test('createTaskWorktree creates an isolated branch outside the repo and invento
     assert.match(result.branch, /^ai\/do-work-/);
     assert.equal(normalizeNewlines(await readFile(join(result.worktreePath, 'README.md'), 'utf8')), 'base\n');
     const inventory = await listRepositoryWorktrees(repo);
-    assert.ok(inventory.some((item) => item.path === result.worktreePath && item.branch === result.branch));
+    const resultPathKey = worktreePathKey(result.worktreePath);
+    assert.ok(inventory.some((item) => worktreePathKey(item.path) === resultPathKey && item.branch === result.branch));
     await removeTaskWorktree({ repoPath: repo, worktreePath: result.worktreePath, force: true });
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
