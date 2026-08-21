@@ -3,9 +3,15 @@ import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
+const SECURITY_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'x-frame-options': 'DENY',
+  'content-security-policy': "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+};
 
 function json(response, status, value) {
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  response.writeHead(status, { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   response.end(`${JSON.stringify(value)}\n`);
 }
 
@@ -45,14 +51,12 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
     if (request.method === 'POST' && providerDiscover) return json(response, 200, await research.discoverProvider(decodeURIComponent(providerDiscover[1])));
 
     if (request.method === 'POST' && url.pathname === '/api/explorations') return json(response, 201, await store.addExploration(await body(request)));
-    const explorationPatch = url.pathname.match(/^\/api\/explorations\/([^/]+)$/);
-    if (request.method === 'PATCH' && explorationPatch) return json(response, 200, await store.updateExploration(decodeURIComponent(explorationPatch[1]), await body(request)));
     const explorationAnalyze = url.pathname.match(/^\/api\/explorations\/([^/]+)\/analyze$/);
     if (request.method === 'POST' && explorationAnalyze) {
       return json(response, 202, await research.startExplorationRun({ explorationId: decodeURIComponent(explorationAnalyze[1]), ...(await body(request)) }));
     }
     const explorationPromote = url.pathname.match(/^\/api\/explorations\/([^/]+)\/promote$/);
-    if (request.method === 'POST' && explorationPromote) return json(response, 200, await store.promoteExploration(decodeURIComponent(explorationPromote[1]), await body(request)));
+    if (request.method === 'POST' && explorationPromote) return json(response, 200, await research.promoteExploration(decodeURIComponent(explorationPromote[1]), await body(request)));
     const explorationRetry = url.pathname.match(/^\/api\/exploration-runs\/([^/]+)\/retry$/);
     if (request.method === 'POST' && explorationRetry) return json(response, 202, await research.retryExplorationRun(decodeURIComponent(explorationRetry[1])));
 
@@ -101,19 +105,23 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
     const relativePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
     const filePath = resolve(publicDir, relativePath); const prefix = publicDir.endsWith(sep) ? publicDir : `${publicDir}${sep}`;
     if (filePath !== resolve(publicDir, 'index.html') && !filePath.startsWith(prefix)) return false;
-    try { const content = await readFile(filePath); response.writeHead(200, { 'content-type': MIME[extname(filePath)] || 'application/octet-stream' }); response.end(content); return true; }
-    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    try {
+      const content = await readFile(filePath);
+      response.writeHead(200, { ...SECURITY_HEADERS, 'content-type': MIME[extname(filePath)] || 'application/octet-stream' });
+      response.end(content);
+      return true;
+    } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
   }
 
   return createServer(async (request, response) => {
     try {
       const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
       if (url.pathname.startsWith('/api/')) { const handled = await api(request, response, url); if (handled === false) json(response, 404, { error: 'API route not found' }); return; }
-      if (!(await staticFile(response, url.pathname))) { response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }); response.end('Not found\n'); }
+      if (!(await staticFile(response, url.pathname))) { response.writeHead(404, { ...SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' }); response.end('Not found\n'); }
     } catch (error) {
       const message = String(error?.message || error || 'Request failed');
       const status = /not found/i.test(message) ? 404
-        : /already in progress|cannot .* from state|requires at least one|already promoted|integrity review|required$/i.test(message) ? 409
+        : /already in progress|cannot .* from state|already promoted|integrity review|cannot be promoted while|already has an active/i.test(message) ? 409
         : /required|valid .*id|choose .*model|invalid|request body too large|JSON/i.test(message) ? 400
         : 500;
       json(response, status, { error: message });
