@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { SqliteControlStore } from '../server/core/sqlite-control.mjs';
 import { SCHEMA_VERSION, StateStore } from '../server/core/state-store.mjs';
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 test('SQLite control state survives reopen and journals transitions with revisions', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-sqlite-'));
   const dbPath = join(dir, 'control.sqlite'); const legacy = join(dir, 'state.json');
@@ -44,6 +46,27 @@ test('SQLite operation locks are exclusive and released after the owner exits', 
     const b = await new SqliteControlStore(dbPath, { lockTtlMs: 30_000 }).initialize();
     assert.equal(a.acquire('task:123', 'owner-a'), true); assert.equal(b.acquire('task:123', 'owner-b'), false); assert.equal(a.listLocks().length, 1);
     a.release('task:123', 'owner-a'); assert.equal(b.acquire('task:123', 'owner-b'), true); b.release('task:123', 'owner-b');
+    a.close(); b.close();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('withLock renews a live lease so another connection cannot enter after the original TTL', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-lock-renew-')); const dbPath = join(dir, 'control.sqlite');
+  try {
+    const a = await new SqliteControlStore(dbPath, { lockTtlMs: 1_200 }).initialize();
+    const b = await new SqliteControlStore(dbPath, { lockTtlMs: 1_200 }).initialize();
+    let entered = false;
+    const held = a.withLock('task:renew', async () => {
+      entered = true;
+      await sleep(1_650);
+      return 'done';
+    });
+    while (!entered) await sleep(5);
+    await sleep(1_300);
+    assert.equal(b.acquire('task:renew', 'owner-b', 1_200), false);
+    assert.equal(await held, 'done');
+    assert.equal(b.acquire('task:renew', 'owner-b', 1_200), true);
+    b.release('task:renew', 'owner-b');
     a.close(); b.close();
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
