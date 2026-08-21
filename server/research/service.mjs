@@ -8,7 +8,18 @@ function providerView(provider) {
   };
 }
 
-export function createResearchService({ store, opencode }) {
+class InProcessKeyLocks {
+  constructor() { this.held = new Set(); }
+  async withLock(key, fn) {
+    if (this.held.has(key)) throw new Error(`Operation already in progress for ${key}`);
+    this.held.add(key);
+    try { return await fn(); } finally { this.held.delete(key); }
+  }
+}
+
+export function createResearchService({ store, opencode, locks = new InProcessKeyLocks() }) {
+  const explorationLock = (id, fn) => locks.withLock(`exploration:${id}:lifecycle`, fn);
+
   async function recoverInterruptedDirectModelRuns() {
     const snapshot = store.snapshot();
     const now = new Date().toISOString();
@@ -104,22 +115,40 @@ export function createResearchService({ store, opencode }) {
   }
 
   async function startExplorationRun(input) {
-    const exploration = store.getExploration(input?.explorationId);
-    if (!exploration) throw new Error('Valid explorationId is required');
-    if (exploration.promotedProjectId) throw new Error('Exploration is already promoted; use project research for further analysis');
-    const model = input?.model?.trim?.() || exploration.model;
-    if (!model) throw new Error('Choose an exploration model in provider/model format');
-    formatModelRef(model);
-    if (model !== exploration.model) await store.updateExploration(exploration.id, { model });
-    const run = await store.createExplorationRun({ explorationId: exploration.id, kind: input.kind, model, prompt: exploration.notes || exploration.title });
-    queueMicrotask(() => executeExplorationRun(run.id));
-    return run;
+    const explorationId = input?.explorationId;
+    if (!explorationId) throw new Error('Valid explorationId is required');
+    return explorationLock(explorationId, async () => {
+      const exploration = store.getExploration(explorationId);
+      if (!exploration) throw new Error('Valid explorationId is required');
+      if (exploration.promotedProjectId) throw new Error('Exploration is already promoted; use project research for further analysis');
+      const active = store.explorationRunsFor(exploration.id).find((run) => ['queued', 'running'].includes(run.status));
+      if (active) throw new Error(`Exploration already has an active ${active.kind} run (${active.id})`);
+      const model = input?.model?.trim?.() || exploration.model;
+      if (!model) throw new Error('Choose an exploration model in provider/model format');
+      formatModelRef(model);
+      if (model !== exploration.model) await store.updateExploration(exploration.id, { model });
+      const run = await store.createExplorationRun({ explorationId: exploration.id, kind: input.kind, model, prompt: exploration.notes || exploration.title });
+      queueMicrotask(() => executeExplorationRun(run.id));
+      return run;
+    });
   }
 
   async function retryExplorationRun(id) {
     const previous = store.getExplorationRun(id);
     if (!previous) throw new Error('Exploration run not found');
     return startExplorationRun({ explorationId: previous.explorationId, kind: previous.kind, model: previous.model });
+  }
+
+  async function promoteExploration(id, input = {}) {
+    return explorationLock(id, async () => {
+      const exploration = store.getExploration(id);
+      if (!exploration) throw new Error('Exploration not found');
+      if (!exploration.promotedProjectId) {
+        const active = store.explorationRunsFor(id).find((run) => ['queued', 'running'].includes(run.status));
+        if (active) throw new Error(`Exploration cannot be promoted while ${active.kind} run ${active.id} is active`);
+      }
+      return store.promoteExploration(id, input);
+    });
   }
 
   async function executeResearch(runId) {
@@ -183,6 +212,7 @@ export function createResearchService({ store, opencode }) {
     discoverProvider,
     startExplorationRun,
     retryExplorationRun,
+    promoteExploration,
     startResearch,
     retryResearch,
     openCodeModels,
