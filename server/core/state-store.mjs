@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+const SCHEMA_VERSION = 6;
 const DEFAULT_AUTONOMY = Object.freeze({
   mode: 'manual', supervisorRole: 'supervisor', plannerRole: 'planner', workerRole: 'builder',
   maxConcurrentRuns: 2, maxTaskIterations: 4, maxRunMinutes: 45, maxRetryAttempts: 5,
@@ -9,10 +10,24 @@ const DEFAULT_AUTONOMY = Object.freeze({
   ciDiscoverySeconds: 30, requireCi: true, mergeMethod: 'squash', deleteRemoteBranch: true,
 });
 const DEFAULT_MODEL_POLICY = Object.freeze({ codingModel: null, planningModel: null, supervisorModel: null, researchModel: null });
-const EMPTY_STATE = Object.freeze({ schemaVersion: 5, revision: 0, projects: [], ideas: [], tasks: [], agents: [], runs: [], researchRuns: [], modelProviders: [], integrations: {} });
+const EMPTY_STATE = Object.freeze({
+  schemaVersion: SCHEMA_VERSION,
+  revision: 0,
+  explorations: [],
+  explorationRuns: [],
+  projects: [],
+  ideas: [],
+  tasks: [],
+  agents: [],
+  runs: [],
+  researchRuns: [],
+  modelProviders: [],
+  integrations: {},
+});
 
 function cloneEmpty() { return structuredClone(EMPTY_STATE); }
 function stringList(value) { return Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : []; }
+function boundedText(value, maxChars = 40_000) { return String(value || '').trim().slice(0, maxChars); }
 function modelPolicy(input = {}) {
   const out = { ...structuredClone(DEFAULT_MODEL_POLICY) };
   for (const key of Object.keys(out)) out[key] = input?.[key]?.trim?.() || null;
@@ -35,24 +50,48 @@ function autonomy(input = {}) {
     deleteRemoteBranch: input.deleteRemoteBranch !== false,
   };
 }
+function projectRecord(input, now = new Date().toISOString()) {
+  if (!input?.name?.trim()) throw new Error('Project name is required');
+  return {
+    id: input.id || randomUUID(),
+    name: input.name.trim(),
+    repoPath: input.repoPath?.trim() || null,
+    repository: input.repository?.trim() || null,
+    baseBranch: input.baseBranch?.trim() || 'main',
+    status: input.status || 'active',
+    brief: boundedText(input.brief, 60_000) || null,
+    sourceExplorationId: input.sourceExplorationId || null,
+    sourceExplorationRunId: input.sourceExplorationRunId || null,
+    autonomy: autonomy(input.autonomy),
+    modelPolicy: modelPolicy(input.modelPolicy),
+    verificationCommands: stringList(input.verificationCommands),
+    createdAt: input.createdAt || now,
+    updatedAt: now,
+  };
+}
 
 function normalizeState(parsed) {
-  const state = parsed ? { ...cloneEmpty(), ...parsed, schemaVersion: 5 } : cloneEmpty();
+  const state = parsed ? { ...cloneEmpty(), ...parsed, schemaVersion: SCHEMA_VERSION } : cloneEmpty();
   if (!Number.isInteger(state.revision) || state.revision < 0) state.revision = 0;
-  if (!Array.isArray(state.projects)) state.projects = [];
-  if (!Array.isArray(state.ideas)) state.ideas = [];
-  if (!Array.isArray(state.tasks)) state.tasks = [];
-  if (!Array.isArray(state.agents)) state.agents = [];
-  if (!Array.isArray(state.runs)) state.runs = [];
-  if (!Array.isArray(state.researchRuns)) state.researchRuns = [];
-  if (!Array.isArray(state.modelProviders)) state.modelProviders = [];
+  for (const key of ['explorations', 'explorationRuns', 'projects', 'ideas', 'tasks', 'agents', 'runs', 'researchRuns', 'modelProviders']) {
+    if (!Array.isArray(state[key])) state[key] = [];
+  }
   if (!state.integrations || typeof state.integrations !== 'object' || Array.isArray(state.integrations)) state.integrations = {};
 
   state.projects = state.projects.map((project) => ({
+    brief: null,
+    sourceExplorationId: null,
+    sourceExplorationRunId: null,
     ...project,
     autonomy: autonomy(project.autonomy),
     modelPolicy: modelPolicy(project.modelPolicy),
     verificationCommands: stringList(project.verificationCommands),
+  }));
+  state.explorations = state.explorations.map((exploration) => ({
+    state: 'draft', model: null, promotedProjectId: null, promotedAt: null, ...exploration,
+  }));
+  state.explorationRuns = state.explorationRuns.map((run) => ({
+    kind: 'analysis', harness: 'direct-model', report: null, reasoning: null, usage: null, error: null, ...run,
   }));
   state.tasks = state.tasks.map((task) => ({
     publication: null,
@@ -71,7 +110,6 @@ export class StateStore {
     this.onChange = onChange;
     this.persistence = persistence;
     this.state = cloneEmpty();
-    // All mutations are serialized here. Failed persistence never poisons later operations.
     this.mutationChain = Promise.resolve();
   }
 
@@ -97,16 +135,118 @@ export class StateStore {
 
   snapshot() { return structuredClone(this.state); }
 
+  async addExploration(input) {
+    return this.#mutate('exploration.created', (state) => {
+      if (!input?.title?.trim()) throw new Error('Exploration title is required');
+      const now = new Date().toISOString();
+      const exploration = {
+        id: randomUUID(),
+        title: input.title.trim(),
+        notes: boundedText(input.notes, 40_000),
+        model: input.model?.trim?.() || null,
+        state: 'draft',
+        promotedProjectId: null,
+        promotedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      state.explorations.push(exploration);
+      return exploration;
+    });
+  }
+
+  async updateExploration(id, patch) {
+    return this.#mutate('exploration.updated', (state) => {
+      const exploration = state.explorations.find((item) => item.id === id);
+      if (!exploration) throw new Error('Exploration not found');
+      if (patch.title !== undefined) exploration.title = boundedText(patch.title, 500);
+      if (patch.notes !== undefined) exploration.notes = boundedText(patch.notes, 40_000);
+      if (patch.model !== undefined) exploration.model = patch.model?.trim?.() || null;
+      if (patch.state !== undefined) exploration.state = patch.state;
+      exploration.updatedAt = new Date().toISOString();
+      return exploration;
+    });
+  }
+
+  async createExplorationRun(input) {
+    return this.#mutate('exploration-run.created', (state) => {
+      const exploration = state.explorations.find((item) => item.id === input?.explorationId);
+      if (!exploration) throw new Error('Valid explorationId is required');
+      const kind = input.kind === 'research' ? 'research' : 'analysis';
+      const model = input.model?.trim?.() || exploration.model;
+      if (!model) throw new Error('Exploration model is required');
+      const now = new Date().toISOString();
+      const run = {
+        id: randomUUID(), explorationId: exploration.id, kind, harness: 'direct-model', model,
+        prompt: boundedText(input.prompt || exploration.notes || exploration.title, 40_000),
+        status: 'queued', report: null, reasoning: null, usage: null, resolvedModel: null,
+        error: null, createdAt: now, updatedAt: now, startedAt: null, finishedAt: null,
+      };
+      state.explorationRuns.push(run);
+      exploration.state = 'queued';
+      exploration.updatedAt = now;
+      return run;
+    });
+  }
+
+  async updateExplorationRun(id, patch) {
+    return this.#mutate('exploration-run.updated', (state) => {
+      const run = state.explorationRuns.find((item) => item.id === id);
+      if (!run) throw new Error('Exploration run not found');
+      const normalized = { ...patch };
+      if (normalized.report !== undefined) normalized.report = boundedText(normalized.report, 120_000) || null;
+      if (normalized.reasoning !== undefined) normalized.reasoning = boundedText(normalized.reasoning, 60_000) || null;
+      Object.assign(run, normalized, { updatedAt: new Date().toISOString() });
+      const exploration = state.explorations.find((item) => item.id === run.explorationId);
+      if (exploration) {
+        if (run.status === 'completed') exploration.state = exploration.promotedProjectId ? 'promoted' : 'ready';
+        else if (run.status === 'failed') exploration.state = 'needs_input';
+        else if (run.status === 'running') exploration.state = 'analyzing';
+        exploration.updatedAt = new Date().toISOString();
+      }
+      return run;
+    });
+  }
+
+  async promoteExploration(id, input = {}) {
+    return this.#mutate('exploration.promoted', (state) => {
+      const exploration = state.explorations.find((item) => item.id === id);
+      if (!exploration) throw new Error('Exploration not found');
+      if (exploration.promotedProjectId) {
+        const existing = state.projects.find((item) => item.id === exploration.promotedProjectId);
+        if (!existing) throw new Error('Exploration promotion points to a missing project; manual integrity review required');
+        return { project: existing, exploration, created: false };
+      }
+
+      const completedRuns = state.explorationRuns
+        .filter((run) => run.explorationId === id && run.status === 'completed' && run.report)
+        .sort((a, b) => (b.finishedAt || b.updatedAt || b.createdAt).localeCompare(a.finishedAt || a.updatedAt || a.createdAt));
+      const selected = input.reportRunId
+        ? completedRuns.find((run) => run.id === input.reportRunId)
+        : completedRuns[0];
+      if (input.reportRunId && !selected) throw new Error('Selected exploration report is not completed or does not belong to this exploration');
+
+      const brief = boundedText(input.brief || selected?.report || exploration.notes || exploration.title, 60_000);
+      const now = new Date().toISOString();
+      const project = projectRecord({
+        ...input,
+        name: input.name?.trim() || exploration.title,
+        brief,
+        sourceExplorationId: exploration.id,
+        sourceExplorationRunId: selected?.id || null,
+      }, now);
+      state.projects.push(project);
+      exploration.promotedProjectId = project.id;
+      exploration.promotedAt = now;
+      exploration.state = 'promoted';
+      exploration.updatedAt = now;
+      return { project, exploration, created: true };
+    }, ({ project }) => project, ({ created }) => created ? 'exploration.promoted' : 'exploration.promotion_replayed');
+  }
+
   async addProject(input) {
     return this.#mutate('project.created', (state) => {
-      if (!input?.name?.trim()) throw new Error('Project name is required');
-      const now = new Date().toISOString();
-      const project = {
-        id: randomUUID(), name: input.name.trim(), repoPath: input.repoPath?.trim() || null,
-        repository: input.repository?.trim() || null, baseBranch: input.baseBranch?.trim() || 'main', status: 'active',
-        autonomy: autonomy(input.autonomy), modelPolicy: modelPolicy(input.modelPolicy), verificationCommands: stringList(input.verificationCommands),
-        createdAt: now, updatedAt: now,
-      };
+      const project = projectRecord(input);
       state.projects.push(project);
       return project;
     });
@@ -119,6 +259,7 @@ export class StateStore {
       if (patch.autonomy) project.autonomy = autonomy({ ...project.autonomy, ...patch.autonomy });
       if (patch.modelPolicy) project.modelPolicy = modelPolicy({ ...project.modelPolicy, ...patch.modelPolicy });
       if (patch.verificationCommands !== undefined) project.verificationCommands = stringList(patch.verificationCommands);
+      if (patch.brief !== undefined) project.brief = boundedText(patch.brief, 60_000) || null;
       for (const key of ['name', 'repoPath', 'repository', 'baseBranch', 'status']) if (patch[key] !== undefined) project[key] = patch[key];
       project.updatedAt = new Date().toISOString();
       return project;
@@ -169,12 +310,15 @@ export class StateStore {
     });
   }
 
+  getExploration(id) { return structuredClone(this.state.explorations.find((item) => item.id === id) || null); }
+  getExplorationRun(id) { return structuredClone(this.state.explorationRuns.find((item) => item.id === id) || null); }
   getProject(id) { return structuredClone(this.state.projects.find((item) => item.id === id) || null); }
   getIdea(id) { return structuredClone(this.state.ideas.find((item) => item.id === id) || null); }
   getTask(id) { return structuredClone(this.state.tasks.find((item) => item.id === id) || null); }
   getRun(id) { return structuredClone(this.state.runs.find((item) => item.id === id) || null); }
   getResearchRun(id) { return structuredClone(this.state.researchRuns.find((item) => item.id === id) || null); }
   getModelProvider(id) { return structuredClone(this.state.modelProviders.find((item) => item.id === id) || null); }
+  explorationRunsFor(explorationId) { return structuredClone(this.state.explorationRuns.filter((item) => item.explorationId === explorationId)); }
   tasksForProject(projectId) { return structuredClone(this.state.tasks.filter((item) => item.projectId === projectId)); }
   runsForProject(projectId) { return structuredClone(this.state.runs.filter((item) => item.projectId === projectId)); }
   ideasForProject(projectId) { return structuredClone(this.state.ideas.filter((item) => item.projectId === projectId)); }
@@ -272,14 +416,12 @@ export class StateStore {
       next.revision = Number(this.state.revision || 0) + 1;
       const eventPayload = structuredClone(result);
 
-      // Persistence is the commit point. Visible memory and SSE events advance only afterwards.
       await this.#persistSnapshot(next, eventType, eventPayload);
       this.state = next;
       this.onChange(eventType, structuredClone(eventPayload));
       return structuredClone(result);
     });
 
-    // Keep the serialization queue usable after a rejected mutation.
     this.mutationChain = operation.then(() => undefined, () => undefined);
     return operation;
   }
@@ -303,4 +445,4 @@ export class StateStore {
   }
 }
 
-export { DEFAULT_AUTONOMY, DEFAULT_MODEL_POLICY };
+export { DEFAULT_AUTONOMY, DEFAULT_MODEL_POLICY, SCHEMA_VERSION };
