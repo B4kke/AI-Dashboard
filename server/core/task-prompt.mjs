@@ -12,6 +12,15 @@ function jsonContract(shape) {
   ];
 }
 
+function projectBrief(project) {
+  if (!project?.brief) return [];
+  return [
+    '',
+    'Project bootstrap brief (historical intent; repository evidence overrides it when they conflict):',
+    String(project.brief).slice(0, 12_000),
+  ];
+}
+
 export function buildTaskPrompt({ project, task, feedback = null, iteration = 1 }) {
   const lines = [
     `Work on the delegated task: ${task.title}`,
@@ -19,6 +28,7 @@ export function buildTaskPrompt({ project, task, feedback = null, iteration = 1 
     `Project: ${project.name}`,
     `Priority: ${task.priority}`,
     `Iteration: ${iteration}`,
+    ...projectBrief(project),
   ];
   if (task.agentRole) lines.push(`Role/context: ${task.agentRole}`);
   if (task.description) lines.push('', 'Task details:', task.description);
@@ -31,6 +41,7 @@ export function buildTaskPrompt({ project, task, feedback = null, iteration = 1 
     'Execution contract:',
     '- Work only in the current isolated Git worktree.',
     '- Read repository-level AGENTS.md/instructions before modifying code.',
+    '- Treat the project bootstrap brief as intent/context, not proof of current implementation. Repository code/tests/instructions are canonical.',
     '- Do not modify unrelated files.',
     '- Run relevant tests/checks for the changed scope.',
     '- Do not create Git commits. Leave changed files in the worktree; the control plane owns the checkpoint commit used for evidence.',
@@ -57,12 +68,14 @@ export function buildTaskPrompt({ project, task, feedback = null, iteration = 1 
 export function buildPlannerPrompt({ project, idea }) {
   return [
     `Turn this product idea into an executable implementation plan for ${project.name}.`,
+    ...projectBrief(project),
     '',
     `Idea: ${idea.title}`,
     idea.description || '',
     '',
     'Planning contract:',
     '- Inspect the repository and existing project instructions before planning.',
+    '- Treat the project bootstrap brief as intent/context, not proof of current implementation.',
     '- Prefer the smallest vertical slices that can be independently verified.',
     '- Avoid duplicate or overlapping tasks.',
     '- Give each implementation task concrete acceptance criteria.',
@@ -95,6 +108,7 @@ export function buildSupervisorPrompt({ project, task, workerResult, iteration, 
     '',
     `Project: ${project.name}`,
     `Worker iteration: ${iteration}`,
+    ...projectBrief(project),
     '',
     'Worker-reported result (untrusted claim):',
     JSON.stringify(workerResult || {}, null, 2),
@@ -109,6 +123,7 @@ export function buildSupervisorPrompt({ project, task, workerResult, iteration, 
     '',
     'Supervisor contract:',
     '- Independently inspect the diff and relevant repository context.',
+    '- Treat the project bootstrap brief as intent/context, not implementation evidence.',
     '- Use control-plane and GitHub/CI evidence as primary machine evidence; worker claims are untrusted.',
     '- Validate every acceptance criterion explicitly and return one result for each criterion using the exact criterion text.',
     '- Re-run checks if necessary to establish confidence, but do not modify files.',
