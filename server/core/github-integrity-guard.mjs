@@ -1,3 +1,5 @@
+import { mergeBase } from '../git/worktrees.mjs';
+
 function identityMatches(project, worker, evidence) {
   return Boolean(worker?.checkpointHead && worker?.branch)
     && evidence?.headSha === worker.checkpointHead
@@ -11,7 +13,16 @@ function hasActiveCiBackoff(task) {
   return Number.isFinite(nextCheckAt) && nextCheckAt > Date.now();
 }
 
-export function decorateGitHubIntegrity({ orchestrator, store, github }) {
+async function defaultResolveWorkerBaseSha(worker, project) {
+  if (!worker?.worktreePath || !worker?.checkpointHead) throw new Error('Verified worker workspace/checkpoint is missing');
+  return mergeBase({
+    worktreePath: worker.worktreePath,
+    left: worker.checkpointHead,
+    right: project?.baseBranch || 'main',
+  });
+}
+
+export function decorateGitHubIntegrity({ orchestrator, store, github, resolveWorkerBaseSha = defaultResolveWorkerBaseSha }) {
   async function blockIntegrity(task, project, evidence, message, { merged = false, blockProject = false } = {}) {
     await store.updateTask(task.id, {
       state: 'needs_input',
@@ -45,17 +56,17 @@ export function decorateGitHubIntegrity({ orchestrator, store, github }) {
       return { task, project, evidence, merged, blocked: await blockIntegrity(task, project, evidence, `${message}${merged ? ' Project autonomy is blocked for integrity review.' : ' Autonomous progress is blocked.'}`, { merged, blockProject: merged }) };
     }
 
-    const publishedBaseSha = task.publication?.publishedBaseSha || null;
-    if (!publishedBaseSha) {
-      const message = 'GitHub publication is missing the recorded base-branch SHA; the control plane cannot prove which base the worker checkpoint and CI were reviewed against.';
+    const workerBaseSha = task.publication?.workerBaseSha || task.publication?.publishedBaseSha || null;
+    if (!workerBaseSha) {
+      const message = 'GitHub publication is missing the Git-proven worker base SHA; the control plane cannot prove which base the checkpoint and CI were reviewed against.';
       return { task, project, evidence, merged, blocked: await blockIntegrity(task, project, evidence, message, { merged, blockProject: merged }) };
     }
     if (!evidence?.baseSha) {
       const message = 'GitHub PR evidence did not expose the current base-branch SHA; autonomous review/merge is blocked fail-closed.';
       return { task, project, evidence, merged, blocked: await blockIntegrity(task, project, evidence, message, { merged, blockProject: merged }) };
     }
-    if (evidence.baseSha !== publishedBaseSha) {
-      const message = `GitHub base branch moved after publication; reviewed base ${publishedBaseSha}, current base ${evidence.baseSha}. ${merged ? 'The PR was merged against an unreviewed base; project autonomy is blocked.' : 'Re-sync/revalidate the task before autonomous review or merge.'}`;
+    if (evidence.baseSha !== workerBaseSha) {
+      const message = `GitHub base branch does not match the worker's Git-proven baseline; worker base ${workerBaseSha}, current PR base ${evidence.baseSha}. ${merged ? 'The PR was merged against an unreviewed base; project autonomy is blocked.' : 'Re-sync/rebase, rerun verification/CI and obtain a new supervisor review before autonomous merge.'}`;
       return { task, project, evidence, merged, blocked: await blockIntegrity(task, project, evidence, message, { merged, blockProject: merged }) };
     }
 
@@ -71,17 +82,28 @@ export function decorateGitHubIntegrity({ orchestrator, store, github }) {
     const worker = orchestrator.latestWorker?.(task.id) || null;
     const evidence = await github.pullRequestEvidence({ repository: project.repository, number: task.publication.prNumber });
     if (!identityMatches(project, worker, evidence)) {
-      const message = 'GitHub PR identity changed while recording the publication baseline; autonomous progress is blocked.';
-      return blockIntegrity(task, project, evidence, message);
+      return blockIntegrity(task, project, evidence, 'GitHub PR identity changed while recording the publication baseline; autonomous progress is blocked.');
     }
     if (!evidence?.baseSha) {
       return blockIntegrity(task, project, evidence, 'GitHub PR evidence did not expose a base SHA while recording the publication baseline; autonomous progress is blocked.');
     }
+
+    let workerBaseSha;
+    try {
+      workerBaseSha = await resolveWorkerBaseSha(worker, project);
+    } catch (error) {
+      return blockIntegrity(task, project, evidence, `Could not establish the worker's Git merge-base before CI/review: ${error.message}`);
+    }
+    if (!workerBaseSha || evidence.baseSha !== workerBaseSha) {
+      return blockIntegrity(task, project, evidence, `GitHub base moved before publication could establish a safe review baseline; worker merge-base ${workerBaseSha || 'unknown'}, PR base ${evidence.baseSha}. Re-sync/rebase and rerun the worker before review.`);
+    }
+
     await store.updateTask(task.id, {
       publication: {
         ...task.publication,
         ...evidence,
-        publishedBaseSha: evidence.baseSha,
+        workerBaseSha,
+        publishedBaseSha: workerBaseSha,
         integrityError: null,
         lastCheckedAt: new Date().toISOString(),
       },
