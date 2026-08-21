@@ -1,14 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { GitHubClient, aggregateGitHubChecks, parseGitHubRemote, parseGitHubRepository } from '../server/integrations/github.mjs';
+import { GitHubClient, aggregateGitHubChecks, normalizeGitHubApiUrl, parseGitHubRemote, parseGitHubRepository } from '../server/integrations/github.mjs';
 
 test('repository and remote parsing stay strict', () => {
   assert.equal(parseGitHubRepository('OpenHands/OpenHands').fullName, 'OpenHands/OpenHands');
   assert.equal(parseGitHubRemote('git@github.com:B4kke/AI-Dashboard.git').fullName, 'B4kke/AI-Dashboard');
   assert.equal(parseGitHubRemote('https://github.com/B4kke/AI-Dashboard.git').fullName, 'B4kke/AI-Dashboard');
   assert.equal(parseGitHubRemote('https://example.com/B4kke/AI-Dashboard.git'), null);
+  assert.equal(parseGitHubRemote('https://token@github.com/B4kke/AI-Dashboard.git'), null);
   assert.throws(() => parseGitHubRepository('https://github.com/x/y'));
+  assert.throws(() => normalizeGitHubApiUrl('https://user:secret@api.github.test'), /must not contain credentials/);
+  assert.throws(() => normalizeGitHubApiUrl('https://api.github.test?token=secret'), /must not contain credentials/);
 });
 
 test('check aggregation fails closed on failed, pending or unavailable evidence', () => {
@@ -41,6 +44,24 @@ test('client normalizes pull request and CI evidence', async () => {
     assert.equal(evidence.headSha, 'abc');
     assert.equal(evidence.ci.state, 'success');
     assert.equal(evidence.ci.complete, true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('GitHub HTTP failures never persist arbitrary remote response bodies', async () => {
+  const server = createServer((req, res) => {
+    res.statusCode = 503;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ message: 'proxy echoed secret-value-that-must-not-leak' }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new GitHubClient({ baseUrl: `http://127.0.0.1:${server.address().port}`, token: 'test' });
+    await assert.rejects(
+      () => client.repository('B4kke/AI-Dashboard'),
+      (error) => error.status === 503 && !error.message.includes('secret-value-that-must-not-leak'),
+    );
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
