@@ -4,6 +4,137 @@ This checklist is the first real end-to-end dogfood gate for AI Dashboard.
 
 It is intentionally stricter than "the UI opened". The goal is to prove that the real OpenCode + Git + GitHub/Actions control loop behaves like the deterministic tests claim.
 
+## Automated harness
+
+The preferred beta entrypoint is now the outer harness in `scripts/pc-beta.mjs`:
+
+```bash
+npm run beta:pc -- --smoke
+npm run beta:pc -- --full --manage-opencode
+npm run beta:pc -- --resume --manage-opencode
+```
+
+The harness is the test controller. OpenCode remains the real worker/supervisor dependency; it does not grade its own beta.
+
+The harness:
+
+- starts an isolated AI Dashboard instance on `127.0.0.1:7332` by default
+- uses an isolated SQLite database under `.ai-dashboard-beta/`
+- requires an explicit disposable-repository confirmation before mutating Git/GitHub
+- creates a unique `beta/pc-*` base branch instead of writing directly to the repository's normal base branch
+- installs a minimal beta verification fixture and GitHub Actions workflow on that beta branch
+- drives real Tasks through worker -> checkpoint -> PR -> CI -> supervisor -> merge
+- deliberately exercises CI failure/repair in full mode
+- deliberately exercises supervisor rejection/rework in full mode
+- restarts the isolated dashboard during an active worker run
+- can stop/restart a harness-owned OpenCode server to test runner outage handling
+- advances the disposable beta base branch to test stale-base rejection
+- creates an unowned `ai/*` worktree to test abandoned-worktree detection
+- temporarily points the isolated dashboard at an unreachable GitHub API endpoint to verify fail-closed outage behavior
+- persists session state and writes both JSON and Markdown evidence reports
+- does not delete evidence automatically when a scenario fails
+
+### Required beta environment
+
+The test repository must already exist on GitHub and be cloned locally. The harness intentionally does **not** create or delete GitHub repositories.
+
+Put the beta settings in the AI Dashboard `.env` file or export them in the shell:
+
+```text
+AI_DASHBOARD_BETA_REPOSITORY=OWNER/DISPOSABLE-REPO
+AI_DASHBOARD_BETA_REPO_PATH=C:\path\to\disposable-repo
+AI_DASHBOARD_BETA_CONFIRM_DISPOSABLE=OWNER/DISPOSABLE-REPO
+
+GITHUB_TOKEN=...
+OPENCODE_URL=http://127.0.0.1:4096
+
+# Optional but recommended: pin real OpenCode models used by the beta.
+AI_DASHBOARD_BETA_CODING_MODEL=provider/model
+AI_DASHBOARD_BETA_SUPERVISOR_MODEL=provider/model
+
+# Required for a FULL beta if Exploration analysis/promotion is to count as passed.
+# It must refer to a configured direct-model provider such as the built-in LM Studio/NVIDIA profiles.
+AI_DASHBOARD_BETA_DIRECT_MODEL=provider/model
+```
+
+The exact repository confirmation is intentional. If `AI_DASHBOARD_BETA_CONFIRM_DISPOSABLE` does not exactly equal `AI_DASHBOARD_BETA_REPOSITORY`, the harness refuses Git mutations.
+
+For the full OpenCode-outage test, stop any separately managed OpenCode server on the beta port and use:
+
+```bash
+npm run beta:pc -- --full --manage-opencode
+```
+
+The harness then starts OpenCode using the equivalent of:
+
+```text
+opencode serve --hostname 127.0.0.1 --port 4096
+```
+
+If a custom launch command is required, provide an argument array rather than a shell command string:
+
+```text
+AI_DASHBOARD_BETA_OPENCODE_COMMAND_JSON=["opencode","serve","--hostname","127.0.0.1","--port","4096"]
+```
+
+### Smoke versus full
+
+`--smoke` proves the shortest external path:
+
+1. disposable Git fixture/base branch
+2. OpenCode health
+3. optional Exploration analysis/promotion when a direct model is configured
+4. real worker
+5. checkpoint + local verification
+6. real PR/Actions
+7. independent supervisor
+8. real merge with checkpoint/base/tree evidence
+
+`--full` additionally attempts:
+
+1. deliberate CI failure -> repair -> new checkpoint -> green CI
+2. deliberate supervisor rejection -> worker correction -> re-review
+3. dashboard restart during an active worker
+4. OpenCode outage/recovery without duplicate worker Run
+5. moved base-branch rejection
+6. abandoned worktree detection
+7. GitHub API outage fail-closed behavior
+
+A full run is `blocked`, not `passed`, if a scenario cannot actually be exercised. For example, the OpenCode-outage scenario is blocked if the harness does not own the OpenCode process, and Exploration is blocked if no direct model is configured.
+
+### Resume and evidence
+
+The default beta runtime directory is:
+
+```text
+.ai-dashboard-beta/
+```
+
+It contains the isolated SQLite database, process logs, persisted `session.json`, and reports under `reports/`.
+
+A fresh run refuses to overwrite an existing session. Continue it with:
+
+```bash
+npm run beta:pc -- --resume --manage-opencode
+```
+
+or choose a new evidence directory:
+
+```text
+AI_DASHBOARD_BETA_DIR=.ai-dashboard-beta/run-2
+```
+
+Resume reuses the same SQLite/session evidence and skips already-passed destructive scenarios, while rechecking OpenCode health. Repository/path mismatches are rejected rather than silently resuming against a different target.
+
+The report result is one of:
+
+- `passed` — every exercised required scenario passed and no scenario is blocked
+- `blocked` — evidence is incomplete or a scenario could not safely be exercised
+- `failed` — an asserted integrity/idempotency invariant was violated
+- `incomplete` — a run stopped before reaching a verdict
+
+The harness deliberately leaves PRs/worktrees/branches/evidence available for inspection. Cleanup is a separate deliberate action.
+
 ## Scope
 
 Beta assumptions:
@@ -27,7 +158,7 @@ On the PC:
 - normal GitHub Git authentication working (SSH agent or credential helper)
 - a narrowly scoped GitHub token/API credential for the disposable test repository
 - a disposable GitHub repository with GitHub Actions enabled
-- at least one required verification command in the test Project, for example `npm test`
+- at least one configured OpenCode coding model, or a working OpenCode default model
 
 Keep secrets in environment variables. Do not put tokens/passwords into Project fields, URLs, task text or repository files.
 
@@ -38,18 +169,16 @@ From the AI Dashboard checkout/branch under test:
 ```bash
 node --version
 npm test
-npm start
 ```
 
 Expected:
 
 - Node is 22+
 - full local test suite passes
-- dashboard opens on `http://127.0.0.1:7331`
+- the automated harness can start its isolated dashboard on `http://127.0.0.1:7332`
 - `/api/health` reports SQLite persistence
-- OpenCode may be offline before the coding portion, but the dashboard remains usable
 
-Record the exact Git commit SHA used for beta. Do not switch code revisions mid-run without recording it.
+Record the exact Git commit SHA used for beta. The harness records it automatically. Do not switch code revisions mid-run without starting a new beta evidence directory.
 
 ## 1. Exploration smoke test
 
@@ -58,7 +187,7 @@ Before creating a Project:
 1. Create an Exploration.
 2. Run Analyze with a configured direct model.
 3. Confirm a report is stored.
-4. Click Create Project twice/retry the HTTP action if practical.
+4. Promote the Exploration twice/replay the action.
 
 Expected:
 
@@ -67,17 +196,17 @@ Expected:
 - Project contains bootstrap brief/source linkage
 - repeated promotion returns/reuses the same Project
 
+The automated full harness performs this when `AI_DASHBOARD_BETA_DIRECT_MODEL` is configured.
+
 ## 2. Real OpenCode worker smoke test
 
 Register the disposable repository as a Project with:
 
 - local `repoPath`
 - GitHub `owner/repository`
-- correct base branch
+- the harness-created beta base branch
 - verification command(s)
 - `requireCi=true`
-
-Create a tiny Task with explicit acceptance criteria, for example adding a tested helper or changing a fixture.
 
 Expected:
 
@@ -91,8 +220,6 @@ Expected:
 
 ## 3. Real GitHub PR + CI success path
 
-Publish the verified Task.
-
 Expected:
 
 - local origin matches configured repository
@@ -100,77 +227,70 @@ Expected:
 - one PR is created/reused
 - PR head equals checkpoint SHA
 - GitHub checks/status are collected
-- required checks are present and successful
+- required checks are present and successful when configured by the repository policy
 - supervisor starts only after CI/policy evidence is acceptable
 - supervisor is read-only
 - final verification/head/tree gate runs before merge
 - merge uses expected head SHA
-- recorded merge evidence is consistent with reviewed checkpoint/tree
-- worktree/branch cleanup happens according to Project policy
+- recorded merge evidence contains PR/head/base, worker tree/base and merge SHA
 
 ## 4. Deliberate CI failure -> repair
 
-Create a Task/change that deliberately causes one GitHub Actions check to fail while keeping the failure safe/reversible.
+The harness fixture includes a CI-only policy around `beta-ci.txt`. Local control-plane verification remains green on the first staged worker iteration while GitHub CI intentionally fails. The repair worker must then change the file to the allowed final value without weakening the policy.
 
 Expected:
 
 - CI state becomes failure, never success/none
 - failed workflow/job/step metadata is visible to the repair loop
-- Task returns to bounded worker repair when autonomy/policy allows
-- a new worker iteration repairs the repository
+- Task returns to bounded worker repair
+- at least one additional worker iteration occurs
 - same logical PR is reused rather than duplicated
 - new checkpoint/head is published
-- CI must become green before supervisor approval/merge
+- CI becomes green before supervisor approval/merge
 
 ## 5. Supervisor rejection path
 
-Create a Task where the first worker result intentionally fails one acceptance criterion or otherwise gives the supervisor a valid reason to request changes.
+The staged worker is instructed to leave an intentionally wrong first repository value that violates the final repository acceptance criterion. The supervisor must reject that checkpoint; only the later corrected checkpoint can be approved.
 
 Expected:
 
-- supervisor does not approve
-- no merge occurs
+- first supervisor does not approve
+- no merge occurs for the rejected checkpoint
 - required changes/feedback are persisted
-- Task returns to bounded worker iteration or `needs_input` according to policy/budget
-- later approval references the corrected checkpoint, not the rejected one
+- a later worker iteration corrects the repository
+- a new supervisor reviews the corrected checkpoint
+- final approval references the corrected checkpoint, not the rejected one
 
 ## 6. OpenCode outage
 
-Start a coding Task, then make OpenCode temporarily unavailable during a safe point in the run.
+Start a coding Task, then make the harness-owned OpenCode process unavailable during the active worker run.
 
 Expected:
 
 - dashboard/control plane remains alive
 - runner unavailability is explicit
-- no duplicate worker/session is created automatically
+- no duplicate worker Run/session is created automatically
 - no task is marked done because the runner disappeared
-- after recovery/reconciliation the same known session/outcome is used when possible
-- ambiguous dispatch becomes blocked/uncertain rather than replayed blindly
+- after restart/reconciliation the original persisted worker identity remains authoritative
+- ambiguous dispatch is blocked/uncertain rather than replayed blindly
 
 ## 7. Process restart in flight
 
-During a real worker run, restart AI Dashboard without deleting state/worktrees.
+During a real worker run, restart the isolated AI Dashboard process without deleting its beta SQLite/worktrees.
 
 Expected:
 
 - SQLite state/revision survives restart
 - active/incomplete run is recovered according to persisted dispatch phase
 - a prompt with uncertain acknowledgement is not silently re-sent
-- a pre-prompt orphan session can be cleaned safely
 - task does not jump directly to done
-- worktree inventory remains coherent
+- no new worker Run is created merely because the control-plane process restarted
 
-Also perform one restart while a direct-model Research/Exploration request is in flight.
-
-Expected:
-
-- interrupted direct-model run becomes failed/unknown-outcome
-- it is not automatically replayed
-- explicit retry is required
+Direct-model restart recovery remains covered by deterministic tests; it can also be manually dogfooded if desired because deliberately killing a provider request at exactly the right moment is timing-sensitive.
 
 ## 8. Base branch movement
 
-After a worker checkpoint exists but before review/merge, advance the disposable repository base branch independently.
+After a worker checkpoint/PR exists but before review/merge, advance the disposable beta base branch independently.
 
 Expected:
 
@@ -181,53 +301,56 @@ Expected:
 
 ## 9. Abandoned worktree recovery
 
-Create/leave a managed `ai/*` worktree without a matching active owner Run (use the disposable repo only).
+Create/leave a managed `ai/*` worktree without a matching owner Run.
 
 Expected:
 
 - `/api/workspaces` inventory reports it as abandoned/unowned
-- normal active worktrees are not misclassified
-- cleanup is deliberate; no uncontrolled recursive deletion of arbitrary paths
+- normal active/completed owned worktrees are not misclassified
+- cleanup is not performed automatically by the beta harness
 
 ## 10. GitHub/API outage and retry behavior
 
-Temporarily make GitHub API unavailable or use a safe test that causes a transient API failure.
+The automated full harness restarts the isolated dashboard with `GITHUB_API_URL` pointing to an unreachable loopback endpoint while a real PR is awaiting GitHub evidence.
 
 Expected:
 
-- CI/policy evidence becomes unavailable/error, never success
+- CI/policy evidence cannot advance to success/review
 - review/merge is blocked
-- transient operations use bounded backoff
-- repeated control calls do not create duplicate PRs/merges
-- non-transient merge conflicts stop rather than retry forever
+- task remains fail-closed
+- restoring the real GitHub API does not create a duplicate PR
+
+Durable transient merge backoff/retry-budget behavior remains separately covered by deterministic tests.
 
 ## Evidence to capture
 
-For each scenario record:
+For each scenario the harness report stores or links as much of the following as is available:
 
 - AI Dashboard commit SHA
+- beta session ID
 - Project/Task/Run IDs
 - worker checkpoint SHA/tree
+- Git-proven worker base SHA
 - PR number/head/base
 - CI/check state
-- supervisor verdict
-- merge SHA/tree when applicable
-- relevant control-plane evidence/error state
-- whether restart/retry created any duplicate external object
+- supervisor runs/verdict path
+- merge SHA when applicable
+- relevant task/control-plane error state
+- whether restart/retry created an unexpected additional worker Run
 
 ## Beta pass criteria
 
 PC beta passes only when:
 
 - normal happy path completes end to end
-- deliberate CI failure repairs correctly
-- supervisor rejection cannot merge
-- restart does not duplicate worker/provider/GitHub side effects
-- OpenCode outage fails closed
+- deliberate CI failure repairs correctly in full mode
+- supervisor rejection cannot merge the rejected checkpoint in full mode
+- dashboard restart does not duplicate worker Runs
+- managed OpenCode outage fails closed in full mode
 - GitHub evidence outage fails closed
 - moved base cannot merge stale work
 - abandoned worktree is detectable
-- final merge/checkpoint/base evidence remains internally consistent
+- final merge/checkpoint/base/tree evidence remains internally consistent
 
 If any integrity or idempotency case is ambiguous, mark beta **failed/blocked** and preserve the evidence for the next fix.
 
