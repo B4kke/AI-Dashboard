@@ -37,6 +37,14 @@ export async function inspectRepository(repoPath) {
   return { root, branch: branch || null, head };
 }
 
+export async function mergeBase({ worktreePath, left = 'HEAD', right }) {
+  const safeLeft = left === 'HEAD' ? 'HEAD' : safeRef(left, 'Merge-base left ref');
+  const safeRight = safeRef(right, 'Merge-base right ref');
+  const head = await git(worktreePath, ['merge-base', safeLeft, safeRight]);
+  if (!/^[0-9a-f]{40,64}$/i.test(head)) throw new Error('Git merge-base did not return a commit SHA');
+  return head;
+}
+
 export async function createTaskWorktree({ repoPath, taskId, title, baseRef = 'HEAD', worktreeRoot = defaultWorktreeRoot() }) {
   const repository = await inspectRepository(repoPath);
   const shortId = String(taskId).replace(/[^a-zA-Z0-9]/g, '').slice(-8) || createHash('sha1').update(String(taskId)).digest('hex').slice(0, 8);
