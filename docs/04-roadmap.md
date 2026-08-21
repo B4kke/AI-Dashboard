@@ -1,123 +1,187 @@
 # Roadmap
 
-> Current focus: harden and prove the existing autonomous GitHub loop. Feature breadth is frozen until the safety/recovery gates below are satisfied.
+> Current focus: finish the hardened foundation and prove it against a real PC/OpenCode/GitHub loop. Feature breadth remains frozen until the PC beta gate below has been exercised.
+
+## Pre-project Exploration — IMPLEMENTED / BETA-CANDIDATE
+
+Implemented and deterministic-test covered:
+
+- global `Exploration` object independent of Project/Idea
+- direct-model Analyze and research-style report runs
+- no repo/worktree/coding Run before Project promotion
+- persisted ExplorationRun/report/model/usage/error history
+- fail-closed restart handling for interrupted direct-model calls; no automatic replay of an unknown provider outcome
+- one durable lifecycle lock prevents concurrent analyze/research/promotion races
+- explicit idempotent `Exploration -> Project` promotion
+- latest completed report becomes Project bootstrap brief with source linkage
+- bootstrap brief is context for planner/worker/supervisor/research, never implementation evidence
+- mobile-friendly Exploration UI
+
+Current limitation:
+
+- Exploration research mode is model analysis only; it has no live web/source-retrieval provider yet and prompts explicitly forbid fabricated source claims.
 
 ## M0 — Control surface boots — DONE
 
 - local server and responsive UI
-- persisted project/task/run state
-- SSE event channel
+- SQLite/WAL persisted state + transition journal
+- SSE event channel with broken/backpressured-client isolation
 - OpenCode health/session visibility
 - tested Git worktree primitives
 
-## M1 — Autonomous local control loop — ACTIVE / HARDENING
-
-Implemented and isolated-test verified:
-
-- project workspace registration
-- direct Task creation and manual delegation; Ideas remain optional
-- versioned, role-specific planner/worker/supervisor result contracts
-- bare worker `success` rejected
-- worktree allocation and reuse across bounded iterations
-- OpenCode session/message/status integration
-- selected model passed into OpenCode runs
-- run reconciliation with independent timeout/retry budgets
-- fail-closed uncertain OpenCode dispatch handling: a lost `prompt_async` acknowledgement cannot launch a duplicate worker
-- worker checkpoint commit owned by the control plane
-- actual Git parent->checkpoint diff evidence
-- control-plane verification commands executed without shell interpolation
-- worker success with no repository change is rejected
-- independent read-only supervisor
-- supervisor must explicitly verify every acceptance criterion
-- final repository/verification gate rerun before merge
-- bounded `changes_requested -> worker retry` loop
-- project autonomy modes: manual / assisted / autonomous
-- concurrency policy
-- SQLite/WAL default control state with monotonic revision
-- snapshot + transition journal committed in the same SQLite transaction
-- durable operation locks with leases
-- failed persistence cannot advance visible in-memory state or poison later writes
-- stale SQLite snapshot cannot overwrite a newer revision
-- restart recovery for incomplete/active worker and supervisor state
-- crash replay for checkpoint commit created before state persistence
-- worktree inventory with abandoned managed-worktree detection
-- local fast-forward merge and cleanup
-- direct Task UI with description, acceptance criteria, dependencies, model and verification configuration
-- Task evidence endpoint/view over worker/supervisor/control-plane evidence
-
-Still needed before M1 is closed:
-
-- real end-to-end run against an actual OpenCode server
-- physical/process-failure dogfood across OpenCode outage/restart, not only deterministic test doubles
-- cleanup/recovery dogfood against abandoned real worktrees
-- structured coding-run usage/cost capture is deferred while feature breadth is frozen
-
-## M2 — GitHub feedback loop — ACTIVE / HARDENING
+## M1 — Autonomous local control loop — ACTIVE / BETA-CANDIDATE
 
 Implemented and isolated/integration-test verified:
 
+- project workspace registration
+- direct Task creation and manual delegation; Ideas remain optional
+- versioned planner/worker/supervisor result contracts
+- bare worker `success` rejected
+- isolated worktree allocation/reuse across bounded iterations
+- OpenCode session/message/status integration
+- per-Run selected model
+- deterministic run-scoped OpenCode session identity
+- lost create-session acknowledgement read-recovery without duplicate session creation
+- fail-closed uncertain `prompt_async` acknowledgement handling
+- persisted dispatch phases for restart diagnosis
+- worker checkpoint commit owned by control plane
+- Git parent/head/tree/diff evidence
+- control-plane verification commands executed without shell interpolation
+- verification stdout/stderr/command evidence secret redaction before persistence
+- worker success with no repository change rejected
+- independent read-only supervisor
+- supervisor must verify every acceptance criterion
+- final repository/verification gate rerun before merge
+- bounded `changes_requested -> worker retry` loop
+- manual / assisted / autonomous project modes
+- concurrency, iteration, run-time and retry budgets
+- SQLite/WAL control state with monotonic revision
+- snapshot + transition event committed atomically
+- durable operation leases with renewal
+- failed persistence cannot advance visible state
+- stale revision writers rejected
+- restart recovery for incomplete/active worker/supervisor state
+- replay handling for checkpoint commit created before state persistence
+- worktree inventory with abandoned managed-worktree detection
+- local fast-forward merge and cleanup
+- Task UI with description, criteria, dependencies, model and verification config
+- Task evidence endpoint/view
+
+Still required to close M1:
+
+- real PC/OpenCode dogfood against an actual repository
+- process restart during a real OpenCode run
+- actual OpenCode outage/reconnect
+- abandoned real worktree inventory/cleanup test
+
+## M2 — GitHub feedback loop — ACTIVE / BETA-CANDIDATE
+
+Implemented and deterministic/integration-test verified:
+
 - strict `owner/repository` binding and local-origin identity validation
-- bounded/shell-free Git branch push using host credential helper or SSH agent
-- create or reuse task PRs
-- publish read-repair after lost GitHub acknowledgement, only when branch/base/head identity matches the verified checkpoint
-- normalized GitHub PR/head/base/merge evidence
-- check-runs + individual commit-status context ingestion
-- check-runs pagination; failures beyond the first 100 checks cannot be hidden
-- GitHub CI API failure becomes `error`/incomplete evidence, never `none`
-- `requireCi=true` by default for GitHub-backed projects
-- CI discovery grace period for newly-created PRs
-- CI outage polling backoff preserved across integrity guards
-- CI failure -> bounded autonomous worker repair loop
-- bounded GitHub Actions failure diagnostics using workflow/job/failed-step metadata; raw job logs are intentionally not persisted or added to prompts
-- supervisor receives machine-generated worker + GitHub/CI evidence
-- PR head/base and CI revalidated after supervisor approval
-- GitHub active branch rules + classic branch-protection evidence are read fail-closed
-- required status-check contexts must exist and be successful; GitHub App/integration identity is enforced when specified
-- merge-queue rules and opaque required-workflow rules block direct autonomous merge rather than being bypassed
-- expected-head-SHA guarded GitHub merge
-- durable bounded merge retry/backoff for transient network/5xx/rate-limit failures; non-transient merge conflicts stop immediately
-- externally merged PR recovery only succeeds when the merged PR head/base still matches the independently reviewed checkpoint
-- externally merged identity drift blocks project autonomy for integrity review
-- worker/PR base lineage is proven with Git `merge-base`, not timestamps: base movement before publication or after publication blocks autonomous review/merge until work is re-synced and revalidated
+- shell-free Git branch push through host Git credentials/SSH agent
+- create/reuse task PRs
+- publish read-repair after lost GitHub acknowledgement only when branch/base/head identity matches checkpoint
+- normalized PR/head/base/merge evidence
+- check-runs + legacy commit-status ingestion
+- bounded check-run pagination; later-page failures cannot be hidden
+- GitHub check/status API failure -> incomplete/error evidence, never `none`
+- `requireCi=true` default for GitHub-backed projects
+- CI discovery grace and polling backoff
+- CI failure -> bounded worker repair loop
+- bounded Actions failure diagnostics using workflow/job/failed-step metadata
+- supervisor receives machine worker + GitHub/CI evidence
+- PR head/base/CI revalidated after review
+- active branch rulesets + classic branch protection read fail-closed
+- required check context and integration identity enforcement
+- merge-queue/opaque required-workflow rules block direct autonomous merge
+- expected-head-SHA guarded merge
+- transient merge retry/backoff with bounded durable budget
+- non-transient merge conflicts stop immediately
+- externally merged PR recovery requires reviewed head/base/tree identity
+- base movement detected by Git `merge-base` and blocks continuation
 - configurable merge method (`squash` default)
-- optional remote branch + local worktree/branch cleanup
-- base branch `fetch + ff-only` sync before new GitHub-backed worker work and after remote merge
-- manual Publish / Refresh CI / Review / Merge controls in dashboard
-- deterministic full-loop CI test: Task -> worker -> real Git worktree/commit/push -> PR test double -> CI failure -> repair -> CI success -> supervisor -> merge
-- current PR hardening suite: 72 tests passing on Node 22, including merge retry, required-check/ruleset policy, CI diagnostics, and worker/base SHA lineage
+- optional remote branch/local worktree cleanup
+- base `fetch + ff-only` sync before new GitHub work and after remote merge
+- manual Publish / Refresh CI / Review / Merge controls
+- deterministic full-loop integration test: Task -> real local Git worktree/commit/push -> PR test double -> CI failure -> repair -> CI success -> supervisor -> merge
+- GitHub API URL and remote identity reject credential-bearing URL forms
+- arbitrary GitHub/proxy error response bodies are not persisted into task/CI state
 
-Still needed before M2 is closed:
+Still required to close M2:
 
-- one real disposable GitHub repository/PR/Actions dogfood combined with a real OpenCode worker
-- repeat that real loop across CI failure/repair, process restart, OpenCode outage, moved base branch and supervisor rejection
-- prove branch-rules/required-check behavior against a real protected GitHub branch, not only deterministic HTTP test doubles
-- prove GitHub Actions job/step diagnostics against a real failed Actions run
-- confirm remote merge SHA / reviewed checkpoint / Git-proven base lineage against real GitHub merge evidence
-- evaluate whether a safely redacted raw log tail is needed after real dogfood; raw Actions logs remain deliberately excluded until secret-redaction guarantees are credible
+- one disposable **real GitHub repository + Actions** combined with a real OpenCode worker
+- repeat real loop across deliberate CI failure/repair
+- repeat with moved base branch
+- repeat with supervisor rejection
+- verify branch rules/required checks against real protected branch
+- verify Actions failed-job/failed-step diagnostics against a real failed run
+- confirm real remote merge SHA/tree/checkpoint/base-lineage evidence
 
-Deferred while hardening is the priority:
+Deferred until M1/M2 real-loop proof:
 
-- GitHub issue import/sync
-- webhook/event ingestion
+- GitHub issue sync
+- webhooks
 - PR review-comment integration
+- raw Actions log ingestion
 
 ## M3 — Agent & model platform — EARLY SLICE / FEATURE-FROZEN
 
 Already implemented and retained:
 
-- `Harness != Provider != Model` domain separation
-- selected model persisted on each coding Run
-- project model policy with coding/planning/supervisor/research defaults
+- `Harness != Provider != Model`
+- model persisted on coding Run
+- project model defaults for coding/planning/supervisor/research
 - per-Task coding model override
-- correct OpenCode `{ providerID, modelID }` request shape
-- OpenCode provider/model catalog discovery
+- OpenCode `{ providerID, modelID }` request shape/catalog discovery
 - generic OpenAI-compatible direct provider adapter
-- built-in LM Studio and NVIDIA API Catalog/NIM profiles
-- custom OpenAI-compatible provider registration
-- direct read-only Research Runs with bounded repository context, report, model, usage and context-file evidence
+- LM Studio and NVIDIA provider profiles
+- custom provider registration
+- provider URL secret-channel validation
+- arbitrary provider response bodies excluded from persisted error text
+- read-only Project Research Runs with bounded repository context/report/model/usage evidence
+- common secret path/content filtering before repository context is sent to external models
 
-No additional M3 breadth is prioritized until M1/M2 safety gates are proven end-to-end.
+No ACP/Codex/Claude/provider breadth before the PC beta loop is proven.
+
+## PC beta gate — NEXT REAL VERIFICATION
+
+The code may be called **ready to start PC beta** only when the exact final PR head has:
+
+- syntax checks green
+- complete Node test suite green
+- GitHub Actions green
+- no known P0/P1 single-instance local-control-plane blocker
+- current README/architecture/AGENTS/roadmap consistent with code
+
+The PC beta itself then verifies what deterministic CI cannot:
+
+1. real OpenCode session/prompt/reconciliation
+2. real local worktree + checkpoint/verification
+3. real disposable GitHub PR + Actions
+4. deliberate CI failure -> worker repair -> CI success
+5. independent supervisor approve/reject paths
+6. expected-head merge and cleanup
+7. restart while work is in flight
+8. OpenCode outage
+9. moved base branch
+10. abandoned worktree recovery
+
+A failed beta scenario is evidence to fix the control plane, not permission to weaken a gate.
+
+### Beta scope boundary
+
+PC beta is **single control-plane instance, loopback/private access**. It is not a claim of production-safe multi-instance distributed autonomy.
+
+Durable leases exist, but the current design does not yet provide full fencing tokens for irreversible side effects after lease ownership loss. Multi-instance hosted autonomy remains a post-beta reliability gate.
 
 ## M4 — Automation and remote operations — DEFERRED
 
-No M4 implementation should be prioritized before the current control loop is proven safe, idempotent and recoverable.
+No public remote deployment or automation/fleet breadth before:
+
+- authentication
+- authorization
+- audit log
+- kill switch
+- hardened runner registration/identity
+- production-grade persistence/lease fencing for the selected deployment topology
