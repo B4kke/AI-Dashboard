@@ -13,6 +13,13 @@ export function normalizeOpenCodeUrl(value) {
   return url.toString().replace(/\/$/, '');
 }
 
+const OPENCODE_BUILTIN_AGENTS = new Set(['build', 'plan', 'general']);
+
+export function normalizeOpencodeAgent(agent) {
+  const value = String(agent ?? '').trim();
+  return OPENCODE_BUILTIN_AGENTS.has(value) ? value : undefined;
+}
+
 export class OpenCodeClient {
   constructor({
     baseUrl = process.env.OPENCODE_URL || 'http://127.0.0.1:4096',
@@ -65,7 +72,7 @@ export class OpenCodeClient {
   }
   promptAsync({ directory, sessionId, prompt, agent, model }) {
     const body = { parts: [{ type: 'text', text: prompt }] };
-    if (agent) body.agent = agent;
+    if (normalizeOpencodeAgent(agent)) body.agent = normalizeOpencodeAgent(agent);
     if (model) body.model = normalizeModelRef(model);
     return this.request(`/session/${encodeURIComponent(sessionId)}/prompt_async`, {
       method: 'POST', directory, body, timeoutMs: 10_000,

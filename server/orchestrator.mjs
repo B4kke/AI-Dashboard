@@ -2,6 +2,7 @@ import { validateResultContract, extractResult, latestAssistantText } from './co
 import { buildPlannerPrompt, buildSupervisorPrompt, buildTaskPrompt } from './core/task-prompt.mjs';
 import { verifyBeforeMerge, verifyWorkerCheckpoint } from './core/evidence-gate.mjs';
 import { parseGitHubRemote, parseGitHubRepository } from './integrations/github.mjs';
+import { normalizeOpencodeAgent } from './integrations/opencode.mjs';
 import {
   commitWorktree,
   createTaskWorktree,
@@ -80,7 +81,7 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       const session = await opencode.createSession({ directory: worktreePath, title });
       if (!session?.id) throw new Error('OpenCode did not return a session id');
       run = await store.updateRun(run.id, { sessionId: session.id, status: 'running', startedAt: new Date().toISOString() });
-      await opencode.promptAsync({ directory: worktreePath, sessionId: session.id, prompt, agent: task.agentRole || undefined, model: task.model || undefined });
+      await opencode.promptAsync({ directory: worktreePath, sessionId: session.id, prompt, agent: normalizeOpencodeAgent(task.agentRole), model: task.model || undefined });
       return store.getRun(run.id);
     } catch (error) {
       await store.updateRun(run.id, { status: 'failed', error: error.message, finishedAt: new Date().toISOString() });
