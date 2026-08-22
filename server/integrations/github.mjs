@@ -78,7 +78,7 @@ export function aggregateGitHubChecks({ checkRuns = [], combinedStatus = null, e
   }
 
   const legacyState = combinedStatus?.state || null;
-  if (!legacyStatuses.length && legacyState && legacyState !== 'success') {
+  if (!legacyStatuses.length && legacyState && legacyState !== 'success' && legacyState !== 'pending') {
     checks.push({ id: 'combined-status', name: 'commit status', status: legacyState, conclusion: legacyState, state: legacyState === 'pending' ? 'pending' : 'failure', url: null, appId: null, source: 'combined-status' });
   }
 

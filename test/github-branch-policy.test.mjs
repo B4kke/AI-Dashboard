@@ -26,6 +26,15 @@ test('legacy commit status contexts are preserved as individual CI evidence', ()
   assert.equal(ci.checks[0].source, 'commit-status');
 });
 
+test('empty combined commit status with pending aggregate does not block successful check runs', () => {
+  const ci = aggregateGitHubChecks({
+    checkRuns: [{ id: 1, name: 'beta', status: 'completed', conclusion: 'success', app: { id: 15368 } }],
+    combinedStatus: { state: 'pending', statuses: [] },
+  });
+  assert.equal(ci.state, 'success');
+  assert.equal(ci.checks.some((check) => check.source === 'combined-status'), false);
+});
+
 test('GitHub client reads branch rules and classic protection fail-closed', async () => {
   const server = createServer((req, res) => {
     res.setHeader('content-type', 'application/json');
