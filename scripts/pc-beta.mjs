@@ -487,7 +487,7 @@ class BetaHarness {
       throw new Error('Merged task is missing PR/head/base/tree/merge evidence');
     }
     if (task.publication.headSha !== latestWorker.checkpointHead) throw new Error('Final PR head does not match reviewed worker checkpoint');
-    if (!supervisors.some((run) => run.status === 'completed')) throw new Error('Merged task has no completed independent supervisor run');
+    if (!supervisors.some((run) => ['completed', 'merged'].includes(run.status) && run.result?.verdict === 'approve')) throw new Error('Merged task has no completed independent supervisor run');
   }
 
   async runAutonomousTask(spec) {
