@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+
+const indexUrl = new URL('../public/index.html', import.meta.url);
+const appUrl = new URL('../public/app.js', import.meta.url);
+
+function idsInHtml(html) {
+  return [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+}
+
+test('dashboard keeps every static app.js DOM dependency present and unique', async () => {
+  const [html, app] = await Promise.all([
+    readFile(indexUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+  ]);
+
+  const ids = idsInHtml(html);
+  const uniqueIds = new Set(ids);
+  assert.equal(uniqueIds.size, ids.length, 'index.html must not contain duplicate ids');
+
+  const staticDomIds = new Set([...app.matchAll(/\$\('([^']+)'\)/g)].map((match) => match[1]));
+  const missing = [...staticDomIds].filter((id) => !uniqueIds.has(id));
+  assert.deepEqual(missing, [], `index.html is missing DOM ids referenced by app.js: ${missing.join(', ')}`);
+});
+
+test('dashboard presents coding and research as visibly separate flows', async () => {
+  const html = await readFile(indexUrl, 'utf8');
+
+  const codingSteps = ['Task', 'Worker', 'Evidence', 'PR / CI', 'Supervisor', 'Merge'];
+  let cursor = -1;
+  for (const step of codingSteps) {
+    const next = html.indexOf(`<strong>${step}</strong>`, cursor + 1);
+    assert.ok(next > cursor, `coding flow step ${step} must appear in order`);
+    cursor = next;
+  }
+
+  assert.match(html, /Separate read-only lane/);
+  assert.match(html, /Project → Research Run → provider\/model → persisted report/);
+  assert.match(html, /Planner input only — never required before a Task/);
+});
