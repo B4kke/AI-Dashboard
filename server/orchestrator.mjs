@@ -3,6 +3,8 @@ import { buildPlannerPrompt, buildSupervisorPrompt, buildTaskPrompt } from './co
 import { verifyBeforeMerge, verifyWorkerCheckpoint } from './core/evidence-gate.mjs';
 import { parseGitHubRemote, parseGitHubRepository } from './integrations/github.mjs';
 import { normalizeOpencodeAgent } from './integrations/opencode.mjs';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   commitWorktree,
   createTaskWorktree,
@@ -421,6 +423,10 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
   async function reconcileRunUnlocked(runId) {
     const run = typeof runId === 'string' ? store.getRun(runId) : store.getRun(runId.id);
     if (!run || !['running', 'retrying'].includes(run.status)) return { status: run?.status || 'missing' };
+    if (run.worktreePath && !existsSync(join(run.worktreePath, '.git'))) {
+      await failRun(run, `Worktree link is broken (no .git at ${run.worktreePath}); failing fast instead of occupying the concurrency budget.`);
+      return { status: 'broken_worktree' };
+    }
     const project = store.getProject(run.projectId);
     const task = store.getTask(run.taskId);
     if (!project || !task) return failRun(run, 'Project/task disappeared while run was active');
@@ -519,6 +525,12 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       } else if (run.status === 'preparing') {
         await store.updateRun(run.id, { status: 'running', error: 'Recovered after process restart; reconciling existing runner session.' });
         actions.push({ type: 'run.recovered', runId: run.id });
+      } else {
+        const statuses = await opencode.sessionStatus(run.worktreePath).catch(() => null);
+        if (statuses !== null && !Object.prototype.hasOwnProperty.call(statuses, run.sessionId)) {
+          await failRun(run, 'Recovered run failed fast: runner session no longer exists on a healthy runner after restart.');
+          actions.push({ type: 'run.failed_zombie_session', runId: run.id });
+        }
       }
     }
     const fresh = store.snapshot();
