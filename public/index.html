@@ -10,60 +10,109 @@
   <aside class="sidebar">
     <div class="brand"><span class="brand-mark">AI</span><span>Control Center</span></div>
     <nav>
-      <a class="active" href="#overview">Overview</a><a href="#explorations">Explorations</a><a href="#projects">Projects</a><a href="#tasks">Tasks</a>
-      <a href="#research">Research</a><a href="#models">Models</a><a href="#ideas">Ideas</a>
-      <a href="#agents">Agents</a><a href="#integrations">Integrations</a><a href="#automations">Automations</a>
+      <p class="nav-label">Operate</p>
+      <a class="active" href="#overview">Dashboard</a>
+      <a href="#tasks">Tasks</a>
+      <a href="#projects">Projects</a>
+      <a href="#agents">Runs</a>
+      <p class="nav-label">Explore</p>
+      <a href="#explorations">Explorations</a>
+      <a href="#research">Research</a>
+      <a href="#ideas">Ideas</a>
+      <p class="nav-label">System</p>
+      <a href="#integrations">Integrations</a>
+      <a href="#models">Models</a>
+      <a href="#automations">Autonomy</a>
     </nav>
     <div class="sidebar-foot"><span class="dot" id="system-dot"></span><span id="system-label">Connecting…</span></div>
   </aside>
 
   <main>
     <header>
-      <div><p class="eyebrow">SELF-HOSTED AI OPERATIONS</p><h1>Mission control</h1></div>
-      <div class="header-actions"><button id="refresh">Refresh</button><button id="new-exploration">+ Exploration</button><button id="new-task">+ Task</button><button id="new-research">+ Research</button><button class="primary" id="new-project">+ Project</button></div>
+      <div><p class="eyebrow">SELF-HOSTED AI OPERATIONS</p><h1>Control center</h1><p class="header-copy">Projects are the execution root. Tasks enter one evidence-gated coding flow; exploration and research stay outside it.</p></div>
+      <div class="header-actions"><button id="refresh">Refresh</button><button id="new-exploration" class="secondary-action">+ Exploration</button><button id="new-research" class="secondary-action">+ Research</button><button id="new-project">+ Project</button><button class="primary" id="new-task">+ Task</button></div>
     </header>
 
-    <section class="metrics" id="overview">
-      <article><span>Explorations</span><strong id="exploration-count">0</strong><small id="exploration-sub">pre-project ideas</small></article>
-      <article><span>Projects</span><strong id="project-count">0</strong><small>registered workspaces</small></article>
-      <article><span>Tasks</span><strong id="task-count">0</strong><small id="task-sub">0 active</small></article>
-      <article><span>Agent runs</span><strong id="run-count">0</strong><small id="run-sub">0 running</small></article>
-      <article><span>Research</span><strong id="research-count">0</strong><small id="research-sub">direct model runs</small></article>
+    <section class="status-strip" id="overview" aria-label="Control plane summary">
+      <div><span>Projects</span><strong id="project-count">0</strong><small>registered workspaces</small></div>
+      <div><span>Tasks</span><strong id="task-count">0</strong><small id="task-sub">0 active</small></div>
+      <div><span>Runs</span><strong id="run-count">0</strong><small id="run-sub">0 running</small></div>
+      <div><span>Research</span><strong id="research-count">0</strong><small id="research-sub">direct model runs</small></div>
+      <div><span>Explorations</span><strong id="exploration-count">0</strong><small id="exploration-sub">pre-project ideas</small></div>
     </section>
 
-    <section class="panel" id="explorations">
-      <div class="panel-head"><div><p class="eyebrow">PRE-PROJECT EXPLORATION</p><h2>Explore before committing to a project</h2></div><button id="new-exploration-inline">+ Exploration</button></div>
-      <p class="panel-copy">Capture an idea with no Project/repository, run direct-model analysis or a research-style report, then promote the result into exactly one new Project. Exploration never creates a worktree or enters the coding merge loop.</p>
-      <div id="exploration-list" class="stack"></div>
+    <section class="flow-section" aria-labelledby="coding-flow-title">
+      <div class="section-heading"><div><p class="eyebrow">PRIMARY EXECUTION FLOW</p><h2 id="coding-flow-title">One path from task to verified merge</h2></div><span class="flow-note">Worker never approves itself</span></div>
+      <div class="flow-track" aria-label="Coding task lifecycle">
+        <div class="flow-step"><span>01</span><strong>Task</strong><small>scope + criteria</small></div>
+        <i aria-hidden="true">→</i>
+        <div class="flow-step"><span>02</span><strong>Worker</strong><small>isolated worktree</small></div>
+        <i aria-hidden="true">→</i>
+        <div class="flow-step"><span>03</span><strong>Evidence</strong><small>diff + verification</small></div>
+        <i aria-hidden="true">→</i>
+        <div class="flow-step"><span>04</span><strong>PR / CI</strong><small>GitHub gates</small></div>
+        <i aria-hidden="true">→</i>
+        <div class="flow-step"><span>05</span><strong>Supervisor</strong><small>read-only review</small></div>
+        <i aria-hidden="true">→</i>
+        <div class="flow-step"><span>06</span><strong>Merge</strong><small>head/tree verified</small></div>
+      </div>
+      <div class="flow-alt"><strong>Separate read-only lane</strong><span>Project → Research Run → provider/model → persisted report</span></div>
     </section>
 
-    <section class="grid two">
-      <article class="panel" id="projects"><div class="panel-head"><div><p class="eyebrow">PROJECTS</p><h2>Project state</h2></div><span class="pill">LIVE</span></div><div id="project-list" class="stack"></div></article>
-      <article class="panel" id="agents"><div class="panel-head"><div><p class="eyebrow">AGENT FLEET</p><h2>Harness runs</h2></div><span class="pill muted">HARDENING</span></div><div id="run-list" class="stack"></div></article>
+    <section class="workspace-section" id="tasks">
+      <div class="section-heading"><div><p class="eyebrow">ACTIVE WORK</p><h2>Task queue</h2><p class="section-copy">The task state tells you what the control plane expects next. Actions only appear when that transition is valid.</p></div><button id="new-task-inline">+ Task</button></div>
+      <div id="task-list" class="stack list-surface"></div>
     </section>
 
-    <section class="grid two">
-      <article class="panel" id="tasks"><div class="panel-head"><div><p class="eyebrow">TASK FLOW</p><h2>Queue</h2></div><button id="new-task-inline">+ Task</button></div><div id="task-list" class="stack"></div></article>
-      <article class="panel" id="research"><div class="panel-head"><div><p class="eyebrow">DIRECT MODEL WORK</p><h2>Project research</h2></div><button id="new-research-inline">+ Research</button></div><p class="panel-copy">Read an existing project's repository context and produce analysis without starting OpenCode, creating a worktree, or modifying Git.</p><div id="research-list" class="stack"></div></article>
+    <section class="workspace-section compact-section" id="agents">
+      <div class="section-heading"><div><p class="eyebrow">EXECUTION</p><h2>Agent & harness runs</h2></div><span class="pill muted">HARDENING</span></div>
+      <div id="run-list" class="stack list-surface"></div>
     </section>
 
-    <section class="grid two">
-      <article class="panel" id="models"><div class="panel-head"><div><p class="eyebrow">MODEL PROVIDERS</p><h2>Provider registry</h2></div><button id="new-provider">+ Provider</button></div><p class="panel-copy">LM Studio and NVIDIA are built in as OpenAI-compatible profiles. Custom compatible endpoints use the same adapter.</p><div id="provider-list" class="stack"></div></article>
-      <article class="panel" id="ideas"><div class="panel-head"><div><p class="eyebrow">OPTIONAL PROJECT IDEA INBOX</p><h2>In-project brainstorming</h2></div><button id="new-idea-inline">+ Idea</button></div><p class="panel-copy">Ideas remain project-scoped planning helpers. Use Exploration above when the idea does not belong to a Project yet.</p><div id="idea-list" class="stack"></div></article>
+    <section class="workspace-section" id="projects">
+      <div class="section-heading"><div><p class="eyebrow">PROJECTS</p><h2>Execution roots</h2><p class="section-copy">Register an existing repository directly, then create ordinary Tasks without passing through Idea or Exploration.</p></div><button id="new-project-inline" type="button" onclick="document.getElementById('project-dialog').showModal()">+ Project</button></div>
+      <div id="project-list" class="stack list-surface"></div>
+
+      <details class="subsection" id="ideas">
+        <summary><span><strong>Optional project ideas</strong><small>Planner input only — never required before a Task</small></span><span class="summary-action">Open</span></summary>
+        <div class="subsection-body"><div class="subsection-head"><p>Use this when an idea already belongs to a Project and you want the planner to expand it into normal Tasks.</p><button id="new-idea-inline">+ Idea</button></div><div id="idea-list" class="stack list-surface"></div></div>
+      </details>
     </section>
 
-    <section class="grid two">
-      <article class="panel" id="integrations">
-        <div class="panel-head"><div><p class="eyebrow">INTEGRATIONS</p><h2>Runtime links</h2></div></div>
+    <section class="workspace-section" id="explorations">
+      <div class="section-heading"><div><p class="eyebrow">PRE-PROJECT</p><h2>Explorations</h2><p class="section-copy">Capture and analyze something before it is a Project. Promotion is explicit; this lane never creates coding worktrees.</p></div><button id="new-exploration-inline">+ Exploration</button></div>
+      <div id="exploration-list" class="stack list-surface"></div>
+    </section>
+
+    <section class="workspace-section" id="research">
+      <div class="section-heading"><div><p class="eyebrow">READ-ONLY PROJECT WORK</p><h2>Research</h2><p class="section-copy">Repository context goes directly to a selected provider/model and produces a persisted report. No OpenCode, branch, worktree or merge loop.</p></div><button id="new-research-inline">+ Research</button></div>
+      <div id="research-list" class="stack list-surface"></div>
+    </section>
+
+    <section class="workspace-section system-section" id="integrations">
+      <div class="section-heading"><div><p class="eyebrow">SYSTEM</p><h2>Runtime & control plane</h2><p class="section-copy">Operational plumbing is intentionally lower in the hierarchy than Tasks and Projects.</p></div></div>
+      <div class="integration-list">
         <div class="integration-row"><div><strong>OpenCode</strong><p>coding harness · model selected per task/run</p></div><div class="status" id="opencode-status">Checking…</div></div>
         <div class="integration-row"><div><strong>GitHub</strong><p>branch publishing, PR, fail-closed CI evidence and merge</p></div><div class="status pending" id="github-status">checking</div></div>
         <div class="integration-row"><div><strong>Direct model</strong><p>provider API → exploration/project research reports</p></div><div class="status" id="model-status">ready</div></div>
         <div class="integration-row"><div><strong>Persistence</strong><p>durable control-plane state</p></div><div class="status pending" id="persistence-status">checking</div></div>
-      </article>
-      <article class="panel" id="automations"><div class="panel-head"><div><p class="eyebrow">AUTONOMY</p><h2>Control loop</h2></div><span class="pill">SAFETY GATES</span></div><p class="panel-copy">Workers must produce a real diff and pass control-plane verification. GitHub CI errors fail closed. Supervisor approval is acceptance-criteria scoped and verification is repeated before merge.</p><div id="autonomy-list" class="stack"></div></article>
-    </section>
+      </div>
 
-    <section class="panel terminal-panel"><div class="panel-head"><div><p class="eyebrow">EVENT STREAM</p><h2>Control-plane events</h2></div><button id="clear-events">Clear</button></div><pre id="events">waiting for events…</pre></section>
+      <details class="subsection" id="models">
+        <summary><span><strong>Model providers</strong><small>LM Studio, NVIDIA/NIM and compatible endpoints</small></span><span class="summary-action">Configure</span></summary>
+        <div class="subsection-body"><div class="subsection-head"><p>Provider is an inference endpoint. It is separate from the coding harness and from the model selected for a Run.</p><button id="new-provider">+ Provider</button></div><div id="provider-list" class="stack list-surface"></div></div>
+      </details>
+
+      <details class="subsection" id="automations">
+        <summary><span><strong>Autonomy controls</strong><small>Per-project loop mode and safety gates</small></span><span class="summary-action">Inspect</span></summary>
+        <div class="subsection-body"><p class="subsection-copy">Workers require a real diff and control-plane verification. CI errors fail closed. Independent supervisor approval is criterion-scoped and final verification runs again before merge.</p><div id="autonomy-list" class="stack list-surface"></div></div>
+      </details>
+
+      <details class="subsection terminal-panel">
+        <summary><span><strong>Control-plane event stream</strong><small>Operational detail for diagnosis</small></span><span class="summary-action">Open log</span></summary>
+        <div class="subsection-body"><div class="terminal-head"><span>Committed state events</span><button id="clear-events">Clear</button></div><pre id="events">waiting for events…</pre></div>
+      </details>
+    </section>
   </main>
 
   <dialog id="exploration-dialog"><form method="dialog" id="exploration-form">
