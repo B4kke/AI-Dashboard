@@ -8,7 +8,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test:
@@ -27,13 +27,19 @@ jobs:
       - name: Install pinned SDK dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
 
-      - name: Capture generated lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: sdk-package-lock
-          path: package-lock.json
-          if-no-files-found: error
-          retention-days: 1
+      - name: Commit generated dependency lock once
+        if: github.event_name == 'push' && github.ref_name == 'bootstrap/control-center-foundation'
+        shell: bash
+        run: |
+          if git ls-files --error-unmatch package-lock.json >/dev/null 2>&1; then
+            echo 'package-lock.json already tracked'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package-lock.json
+          git commit -m 'Lock runtime SDK dependencies'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Syntax checks
         run: |
