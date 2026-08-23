@@ -27,7 +27,7 @@ jobs:
       - name: Syntax checks
         run: |
           find server test scripts -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
-          node --check public/app.js
+          find public -type f -name '*.js' -print0 | xargs -0 -n1 node --check
 
       - name: Tests
         run: npm test
