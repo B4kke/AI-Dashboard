@@ -241,12 +241,12 @@ Requirements: Node.js 22+, Git; OpenCode is required for coding delegation but n
 
 ```bash
 cp .env.example .env
-npm install --ignore-scripts
+npm ci --ignore-scripts
 npm test
 npm start
 ```
 
-The branch is being converted to a committed npm lockfile + `npm ci`; until that lockfile is present on the exact head, deterministic install should not be claimed complete.
+Runtime SDK/library versions are pinned in `package.json` and the complete npm dependency graph is committed in `package-lock.json`. CI uses `npm ci` on Linux and Windows.
 
 Important variables:
 
@@ -309,7 +309,8 @@ MCP server endpoints:
 - specialist identity/instructions reaching worker prompt,
 - isolated worktrees/checkpoints/evidence,
 - CI/branch-policy/supervisor/expected-head merge loop,
-- restart/idempotency guards.
+- restart/idempotency guards,
+- reproducible npm dependency lock + `npm ci` CI install.
 
 ## Verification levels
 
