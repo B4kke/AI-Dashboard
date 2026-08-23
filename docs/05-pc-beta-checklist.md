@@ -34,6 +34,17 @@ The harness:
 - persists session state and writes both JSON and Markdown evidence reports
 - does not delete evidence automatically when a scenario fails
 
+### Runner/model notes from dogfooding (2026-08-22)
+
+- **OpenCode agent names are load-bearing.** `prompt_async` returns 2xx but silently persists nothing when the `agent` name does not resolve to a real OpenCode agent (built-ins: `build`, `plan`, `general`). The control plane therefore normalizes role names to built-ins at dispatch; if you configure custom agents, verify they exist on the runner first.
+- **Empirical model matrix** (single campaign, disposable repo):
+  - `google/gemini-flash-latest` — reliable coder/supervisor, published PRs in ~10 min.
+  - `opencode/nemotron-3-ultra-free` — delivered a supervisor `approve` verdict; historically slow, fast again on OpenCode ≥ 1.18.21.
+  - `opencode/x-preview-f-free` — chat/tool probes pass, but repeatedly reported task success without committing as coder.
+  - `nvidia/*` models error inside the OpenCode agent context ("Unexpected server error") despite plain chat working; several NIM catalog entries are EOL (HTTP 410).
+- `opencode serve` may require basic auth; the client reads `OPENCODE_SERVER_PASSWORD`. Plain curl without it gets 401 even against a healthy server.
+- If the target clone is deleted and re-created, existing managed worktrees keep pointing at the old `.git` and must be relinked (`git worktree repair`-style surgery); reconcile now fails such runs fast instead of occupying the concurrency budget.
+
 ### Required beta environment
 
 The test repository must already exist on GitHub and be cloned locally. The harness intentionally does **not** create or delete GitHub repositories.

@@ -111,13 +111,16 @@ Implemented and deterministic/integration-test verified:
 
 Still required to close M2:
 
-- one disposable **real GitHub repository + Actions** combined with a real OpenCode worker
 - repeat real loop across deliberate CI failure/repair
 - repeat with moved base branch
 - repeat with supervisor rejection
 - verify branch rules/required checks against real protected branch
 - verify Actions failed-job/failed-step diagnostics against a real failed run
-- confirm real remote merge SHA/tree/checkpoint/base-lineage evidence
+
+Proven in dogfooding against a disposable real repository (2026-08-22, PR #2 campaign):
+
+- one disposable **real GitHub repository + Actions** combined with a real OpenCode worker: full chain Task → checkpoint → PR → green Actions run → supervisor approve → control-plane merge, with `mergeSha` verified identical to GitHub's `mergeCommit`
+- real remote merge SHA/tree/checkpoint/base-lineage evidence confirmed end-to-end
 
 Deferred until M1/M2 real-loop proof:
 
