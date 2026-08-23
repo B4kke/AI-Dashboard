@@ -1,554 +1,296 @@
 # Roadmap
 
-> Current focus: finish the hardened foundation and prove it against a real PC/OpenCode/GitHub loop. Feature breadth remains frozen until the PC beta gate below has been exercised.
+> Current focus: prove and harden the autonomous control plane against real OpenCode/GitHub/MCP use. The project owner explicitly reprioritized the MCP + specialist-agent foundation on 2026-08-24 because it is required for the intended Master AI orchestration model. This does not relax M1/M2 reliability gates.
 
 ## Pre-project Exploration — IMPLEMENTED / BETA-CANDIDATE
 
 Implemented and deterministic-test covered:
 
-- global `Exploration` object independent of Project/Idea
-- direct-model Analyze and research-style report runs
-- no repo/worktree/coding Run before Project promotion
-- persisted ExplorationRun/report/model/usage/error history
-- fail-closed restart handling for interrupted direct-model calls; no automatic replay of an unknown provider outcome
-- one durable lifecycle lock prevents concurrent analyze/research/promotion races
-- explicit idempotent `Exploration -> Project` promotion
-- latest completed report becomes Project bootstrap brief with source linkage
-- bootstrap brief is context for planner/worker/supervisor/research, never implementation evidence
-- mobile-friendly Exploration UI
+- global Exploration independent of Project/Idea,
+- direct-model Analyze/research-style runs,
+- no repo/worktree/coding Run before promotion,
+- persisted report/model/usage/error history,
+- fail-closed restart handling for interrupted direct-model calls,
+- durable lifecycle lock for analyze/research/promotion races,
+- explicit idempotent Exploration -> Project promotion,
+- latest completed report becomes bounded Project bootstrap context,
+- bootstrap context never becomes implementation evidence,
+- mobile-friendly Exploration UI.
 
-Current limitation:
-
-- Exploration research mode is model analysis only; it has no live web/source-retrieval provider yet and prompts explicitly forbid fabricated source claims.
+Limitation: Exploration research is model analysis only; live source-aware retrieval remains planned.
 
 ## M0 — Control surface boots — DONE
 
-- local server and responsive UI
-- SQLite/WAL persisted state + transition journal
-- SSE event channel with broken/backpressured-client isolation
-- OpenCode health/session visibility
-- tested Git worktree primitives
+- local responsive UI,
+- SQLite/WAL persisted state + transition journal,
+- SSE event channel with broken/backpressured-client isolation,
+- OpenCode visibility,
+- tested Git worktree primitives.
 
 ## M1 — Autonomous local control loop — ACTIVE / BETA-CANDIDATE
 
-Implemented and isolated/integration-test verified:
+Implemented/tested:
 
-- project workspace registration
-- direct Task creation and manual delegation; Ideas remain optional
-- versioned planner/worker/supervisor result contracts
-- bare worker `success` rejected
-- isolated worktree allocation/reuse across bounded iterations
-- OpenCode session/message/status integration
-- per-Run selected model
-- deterministic run-scoped OpenCode session identity
-- lost create-session acknowledgement read-recovery without duplicate session creation
-- fail-closed uncertain `prompt_async` acknowledgement handling
-- persisted dispatch phases for restart diagnosis
-- worker checkpoint commit owned by control plane
-- Git parent/head/tree/diff evidence
-- control-plane verification commands executed without shell interpolation
-- verification stdout/stderr/command evidence secret redaction before persistence
-- worker success with no repository change rejected
-- independent read-only supervisor
-- supervisor must verify every acceptance criterion
-- final repository/verification gate rerun before merge
-- bounded `changes_requested -> worker retry` loop
-- manual / assisted / autonomous project modes
-- concurrency, iteration, run-time and retry budgets
-- SQLite/WAL control state with monotonic revision
-- snapshot + transition event committed atomically
-- durable operation leases with renewal
-- failed persistence cannot advance visible state
-- stale revision writers rejected
-- restart recovery for incomplete/active worker/supervisor state
-- replay handling for checkpoint commit created before state persistence
-- worktree inventory with abandoned managed-worktree detection
-- local fast-forward merge and cleanup
-- Task UI with description, criteria, dependencies, model and verification config
-- Task evidence endpoint/view
+- existing repository/project registration,
+- direct Tasks; Idea remains optional,
+- versioned planner/worker/supervisor result contracts,
+- isolated worktree allocation,
+- official OpenCode SDK session/message/status/tool/event integration,
+- per-Run model selection,
+- deterministic Run-scoped OpenCode session identity,
+- lost create-session acknowledgement recovery,
+- fail-closed uncertain prompt acknowledgement handling,
+- control-plane checkpoint commit and Git evidence,
+- configured verification commands without shell interpolation,
+- verification secret redaction,
+- real-diff requirement for coding success,
+- independent read-only supervisor and criterion-by-criterion review,
+- bounded changes-requested iteration,
+- manual/assisted/autonomous modes,
+- concurrency/time/retry/iteration policy,
+- SQLite monotonic revision + atomic transition journal,
+- durable renewable operation leases,
+- restart recovery for incomplete Runs,
+- worktree inventory/abandoned detection,
+- local safe merge/cleanup,
+- Task evidence UI/API.
 
 Still required to close M1:
 
-- real PC/OpenCode dogfood against an actual repository
-- process restart during a real OpenCode run
-- actual OpenCode outage/reconnect
-- abandoned real worktree inventory/cleanup test
+- repeat real PC/OpenCode dogfood after current SDK/MCP changes,
+- process restart during a real OpenCode Run,
+- real OpenCode outage/reconnect,
+- abandoned real worktree recovery/cleanup proof.
 
 ## M2 — GitHub feedback loop — ACTIVE / BETA-CANDIDATE
 
-Implemented and deterministic/integration-test verified:
+Implemented/tested:
 
-- strict `owner/repository` binding and local-origin identity validation
-- shell-free Git branch push through host Git credentials/SSH agent
-- create/reuse task PRs
-- publish read-repair after lost GitHub acknowledgement only when branch/base/head identity matches checkpoint
-- normalized PR/head/base/merge evidence
-- check-runs + legacy commit-status ingestion
-- bounded check-run pagination; later-page failures cannot be hidden
-- GitHub check/status API failure -> incomplete/error evidence, never `none`
-- `requireCi=true` default for GitHub-backed projects
-- CI discovery grace plus persisted pending/error polling backoff
-- CI failure -> bounded worker repair loop
-- bounded Actions failure diagnostics using workflow/job/failed-step metadata
-- supervisor receives machine worker + GitHub/CI evidence
-- PR head/base/CI revalidated after review
-- active branch rulesets + classic branch protection read fail-closed
-- required check context and integration identity enforcement
-- merge-queue/opaque required-workflow rules block direct autonomous merge
-- expected-head-SHA guarded merge
-- transient merge retry/backoff with bounded durable budget
-- non-transient merge conflicts stop immediately
-- externally merged PR recovery requires reviewed head/base/tree identity
-- base movement detected by Git `merge-base` and blocks continuation
-- configurable merge method (`squash` default)
-- optional remote branch/local worktree cleanup
-- base `fetch + ff-only` sync before new GitHub work and after remote merge
-- manual Publish / Refresh CI / Review / Merge controls
-- deterministic full-loop integration test: Task -> real local Git worktree/commit/push -> PR test double -> CI failure -> repair -> CI success -> supervisor -> merge
-- Linux CI plus a dedicated Windows portability test job
-- GitHub API URL and remote identity reject credential-bearing URL forms
-- arbitrary GitHub/proxy error response bodies are not persisted into task/CI state
+- official Octokit GitHub transport,
+- strict configured repository/local-origin identity,
+- shell-free branch push,
+- create/reuse Task PRs and lost-ack read-repair,
+- PR head/base/merge evidence,
+- paginated check-runs + legacy statuses,
+- CI API errors fail closed,
+- required checks/integration identity enforcement,
+- branch rulesets/classic protection,
+- merge-queue/opaque workflow conditions block unsafe direct merge,
+- base-movement detection,
+- bounded CI repair and merge retry/backoff,
+- supervisor receives machine + GitHub evidence,
+- post-review identity/CI revalidation,
+- expected-head guarded merge,
+- post-merge tree/SHA proof,
+- optional remote branch/worktree cleanup,
+- Linux + Windows CI.
 
-Still required to close M2:
+Already proven once in disposable real GitHub/Actions dogfood before the MCP slice: Task -> real OpenCode worker -> checkpoint -> PR -> green Actions -> supervisor -> control-plane merge with matching merge identity.
 
-- repeat real loop across deliberate CI failure/repair
-- repeat with moved base branch
-- repeat with supervisor rejection
-- verify branch rules/required checks against real protected branch
-- verify Actions failed-job/failed-step diagnostics against a real failed run
+Still required:
 
-Proven in dogfooding against a disposable real repository (2026-08-22, PR #2 campaign):
+- repeat real full loop on current final head,
+- deliberate CI failure/repair,
+- moved base,
+- supervisor rejection/correction,
+- real protected-branch required-check behavior,
+- real failed-job/step diagnostics.
 
-- one disposable **real GitHub repository + Actions** combined with a real OpenCode worker: full chain Task → checkpoint → PR → green Actions run → supervisor approve → control-plane merge, with `mergeSha` verified identical to GitHub's `mergeCommit`
-- real remote merge SHA/tree/checkpoint/base-lineage evidence confirmed end-to-end
+Deferred breadth: GitHub issue sync, webhooks, review-comment workflow and raw Actions-log ingestion.
 
-Deferred until M1/M2 real-loop proof:
+## M3 — Agent, MCP and model platform — ACTIVE EARLY SLICE
 
-- GitHub issue sync
-- webhooks
-- PR review-comment integration
-- raw Actions log ingestion
+### M3A — Master AI foundation — PARTIALLY IMPLEMENTED
 
-## M3 — Agent & model platform — EARLY SLICE / FEATURE-FROZEN
+Implemented foundation:
 
-Already implemented and retained:
+- MCP `master` capability profile can inspect canonical Project/Task/Run/Agent/Research/evidence state,
+- Master can create/update specialist agents,
+- Master can create/assign/delegate ordinary Tasks,
+- Master can requeue `needs_input`, start Research/Idea planning and request Run abort,
+- Master has no direct MCP publish/review/merge bypass,
+- reusable `orchestrate-project` MCP prompt encodes dependency/scope-first orchestration procedure.
 
-- `Harness != Provider != Model`
-- model persisted on coding Run
-- project model defaults for coding/planning/supervisor/research
-- per-Task coding model override
-- OpenCode `{ providerID, modelID }` request shape/catalog discovery
-- generic OpenAI-compatible direct provider adapter
-- LM Studio and NVIDIA provider profiles
-- custom provider registration
-- provider URL secret-channel validation
-- arbitrary provider response bodies excluded from persisted error text
-- read-only Project Research Runs with bounded repository context/report/model/usage evidence
-- common secret path/content filtering before repository context is sent to external models
+Still planned:
 
-No ACP/Codex/Claude/provider breadth before the PC beta loop is proven.
+- persistent Master identity/persona,
+- first-class Master chat/session history,
+- persistent personal/project memory,
+- automatic multi-step fleet scheduler above individual Task delegation,
+- capability/performance-based agent selection from verified history,
+- rich explanation of why context/actions were selected.
 
-## PC beta gate — NEXT REAL VERIFICATION
+### M3B — Conversational workspace / chat — PLANNED
 
-The code may be called **ready to start PC beta** only when the exact final PR head has:
+- persistent global and project-aware chat,
+- streamed model/tool activity,
+- attach Projects/Tasks/Runs/files/reports/evidence,
+- clear distinction between conversation, proposal, execution and verified completion,
+- mobile-first UX,
+- chat can create Tasks/Research/Ideas/Explorations through the same control plane,
+- visually calmer workspace with progressive disclosure rather than card overload.
 
-- syntax checks green
-- complete Node test suite green
-- GitHub Actions green
-- no known P0/P1 single-instance local-control-plane blocker
-- current README/architecture/AGENTS/roadmap consistent with code
+### M3C — Memory & personal context — PLANNED
 
-The PC beta itself then verifies what deterministic CI cannot:
+Memory must separate user preferences, project decisions, historical events, assistant persona/context and reusable conventions. Memory is inspectable/editable/deletable, project/global scoped, source-aware where practical, excludes secrets and remains context rather than machine evidence.
 
-1. real OpenCode session/prompt/reconciliation
-2. real local worktree + checkpoint/verification
-3. real disposable GitHub PR + Actions
-4. deliberate CI failure -> worker repair -> CI success
-5. independent supervisor approve/reject paths
-6. expected-head merge and cleanup
-7. restart while work is in flight
-8. OpenCode outage
-9. moved base branch
-10. abandoned worktree recovery
+Potential later extension: persistent per-agent memory/persona/SOUL-style profiles and verified performance history.
 
-A failed beta scenario is evidence to fix the control plane, not permission to weaken a gate.
+### M3D — MCP capability layer — EARLY SLICE IMPLEMENTED
 
-### Beta scope boundary
+Implemented/tested:
 
-PC beta is **single control-plane instance, loopback/private access**. It is not a claim of production-safe multi-instance distributed autonomy.
+- official split TypeScript MCP SDK v2 pinned to `2.0.0`, targeting protocol generation `2026-07-28`,
+- Dashboard acts as MCP server,
+- separate `/mcp/read`, `/mcp/worker`, `/mcp/supervisor`, `/mcp/master` endpoints,
+- worker/supervisor/read profiles are read-only,
+- Master gets bounded orchestration mutations without merge/publish/approval authority,
+- tools for project/task/run/agent/research/evidence inspection,
+- MCP resources for canonical state,
+- reusable orchestration/specialist/review prompts,
+- resource update notifications after committed state transitions,
+- Node Host/Origin validation,
+- built-in MCP disabled on non-loopback Dashboard binds,
+- Dashboard also acts as MCP client/host,
+- Streamable HTTP external servers,
+- stdio external servers in loopback/private mode,
+- server/tool/resource/template/prompt discovery,
+- explicit `allowedTools` default-deny policy,
+- explicit `mutatingTools` approval when a tool is not asserted read-only,
+- bearer secrets referenced by environment-variable name only,
+- bounded external MCP outputs,
+- loopback administration API for registry/discovery/tool/resource/prompt calls.
 
-Durable leases exist, but the current design does not yet provide full fencing tokens for irreversible side effects after lease ownership loss. Multi-instance hosted autonomy remains a post-beta reliability gate.
+Still planned:
 
-## M4 — Automation and remote operations — DEFERRED
+- MCP registry UI,
+- authentication/authorization for remote MCP,
+- richer per-project/per-agent external MCP allowlists,
+- durable long-lived connection/session management where justified,
+- broader interoperability dogfood with real OpenCode and other MCP hosts,
+- richer prompt-injection provenance labels/context isolation,
+- user-facing approvals/elicitation for sensitive external tools.
 
-No public remote deployment or automation/fleet breadth before:
+Do not reintroduce deprecated monolithic MCP SDK/legacy server architecture. See `docs/07-mcp-agent-architecture.md`.
 
-- authentication
-- authorization
-- audit log
-- kill switch
-- hardened runner registration/identity
-- production-grade persistence/lease fencing for the selected deployment topology
+### M3E — Agent Registry & specialist assistants — EARLY SLICE IMPLEMENTED
 
----
+Implemented/tested:
 
-# Supplementary product roadmap — Master AI & personal AI workspace
+- durable project-scoped Agent Registry in StateStore schema v7,
+- agent identity/name/role/harness/model/instructions/capabilities/enabled state,
+- explicit project-relative `workScopes`,
+- static conflict rejection for overlapping enabled mutating specialists,
+- Task -> agent assignment with scope containment,
+- assignment snapshots name/role/instructions/model,
+- active Tasks cannot have ownership silently moved,
+- agent scope cannot change while assigned Run is active,
+- agent scope cannot shrink outside unfinished assigned Tasks,
+- worker prompt receives specialist identity/instructions/scope,
+- worker is told to return `needs_input` instead of stealing sibling scope,
+- runtime scope-overlap admission under the durable project run-admission lock,
+- uncertain OpenCode dispatch retains scope ownership until reconciled,
+- disjoint scopes can run concurrently when concurrency/dependencies permit.
 
-> This roadmap records intended product breadth inspired in part by projects such as `odysseus-dev/odysseus`. It does **not** replace the M1/M2 reliability gates above. The control plane remains authoritative for coding state, irreversible actions, evidence, approval and merge.
+Still planned:
 
-## Product direction
+- Agent Registry/fleet UI,
+- persistent agent memory/persona,
+- harness capability matrix,
+- verified historical performance/reputation,
+- explicit agent lifecycle/status beyond derived current state,
+- Master automatic specialist synthesis/rebalancing,
+- ACP/Codex/Claude/local harness adapters.
 
-AI Dashboard should grow from a specialized autonomous software-engineering control plane into a broader self-hosted AI workspace **without weakening the control-plane model**.
+### M3F — Local/self-hosted model workspace — EARLY FOUNDATION
 
-The long-term experience should support two complementary layers:
+Already present:
 
-1. **Master AI / personal assistant** — a persistent conversational intelligence that understands the user's projects, history, preferences, research and active work.
-2. **Project control plane** — the existing fail-closed execution system that owns Tasks, Runs, worktrees, checkpoints, evidence, PR/CI, supervisor review, merge and cleanup.
+- `Harness != Provider != Model`,
+- generic OpenAI-compatible direct provider,
+- LM Studio/NVIDIA profiles,
+- per-role/project/task models,
+- OpenCode model/agent/tool/reasoning/context capability discovery,
+- provider URL/secret-channel validation,
+- read-only Project Research.
 
-The Master AI may inspect, plan, delegate and request actions. It must not bypass control-plane gates for irreversible coding operations.
+Planned: hardware-aware model cookbook, richer local endpoint discovery, role recommendations, usage/cost accounting and degraded-state management.
 
-Conceptually:
+## Immediate verification gates
+
+The next meaningful proof is not another UI panel. On the exact final PR head:
+
+1. syntax checks + full Linux suite green,
+2. full Windows portability green,
+3. pinned dependency lockfile + `npm ci`,
+4. real OpenCode configured as an MCP host against Dashboard read/master endpoint,
+5. real resource/tool discovery,
+6. Master creates two disjoint specialists/Tasks and both can be admitted concurrently,
+7. attempted overlapping specialist/Task is rejected by control plane,
+8. restart retains ownership/uncertain-run protection,
+9. repeat the full OpenCode + GitHub Actions beta on current transport stack.
+
+A failed external scenario is evidence to fix the control plane, not permission to weaken a gate.
+
+## M4 — Automations and remote/private operations — DEFERRED UNTIL SECURITY GATES
+
+Required before remote autonomous operation:
+
+- authentication,
+- authorization,
+- audit log,
+- kill switch,
+- hardened runner/client identity,
+- encrypted/external secret management,
+- production-grade distributed side-effect fencing for the selected topology.
+
+Then add scheduled/conditional Tasks and Research, project-health monitoring, daily/weekly Master briefings, notifications, event/webhook triggers and durable scheduler recovery.
+
+No "just expose the port" path should be described as safe.
+
+## M4 — Personal workspace and source-aware research — PLANNED
+
+Potential breadth after core reliability/security:
+
+- Notes/Todos that can promote into Tasks,
+- document/report workspace and exports,
+- file/library browser,
+- optional calendar/email/integration surfaces,
+- deep source-aware Research with search/retrieval providers, provenance, saved source metadata and citation-aware reports,
+- optional read-only research MCPs.
+
+Research stays separate from worktree/merge truth.
+
+## M5 — Unified self-hosted AI operating workspace — LONG TERM
+
+Target experience:
 
 ```text
-User
-  |
-  v
-Master AI / Chat
-  |
-  +--> Memory / context
-  +--> Projects / Tasks / Ideas / Explorations
-  +--> Research
-  +--> Models / providers
-  +--> MCP capabilities
-  +--> Automations
-  |
-  v
-AI Dashboard control plane
-  |
-  +--> planner
-  +--> worker(s)
-  +--> supervisor
-  +--> Git / worktree
-  +--> GitHub / CI
-  `--> merge / cleanup
-```
-
-## M3A — Master AI foundation — PLANNED
-
-Create a first-class persistent assistant that sits above individual projects.
-
-Required capabilities:
-
-- one selectable **Master AI** identity with configurable name/persona/system guidance
-- persistent assistant memory separated from coding evidence and repository truth
-- project-aware context retrieval across Projects, Tasks, Runs, Research and recent activity
-- ability to answer questions such as:
-  - "What changed in this project yesterday?"
-  - "Which projects are blocked right now?"
-  - "Which red CI failure should I prioritize?"
-  - "Summarize what the agents accomplished today."
-- direct delegation into ordinary Tasks without forcing Idea creation
-- ability to launch Exploration or Research without entering the coding loop
-- explicit confirmation/control-plane handoff for privileged or irreversible operations
-- transparent indication of what context/memory/project evidence informed an answer
-- bounded context assembly so large project histories do not consume the entire model context
-- support for different models for Master AI vs worker/planner/supervisor/research roles
-
-### Master AI authority boundary
-
-Master AI is an orchestrator and assistant, **not root authority**.
-
-It may:
-
-- inspect project state and evidence
-- create proposals, Tasks, Ideas, Research Runs and plans
-- request worker runs
-- prioritize ready work within configured policy
-- summarize failures and recommend recovery
-- use approved read/write tools within policy
-
-It may not directly:
-
-- mark its own coding work approved
-- fabricate machine evidence
-- bypass failed/unknown CI
-- force-push or destructive-reset work
-- merge an unreviewed/unverified checkpoint
-- silently replay ambiguous external side effects
-- override branch protection, budgets, leases or kill switches
-
-## M3B — Conversational workspace / chat — PLANNED
-
-The chat experience should become a primary entry surface rather than a thin command box.
-
-Desired UX:
-
-- persistent chat sessions with searchable history
-- rich streamed responses
-- visible tool/action activity without exposing unreadable raw protocol noise by default
-- project-aware chats and a global Master AI chat
-- attach/select Projects, Tasks, Runs, files, reports and evidence as context
-- slash/quick actions for common project operations
-- clear distinction between:
-  - conversation
-  - planning
-  - research
-  - proposed action
-  - executing action
-  - completed verified action
-- mobile-first layout and strong Android usability
-- chat can create Tasks, Research Runs, Ideas or Explorations directly
-- chat can inspect agent progress and explain blockers in natural language
-- conversations remain useful even when no coding harness is connected
-
-### Visual direction
-
-The chat/workspace should have a stronger visual identity than the current card-heavy control surface.
-
-Specific direction:
-
-- adopt an immersive **background / workspace atmosphere** similar in spirit to the visual treatment admired in Odysseus, while keeping our own design and assets
-- reduce the feeling of "many cards on one page"
-- use depth, panels, drawers, tabs and progressive disclosure rather than stacking every subsystem simultaneously
-- make chat visually calm and dominant when the user is speaking with Master AI
-- allow project/control/evidence detail to expand only when needed
-- preserve high readability, contrast, reduced-motion support and mobile responsiveness
-- background effects must not become a GPU/battery-heavy requirement on phones; provide a lightweight/reduced-motion mode
-
-Do not copy Odysseus artwork/assets/code blindly. Treat it as UX inspiration unless licensing is explicitly reviewed for specific reuse.
-
-## M3C — Memory & personal context — PLANNED
-
-Build a durable memory layer for the Master AI and optional specialist agents.
-
-Memory categories should distinguish at least:
-
-- user preferences
-- project facts and decisions
-- historical events
-- people/contacts where explicitly stored
-- assistant persona/relationship context
-- reusable working conventions
-
-Requirements:
-
-- memory is inspectable, editable and deletable by the user
-- provenance/source and timestamp where practical
-- project-scoped vs global memory
-- relevance retrieval rather than blindly injecting all memory
-- explicit exclusion of secrets/credentials
-- memory corruption/recovery should fail safely
-- memory is **context**, never machine evidence
-- repository code/tests/current Git state override stale remembered claims
-- ability to pin durable facts and retire stale/conflicting memories
-
-Potential later extension:
-
-- per-agent memory/persona profiles for long-lived named agents
-- Master AI can know which agents are good at which classes of work based on verified run history rather than self-reported reputation
-
-## M3D — MCP capability layer — PLANNED
-
-Add MCP as a general capability/tool bus while preserving AI Dashboard's domain authority.
-
-Desired support:
-
-- MCP registry in the dashboard
-- local `stdio` servers
-- Streamable HTTP servers
-- SSE only where interoperability requires it
-- server/tool discovery and health state
-- per-tool capability metadata
-- read-only vs mutating classification
-- per-project/per-agent tool allowlists
-- approval policy for sensitive tools
-- bounded schemas/tool descriptions to avoid prompt bloat
-- tool result size limits and sanitization
-- prompt-injection treatment for third-party tool output
-- connection degradation surfaced clearly in UI
-
-Likely capability families:
-
-- browser/web automation
-- memory
-- files/documents
-- databases
-- GitHub/GitLab/Gitea inspection
-- Home Assistant / local services
-- OSINT/research sources
-- notifications
-- custom user MCP servers
-
-### MCP authority boundary
-
-MCP must **not** become the owner of canonical coding transitions.
-
-The following remain direct control-plane responsibilities:
-
-- worktree allocation
-- checkpoint ownership
-- machine verification
-- PR identity
-- CI/required-check gate
-- supervisor decision
-- merge
-- cleanup
-- leases/restart recovery/idempotency
-
-An MCP GitHub tool may be useful for exploration or auxiliary actions, but canonical autonomous merge evidence must still pass through the hardened GitHub/control-plane path.
-
-## M3E — Agent registry & specialist assistants — PLANNED
-
-Expand the current role/model concept into a visible agent registry.
-
-Desired capabilities:
-
-- named agents with role, harness, model and capability profile
-- reusable agent instructions/persona
-- project assignment and access boundaries
-- capability matrix showing which agents can read/write/use which tools
-- verified historical performance/evidence per agent
-- status: idle/running/blocked/offline
-- fleet/super-agent view for multi-agent project execution
-- Master AI can recommend or select agents based on capabilities and verified history
-
-Worker/supervisor separation remains mandatory for coding approval.
-
-## M3F — Local model workspace / model cookbook — PLANNED
-
-Improve first-class local/self-hosted model use.
-
-Desired capabilities:
-
-- discover local OpenAI-compatible endpoints and configured providers safely
-- model catalog with context size/capability metadata
-- hardware-aware recommendations where reliable data is available
-- model role presets: Master AI, planner, coding worker, supervisor, research
-- show expected VRAM/RAM fit and known runtime compatibility when evidence exists
-- manage local provider health and degraded state
-- optional integration with local serving stacks without making one backend mandatory
-- preserve `Harness != Provider != Model`
-
-Do not let model-management breadth delay the real coding-loop proof.
-
-## M4A — Automations & scheduled agents — PLANNED AFTER SECURITY GATES
-
-Once authentication, authorization, audit and kill-switch requirements are satisfied:
-
-- recurring scheduled Tasks/Research Runs
-- conditional project monitoring
-- daily/weekly project summaries
-- CI/repository health monitoring
-- scheduled Master AI briefings
-- notification targets
-- event-driven triggers where reliable webhook/event infrastructure exists
-- durable scheduler state and restart recovery
-- idempotent trigger execution
-- concurrency/iteration/time budgets remain control-plane enforced
-
-Automations must not silently turn a failed/unknown external state into success.
-
-## M4B — Personal workspace features — PLANNED
-
-Optional broader assistant features inspired by the usefulness of self-hosted AI workspaces:
-
-- Notes with AI read/update/summarize actions
-- Todos that can be converted into project Tasks or delegated to agents
-- document/report workspace
-- generated research reports and exports
-- lightweight file/library browser
-- notification center
-- optional calendar integration
-- optional email integration
-- optional generic integrations/webhooks
-
-These are useful product extensions, but remain secondary to reliability of autonomous project work.
-
-## M4C — Deep Research & source-aware research — PLANNED
-
-Extend current read-only Research Runs beyond direct-model analysis:
-
-- pluggable web/search/retrieval providers
-- source collection with provenance
-- saved source files/snapshots/metadata where licensing permits
-- citation-aware reports
-- research plans and multi-step research runs
-- project-specific research libraries
-- Master AI can synthesize research across Projects without converting research claims into implementation evidence
-- optional MCP research tools behind read-only policy where practical
-
-Research continues to avoid worktrees and the merge loop.
-
-## M4D — Remote/private access — PLANNED
-
-Only after the existing security prerequisites are real:
-
-- authenticated remote UI
-- authorization boundaries
-- audit log
-- kill switch
-- secure runner registration/identity
-- encrypted secret storage or external secret manager integration
-- explicit network trust model
-- safe mobile access outside loopback/home network
-
-No "just expose the port" deployment path should be documented as safe.
-
-## M5 — Unified AI operating workspace — LONG TERM
-
-Long-term target: one self-hosted workspace where the user can converse with a persistent Master AI and move naturally between discussion, research, planning and verified autonomous execution.
-
-Example experience:
-
-```text
-"What should we work on today?"
-    -> Master AI inspects Projects, CI, blockers and recent Runs
-    -> proposes priorities with evidence
+"What should we work on?"
+ -> Master reads projects, blockers, CI, agents and evidence
+ -> proposes dependency-aware priorities
+
+"Split this between specialists."
+ -> Master reuses/creates agents with non-overlapping workScopes
+ -> creates ordinary Tasks + dependencies
+ -> scope_check + delegation
+ -> workers operate in isolated worktrees
+ -> independent supervisors verify
+ -> control plane handles PR/CI/merge
 
 "Research option B first."
-    -> read-only Research Run
-    -> persisted report + sources
+ -> read-only Research Run + sources/report
 
-"Looks good. Implement it in Project X."
-    -> ordinary Task
-    -> worker in isolated worktree
-    -> checkpoint + tests
-    -> GitHub PR + CI
-    -> independent supervisor
-    -> merge or repair/block
-
-"Tell me what happened."
-    -> Master AI explains the verified history in chat
+"What happened?"
+ -> Master explains the verified history, distinguishing claims from evidence
 ```
 
-The user experience may feel like one intelligent assistant, but the underlying system must preserve explicit authority boundaries and independently verifiable execution.
+The UX may feel like one intelligent assistant, but underlying authority remains explicit and independently verifiable.
 
-## External inspiration and licensing rule
+## External inspiration / licensing
 
-`odysseus-dev/odysseus` is an important reference for:
+Open-source projects including Odysseus, VibeBoard, OpenHands/Agent Canvas, Codeman and OpenCode may inform architecture/UX. AI Dashboard remains its own product. Substantial source/assets must not be copied without explicit license compatibility review and attribution.
 
-- conversational workspace UX
-- Master/personal-assistant direction
-- visual/background atmosphere
-- MCP management
-- memory
-- scheduled agents
-- local-model workflows
-- research/workspace breadth
+## Priority rule
 
-Odysseus is AGPL-licensed. Architecture ideas and UX patterns may inform our design, but substantial code/assets must **not** be copied into AI Dashboard without an explicit compatibility/licensing decision and required attribution/source obligations.
-
-AI Dashboard should remain its own product rather than becoming a thin Odysseus fork.
-
-## Priority rule for this supplementary roadmap
-
-Until the PC beta loop is proven against real OpenCode + a disposable real GitHub/Actions repository, this section is primarily **design intent and future scope**.
-
-Permitted before that gate:
-
-- low-risk design notes
-- architecture contracts needed to avoid painting ourselves into a corner
-- UI cleanup that materially improves the existing control workflow
-- isolated experiments that do not displace M1/M2 reliability work
-
-Do not prioritize broad chat, memory, MCP, provider, personal-workspace or automation implementation ahead of unresolved M1/M2 P0/P1 reliability gates unless the project owner explicitly changes priority.
+Reliability and evidence outrank feature count. MCP/Agent work is now permitted because it is foundational to the explicitly requested Master-AI architecture, but it must continue to enter the same fail-closed control plane rather than creating a second autonomous execution path.
