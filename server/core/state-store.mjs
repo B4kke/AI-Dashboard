@@ -336,6 +336,17 @@ export class StateStore {
     });
   }
 
+  async requeueTask(id) {
+    return this.#mutate('task.requeued', (state) => {
+      const task = state.tasks.find((item) => item.id === id);
+      if (!task) throw new Error('Task not found');
+      if (task.state !== 'needs_input') throw new Error(`Only needs_input tasks can be requeued (state=${task.state})`);
+      task.state = 'backlog';
+      task.updatedAt = new Date().toISOString();
+      return task;
+    });
+  }
+
   async createRun(input) {
     return this.#mutate('run.created', (state) => {
       const now = new Date().toISOString();

@@ -74,6 +74,8 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
     if (request.method === 'POST' && ideaAnalyze) return json(response, 202, await orchestrator.startIdeaPlanning(decodeURIComponent(ideaAnalyze[1])));
     const delegate = url.pathname.match(/^\/api\/tasks\/([^/]+)\/delegate$/);
     if (request.method === 'POST' && delegate) return json(response, 202, await orchestrator.startWorker(decodeURIComponent(delegate[1])));
+    const requeue = url.pathname.match(/^\/api\/tasks\/([^/]+)\/requeue$/);
+    if (request.method === 'POST' && requeue) return json(response, 200, await store.requeueTask(decodeURIComponent(requeue[1])));
     const publish = url.pathname.match(/^\/api\/tasks\/([^/]+)\/publish$/);
     if (request.method === 'POST' && publish) return json(response, 200, await orchestrator.publishTask(decodeURIComponent(publish[1])));
     const githubRefresh = url.pathname.match(/^\/api\/tasks\/([^/]+)\/github\/refresh$/);
