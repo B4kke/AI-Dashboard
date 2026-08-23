@@ -2,56 +2,40 @@
 
 ## Domain model
 
-`Project` is the root aggregate once executable project work exists. Work may enter directly as Tasks, from integrations, or optionally through Ideas that a planner expands into normal Tasks.
-
-A separate pre-project `Exploration` domain exists for ideas that are not yet ready to become Projects.
+`Project` is the root aggregate once executable work exists. Existing repositories can be attached directly. A Task may be created manually, by Master AI, by a planner or by an integration; no Idea is required.
 
 ```text
-Exploration
-  -> ExplorationRun[] (direct-model only)
-  -> persisted analysis / research-style report
+Exploration (optional, pre-project)
+  -> direct-model run/report
   -> explicit idempotent promotion
        |
        v
 Project
-  -> bootstrapBrief + source Exploration linkage (optional)
-  -> Repository / workspace binding
+  -> Repository/workspace
+  -> Agent[] (optional durable specialists)
   -> Task[]
+      -> assigned agent + explicit workScopes (optional)
       -> Run[]
-          -> Harness / Agent role / Model
-          -> Workspace / worktree
-          -> Result contract
-          -> Evidence / checkpoint
-  -> Idea[] (optional)
-      -> Planner Run
-      -> generated Task[]
+          -> Harness + Model + role
+          -> isolated worktree
+          -> result claim
+          -> checkpoint/evidence
+  -> Idea[] (optional planner input -> ordinary Tasks)
   -> ResearchRun[] (read-only direct-model path)
-  -> Integration / GitHub evidence
+  -> GitHub/CI evidence
 ```
 
-Exploration is deliberately outside Project. It cannot create a coding Run, branch or worktree. Promotion is the only transition that creates a Project, and promotion is replay-safe/idempotent.
+Exploration remains outside Project until promotion. Research remains outside the coding merge loop.
 
-A promoted exploration report becomes bounded bootstrap context for later planner/worker/supervisor/research prompts. It is historical intent/context only; repository state, machine evidence and current tests remain authoritative.
+## Harness, Provider, Model and protocols
 
-## Entry-path invariants
+- **Harness** — execution mechanism; OpenCode is first.
+- **Provider** — inference endpoint such as LM Studio/NVIDIA/OpenAI-compatible.
+- **Model** — selected concrete model.
+- **MCP** — capability/context protocol. Dashboard is both MCP server and MCP host/client.
+- **ACP** — planned generic coding-agent protocol; not yet a production harness adapter.
 
-- A Project does not require any Idea to exist.
-- A Task may be created manually, by a planner or by an integration.
-- All coding Tasks converge on the same worker/supervisor/evidence pipeline.
-- Ideas are optional project-scoped planning helpers only.
-- Exploration is optional and pre-project; it never becomes a mandatory front door.
-- Project Research Runs are read-only and never enter the merge loop.
-- Autonomy operates on ready Tasks regardless of their origin.
-
-## Harness, Provider and Model
-
-These are separate concepts:
-
-- **Harness** — execution mechanism. OpenCode is first.
-- **Provider** — inference endpoint. LM Studio, NVIDIA/NIM and custom OpenAI-compatible endpoints are current examples.
-- **Model** — concrete model selected for a Task/Run.
-
-Coding Runs use a harness. Exploration and Research Runs currently use the direct-model path and do not require a coding harness.
+Protocol adapters never own Dashboard domain authority.
 
 ## Coding control loop
 
@@ -59,7 +43,10 @@ Coding Runs use a harness. Exploration and Research Runs currently use the direc
 Task
   |
   v
-admission + project policy + durable operation lock
+project policy + durable run-admission lock
+  |
+  +-> concurrency check
+  +-> specialist scope-overlap check
   |
   v
 isolated Git worktree / ai/* branch
@@ -68,30 +55,29 @@ isolated Git worktree / ai/* branch
 OpenCode worker Run
   |
   v
-versioned worker result (untrusted claim)
+versioned result (untrusted claim)
   |
   v
 control-plane checkpoint commit
-  |
-  +-> Git-generated diff/tree evidence
-  +-> configured verification commands
-  |
-  v
-GitHub publish / PR (when repository bound)
+  +-> Git diff/tree evidence
+  +-> configured verification
   |
   v
-CI + branch-policy evidence
+GitHub publish / PR
+  |
+  v
+CI + required-check + branch-policy evidence
   |\
-  | +-- failure -> bounded repair iteration
+  | +-- fail -> bounded repair
   |
   v
 independent read-only supervisor
-  |
-  +-- changes_requested -> bounded worker retry
-  +-- blocked/unknown -> needs_input
+  |\
+  | +-- changes_requested -> bounded worker iteration
+  | +-- unknown/conflict -> needs_input
   |
   v
-final head/tree/CI/verification gate
+final head/tree/CI/verification identity gate
   |
   v
 control-plane merge
@@ -100,171 +86,197 @@ control-plane merge
 merge evidence + cleanup -> done
 ```
 
-The worker never approves or merges itself. The supervisor is a separate Run and is read-only. The control plane owns checkpointing, publication, final validation, merge and cleanup.
+Worker never approves/merges itself. Supervisor is a separate read-only Run. Control plane owns checkpoint, publication, approval gate, merge and cleanup.
 
-## Result protocol
+## Agent Registry and ownership
 
-Planner, worker and supervisor runs use a versioned terminal result contract. Final assistant output must contain the `AI_DASHBOARD_RESULT` marker followed by the expected JSON contract.
+State schema v7 contains durable project specialists. An agent has stable identity, project, role, harness, optional model, instructions, capabilities, enabled state and concrete project-relative `workScopes`.
 
-The control plane rejects a bare `success` claim. Worker-reported tests are claims only until the control plane captures Git evidence and executes configured verification commands.
+A Task may reference an `agentId`. Assignment snapshots agent name/role/instructions and uses scopes constrained to the agent's registered scopes.
 
-Supervisor approval must cover every acceptance criterion with the exact criterion text and independent evidence.
+### Static scope rule
+
+Enabled mutating specialists may not own overlapping registered scopes. Parent/child prefixes overlap (`server` conflicts with `server/mcp`). Read-only roles such as supervisor/reviewer/research/planner/master do not claim mutation ownership.
+
+### Runtime scope rule
+
+Static registry checks are not enough, so worker admission checks the Task's effective scopes against every other active worker Task in the Project while holding the same durable project run-admission lock used for concurrency.
+
+`dispatch_unknown` and `dispatchUncertain` retain scope ownership until reconciled. A lost runner acknowledgement therefore cannot accidentally admit a second worker into the same path.
+
+Scope instructions are also included in the worker prompt, but prompt compliance is defense-in-depth rather than the authority mechanism.
+
+See `docs/07-mcp-agent-architecture.md`.
+
+## MCP topology — August 2026
+
+AI Dashboard targets MCP protocol generation `2026-07-28` via the split official TypeScript SDK v2 packages.
+
+```text
+                  External MCP hosts
+                OpenCode / other agent
+                         |
+                         v
+                  Dashboard MCP server
+                 /    /    \       \
+              read worker supervisor master
+                         |
+                         v
+                    Control plane
+                         |
+          +--------------+---------------+
+          |              |               |
+      OpenCode SDK     Octokit       direct models
+          |              |               |
+       harness          GitHub          providers
+
+                    Dashboard MCP host
+                         |
+                         v
+                registered external MCPs
+```
+
+### Dashboard as MCP server
+
+Built-in endpoints, only on loopback in the current security phase:
+
+- `/mcp/read`
+- `/mcp/worker`
+- `/mcp/supervisor`
+- `/mcp/master`
+- `/mcp` aliases read-only.
+
+Read/worker/supervisor profiles expose inspection tools only. Master additionally receives bounded orchestration actions for agent creation/update, Task creation/assignment/delegation/requeue, Research/Idea planning and Run abort.
+
+Master deliberately has no direct MCP merge/publish/approve bypass. Any coding execution it requests enters the normal Task -> worker -> evidence -> GitHub/CI -> supervisor -> merge control loop.
+
+MCP resources expose canonical project/task/agent/run/research/evidence views and emit resource-update notifications after committed state transitions. Local repo/worktree paths are stripped from MCP output.
+
+Reusable prompts provide Master orchestration, specialist-scope and independent-review guidance. Prompt text never replaces control-plane enforcement.
+
+### Dashboard as MCP host/client
+
+External MCP definitions are durable state, but credentials are not: bearer credentials are stored as environment-variable names only.
+
+Supported current transports:
+
+- Streamable HTTP
+- stdio, only in loopback/private mode
+
+External tool execution is default-deny. `allowedTools` must explicitly contain the tool. A remote `readOnlyHint` is metadata, not authorization; a tool without a trusted read-only assertion also requires explicit presence in `mutatingTools`.
+
+Third-party MCP outputs are bounded/untrusted and must be treated as prompt-injection-capable content.
 
 ## OpenCode dispatch and restart safety
 
-External runner calls have crash windows, so dispatch state is persisted before side effects.
-
-Conceptual phases:
+The official OpenCode SDK owns protocol transport. Dashboard persists dispatch phases around external side effects:
 
 ```text
 creating_session
 session_created
 prompting
 prompt_ack_unknown
-running / dispatched
+dispatched/running
 ```
 
-OpenCode session titles include control-plane Run identity. If session creation succeeds but the acknowledgement is lost, the control plane can read-recover exactly that session instead of starting another.
+Deterministic Run-scoped session identity supports read-recovery if session creation acknowledgement is lost. A possibly accepted async prompt is reconciled against the same session and is not silently replayed.
 
-If a prompt may have been accepted but the acknowledgement is lost, the Run remains uncertain and is reconciled against the same session. It is not silently replayed.
-
-A session proven to have been created before any prompt was sent can be cleaned up safely during restart recovery.
+OpenCode SDK also exposes agent/provider/model/tool capability discovery, event streaming, permissions and MCP/LSP/formatter state. These capabilities enrich the harness adapter without moving control-plane authority into OpenCode.
 
 ## Direct-model Exploration and Research
 
-Exploration/Research calls are intentionally separate from coding Runs:
-
 ```text
 request
-  -> direct provider/model
-  -> bounded prompt/context
-  -> persisted run status/report/usage
+ -> configured provider/model
+ -> bounded filtered context
+ -> persisted report/reasoning/usage
 ```
 
-A process restart while a direct-model request is queued/running creates an unknown external-outcome problem. Current policy is fail-closed: the interrupted Run becomes failed/unknown-outcome and requires explicit retry. The control plane does not automatically replay a request that may already have consumed provider resources/cost.
+No worktree/branch/merge path is created. Interrupted queued/running direct-model calls fail closed because an unknown provider outcome must not be silently replayed.
 
-The current Exploration "research" mode is research-style model analysis, not live web retrieval. Prompts explicitly forbid fabricated source/citation claims.
+## Git integrity
 
-## Git integrity model
-
-1. A coding Task gets an isolated managed worktree and deterministic `ai/*` branch.
-2. The worker is instructed not to commit.
-3. The control plane owns the checkpoint commit.
-4. Git supplies parent/head/tree/diff evidence; agent summaries are not trusted as repository truth.
-5. Configured verification commands execute through argument arrays, never shell interpolation.
-6. A successful coding Run requires a real repository change and successful control-plane verification.
-7. GitHub publication validates configured `owner/repository` against the local origin and publishes the exact checkpoint branch.
-8. PR head, base lineage and required CI/branch-policy evidence must remain consistent with the reviewed checkpoint.
-9. Base movement before or after publication blocks autonomous continuation until the work is re-synced/revalidated.
-10. Merge uses the expected worker head and verifies resulting merge/tree evidence.
+1. Worker gets isolated managed worktree/branch.
+2. Worker is instructed not to commit.
+3. Control plane owns checkpoint commit.
+4. Git supplies parent/head/tree/diff truth.
+5. Verification commands use argument arrays.
+6. Successful coding requires real diff plus verification evidence.
+7. GitHub publication validates local origin against configured repository.
+8. PR head/base, branch policy and CI must match the reviewed checkpoint.
+9. Base movement blocks stale continuation.
+10. Merge is expected-head guarded and its resulting tree is verified.
 11. Cleanup occurs only after accepted merge state.
 
-No force-push, destructive reset or branch-protection bypass is part of the recovery strategy.
+No force push, destructive reset or branch-protection bypass is part of recovery.
 
-## GitHub evidence model
+## GitHub evidence
 
-GitHub-backed Tasks collect:
+Octokit provides GitHub transport, while Dashboard interprets evidence. Collected state includes PR head/base/SHA, paginated check-runs, legacy status contexts, rulesets/classic branch protection, required-check integration identity, opaque/merge-queue conditions, merge SHA and post-merge identity.
 
-- PR state, draft state, head/base branch and SHA
-- check-runs across bounded pagination
-- legacy commit-status contexts
-- active branch rulesets
-- classic branch protection
-- required check context + integration identity where supplied
-- merge-queue / opaque required-workflow conditions
-- merge SHA and post-merge identity evidence
+API failures are incomplete/error evidence, never an empty successful CI set. Pending/transient evidence uses durable bounded backoff. Merge retries only retry classified transient failures and remain budgeted.
 
-Check/status API failures are represented as incomplete/error evidence, never as "no CI". Required checks that are missing after discovery grace fail closed.
+## Persistence and transactions
 
-Pending/discovering CI and transient evidence errors set a persisted `nextCheckAt` with bounded backoff. Autonomy ticks inside that window do not spend another GitHub evidence request; a restart preserves the same polling budget.
-
-Transient merge failures use bounded durable retry/backoff. Non-transient conflicts stop instead of looping.
-
-## Persistence and transaction model
-
-SQLite is the current default control-plane persistence layer; JSON is legacy bootstrap/import only.
+SQLite/WAL is default persistence; JSON is legacy import.
 
 ```text
-SQLite (node:sqlite)
-  |- control_state       current normalized snapshot + monotonic revision
-  |- state_transitions   revision-indexed transition journal
-  `- operation_locks     durable owner/expiry leases
+SQLite
+ |- control_state       normalized snapshot + monotonic revision
+ |- state_transitions   revision-indexed journal
+ `- operation_locks     durable owner/expiry leases
 ```
 
-Configuration:
+Snapshot + transition event commit in one `BEGIN IMMEDIATE` transaction. StateStore publishes SSE/MCP update notifications only after persistence is the commit point. Stale revision writers are rejected.
 
-- WAL journal mode
-- `synchronous=FULL`
-- foreign keys enabled
-- snapshot and transition event committed in the same `BEGIN IMMEDIATE` transaction
-- monotonic revision conflicts reject stale mutation writers
-- StateStore publishes SSE only after persistence is the commit point
+Leases renew during long operations but are not full distributed fencing tokens. Current beta target is one control-plane instance.
 
-StateStore mutations are serialized in-process, and durable operation locks coordinate critical control operations across connections/processes.
+## Eventing
 
-### Current lease limitation
+Browser state refresh uses SSE. MCP clients receive MCP resource-update notifications. Neither stream is source of truth; SQLite state/revision is canonical.
 
-The lease layer renews long-lived locks while an operation runs, but it is not yet a full distributed fencing-token system. The current PC beta target is a **single control-plane instance**. Multi-instance hosted autonomy must not be treated as production-safe until irreversible side effects are fenced against a lost lease/owner generation.
-
-## Event stream
-
-`EventHub` publishes committed state transitions over SSE. Clients are removed on close/error. Broken or backpressured clients are dropped so one slow mobile/browser connection cannot make control-plane publication throw or grow an unbounded writable buffer.
-
-SSE is observability/refresh transport, not the durable source of truth. SQLite state/revision remains canonical.
+Slow/broken SSE clients are removed rather than accumulating unbounded buffers.
 
 ## Security boundaries
 
-- default local bind is loopback; public/private-network exposure is not a beta assumption
-- no public deployment before authentication/authorization/audit controls exist
-- runner APIs stay loopback/private by default
-- worker cannot approve/merge itself
-- subprocess/Git execution uses argument arrays, not interpolated shell strings
-- secrets are environment/secret-store concerns and must not be persisted in normal state/prompts/UI
-- provider, OpenCode and GitHub endpoint URLs reject embedded credentials/query/fragment secret channels
-- arbitrary provider/runner/GitHub response bodies are not persisted as error messages
-- repository context sent to external models excludes common secret paths and applies conservative content secret detection
-- verification command/output evidence is redacted before persistence
-- raw GitHub Actions logs are not persisted into repair prompts in the current slice
-
-`repoPath`, service/provider URLs and repository content sent to external models remain privileged configuration/input surfaces.
+- Default bind is loopback.
+- Built-in MCP and MCP administration are disabled on non-loopback binds.
+- Node MCP handler validates localhost Host/Origin to reduce DNS-rebinding exposure.
+- Public/remote exposure is not safe until authentication, authorization, audit and kill switch exist.
+- Worker cannot approve/merge itself.
+- External MCP tool annotations do not grant authorization.
+- External MCP configuration never stores bearer secret values.
+- subprocess/Git/stdio execution uses argument arrays, not shell interpolation.
+- provider/OpenCode/GitHub/MCP URLs and repository paths are privileged inputs.
+- remote outputs and repository context must be bounded/redacted/secret-filtered before persistence/model use.
 
 ## Current topology
 
 ```text
-Browser / mobile
-      |
-      v
-Static HTML/CSS/JS
-      |
-      v
-node:http Control API
-      |
-      +--> StateStore --> SQLite/WAL + transition journal + leases
-      |
-      +--> EventHub (SSE)
-      |
-      +--> AutonomyEngine / policy decorators
-      |       |- admission/concurrency
-      |       |- CI diagnostics
-      |       |- GitHub identity/branch policy
-      |       |- retry/recovery guards
-      |
-      +--> OpenCode adapter --> local/private coding harness
-      |
-      +--> Git/worktree adapter --> local repository/worktrees
-      |
-      +--> GitHub REST adapter --> PR/CI/policy/merge evidence
-      |
-      `--> direct-model adapter --> Exploration / Project Research
+Browser/mobile
+   |
+node:http control API
+   |
+   +-> StateStore -> SQLite/WAL/journal/leases
+   +-> SSE EventHub
+   +-> AutonomyEngine + fail-closed policy decorators
+   +-> Agent Registry + scope-aware run admission
+   +-> MCP server profiles (loopback only)
+   +-> MCP client/host registry (loopback administration)
+   +-> OpenCode SDK -> coding harness
+   +-> Git/worktree adapter
+   +-> Octokit -> GitHub PR/CI/policy/merge evidence
+   `-> direct-model adapter -> Exploration/Research
 ```
 
-## Beta verification levels
+## Verification levels
 
-Keep these claims distinct:
+Claims must stay distinct:
 
 1. **implemented** — code exists.
-2. **isolated/integration tested** — deterministic tests cover the boundary.
-3. **GitHub Actions verified** — full suite passes on the exact PR head.
-4. **PC beta dogfood verified** — real OpenCode + local Git + disposable real GitHub repo/Actions completes the loop, including failure/recovery scenarios.
+2. **deterministic/integration tested** — local/test-double/loopback tests prove defined invariants.
+3. **GitHub Actions verified** — complete Linux + Windows suite passes on exact PR head.
+4. **real interoperability/dogfood** — real OpenCode/MCP host and real external systems execute the flow.
+5. **production-ready remote autonomy** — authentication, authorization, audit, kill switch and distributed side-effect fencing are proven.
 
-The deterministic suite is intentionally not a substitute for level 4. The first PC beta is the gate that proves the real external integrations together.
+A green MCP loopback test proves levels 1-3 only; it is not evidence for all external MCP hosts or public exposure.
