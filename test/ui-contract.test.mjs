@@ -4,24 +4,30 @@ import test from 'node:test';
 
 const indexUrl = new URL('../public/index.html', import.meta.url);
 const appUrl = new URL('../public/app.js', import.meta.url);
+const navigationUrl = new URL('../public/navigation.js', import.meta.url);
 
 function idsInHtml(html) {
   return [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
 }
 
-test('dashboard keeps every static app.js DOM dependency present and unique', async () => {
-  const [html, app] = await Promise.all([
+test('dashboard keeps every static frontend DOM dependency present and unique', async () => {
+  const [html, app, navigation] = await Promise.all([
     readFile(indexUrl, 'utf8'),
     readFile(appUrl, 'utf8'),
+    readFile(navigationUrl, 'utf8'),
   ]);
 
   const ids = idsInHtml(html);
   const uniqueIds = new Set(ids);
   assert.equal(uniqueIds.size, ids.length, 'index.html must not contain duplicate ids');
 
-  const staticDomIds = new Set([...app.matchAll(/\$\('([^']+)'\)/g)].map((match) => match[1]));
+  const staticDomIds = new Set(
+    [...app.matchAll(/\$\('([^']+)'\)/g), ...navigation.matchAll(/getElementById\('([^']+)'\)/g)]
+      .map((match) => match[1]),
+  );
   const missing = [...staticDomIds].filter((id) => !uniqueIds.has(id));
-  assert.deepEqual(missing, [], `index.html is missing DOM ids referenced by app.js: ${missing.join(', ')}`);
+  assert.deepEqual(missing, [], `index.html is missing DOM ids referenced by frontend modules: ${missing.join(', ')}`);
+  assert.doesNotMatch(html, /\son[a-z]+=/i, 'inline event handlers violate the dashboard CSP boundary');
 });
 
 test('dashboard presents coding and research as visibly separate flows', async () => {
