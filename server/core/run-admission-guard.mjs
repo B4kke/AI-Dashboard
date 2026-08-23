@@ -1,65 +1,93 @@
-export const MCP_PROFILE_ORDER = Object.freeze(['read', 'worker', 'supervisor', 'master']);
+import { scopeSetsOverlap, taskWorkScopes } from './work-scope.mjs';
 
-const READ_TOOLS = Object.freeze([
-  'dashboard_status',
-  'project_list',
-  'project_get',
-  'task_list',
-  'task_get',
-  'task_evidence',
-  'agent_list',
-  'agent_get',
-  'run_get',
-  'research_get',
-  'scope_check',
-]);
+const ACTIVE_RUN_STATES = new Set(['preparing', 'running', 'retrying', 'dispatch_unknown']);
 
-export const MCP_PROFILES = Object.freeze({
-  read: Object.freeze({
-    description: 'Read-only project, task, run, agent and evidence inspection.',
-    tools: READ_TOOLS,
-    mutating: false,
-  }),
-  worker: Object.freeze({
-    description: 'Read-only worker context scoped to implementation work; no approval or control-plane mutation.',
-    tools: READ_TOOLS,
-    mutating: false,
-  }),
-  supervisor: Object.freeze({
-    description: 'Read-only review/evidence context. Supervisors never mutate, publish, approve through tools or merge.',
-    tools: READ_TOOLS,
-    mutating: false,
-  }),
-  master: Object.freeze({
-    description: 'Master-agent orchestration tools. Mutations still pass through AI Dashboard control-plane invariants.',
-    tools: Object.freeze([
-      ...READ_TOOLS,
-      'agent_create',
-      'agent_update',
-      'task_create',
-      'task_assign_agent',
-      'task_delegate',
-      'task_requeue',
-      'research_start',
-      'idea_create',
-      'idea_plan',
-      'run_abort',
-    ]),
-    mutating: true,
-  }),
-});
-
-export function normalizeMcpProfile(value) {
-  const profile = String(value || 'read').trim().toLowerCase();
-  if (!Object.prototype.hasOwnProperty.call(MCP_PROFILES, profile)) throw new Error(`Unknown MCP profile: ${profile}`);
-  return profile;
+function projectForTask(store, taskId) {
+  const task = store.getTask(taskId);
+  if (!task) throw new Error('Task not found');
+  const project = store.getProject(task.projectId);
+  if (!project) throw new Error('Project not found');
+  return project;
 }
 
-export function profileAllowsTool(profile, toolName) {
-  return MCP_PROFILES[normalizeMcpProfile(profile)].tools.includes(toolName);
+function projectForIdea(store, ideaId) {
+  const idea = store.getIdea(ideaId);
+  if (!idea) throw new Error('Idea not found');
+  const project = store.getProject(idea.projectId);
+  if (!project) throw new Error('Project not found');
+  return project;
 }
 
-export function isLoopbackHost(host) {
-  const value = String(host || '').trim().toLowerCase();
-  return value === '127.0.0.1' || value === 'localhost' || value === '::1' || value === '[::1]';
+export function activeRunCount(store, projectId) {
+  return store.snapshot().runs.filter((run) => (
+    run.projectId === projectId
+    && (ACTIVE_RUN_STATES.has(run.status) || run.dispatchUncertain === true)
+  )).length;
 }
+
+export function activeScopeConflicts(store, taskId) {
+  const task = store.getTask(taskId);
+  if (!task) throw new Error('Task not found');
+  const agent = task.agentId ? store.getAgent?.(task.agentId) : null;
+  const scopes = taskWorkScopes(task, agent);
+  if (!scopes.length) return [];
+
+  const snapshot = store.snapshot();
+  const activeRuns = snapshot.runs.filter((run) => (
+    run.projectId === task.projectId
+    && run.taskId !== task.id
+    && (ACTIVE_RUN_STATES.has(run.status) || run.dispatchUncertain === true)
+  ));
+  const conflicts = [];
+  for (const run of activeRuns) {
+    const otherTask = snapshot.tasks.find((item) => item.id === run.taskId);
+    if (!otherTask) continue;
+    const otherAgent = otherTask.agentId ? snapshot.agents?.find((item) => item.id === otherTask.agentId) : null;
+    const otherScopes = taskWorkScopes(otherTask, otherAgent);
+    if (otherScopes.length && scopeSetsOverlap(scopes, otherScopes)) {
+      conflicts.push({ runId: run.id, taskId: otherTask.id, scopes: otherScopes });
+    }
+  }
+  return conflicts;
+}
+
+export function decorateRunAdmission({ orchestrator, store, locks }) {
+  async function admit(project, operation, { taskId = null, enforceScopes = false } = {}) {
+    if (project.status !== 'active') throw new Error(`Project is ${project.status}; autonomous run admission is blocked`);
+    return locks.withLock(`project:${project.id}:run-admission`, async () => {
+      const current = store.getProject(project.id);
+      if (!current || current.status !== 'active') throw new Error(`Project is ${current?.status || 'missing'}; autonomous run admission is blocked`);
+      const maxConcurrentRuns = Math.max(1, Number(current.autonomy?.maxConcurrentRuns || 1));
+      const active = activeRunCount(store, current.id);
+      if (active >= maxConcurrentRuns) {
+        throw new Error(`Project run concurrency budget exhausted (${active}/${maxConcurrentRuns} active runs)`);
+      }
+      if (enforceScopes && taskId) {
+        const conflicts = activeScopeConflicts(store, taskId);
+        if (conflicts.length) {
+          const conflict = conflicts[0];
+          throw new Error(`Task work scope overlaps active task ${conflict.taskId} (${conflict.scopes.join(', ')}); refusing parallel specialist execution`);
+        }
+      }
+      return operation();
+    });
+  }
+
+  return {
+    ...orchestrator,
+    startWorker(taskId) {
+      const project = projectForTask(store, taskId);
+      return admit(project, () => orchestrator.startWorker(taskId), { taskId, enforceScopes: true });
+    },
+    startSupervisor(taskId) {
+      const project = projectForTask(store, taskId);
+      return admit(project, () => orchestrator.startSupervisor(taskId));
+    },
+    startIdeaPlanning(ideaId) {
+      const project = projectForIdea(store, ideaId);
+      return admit(project, () => orchestrator.startIdeaPlanning(ideaId));
+    },
+  };
+}
+
+export { ACTIVE_RUN_STATES };
