@@ -110,6 +110,20 @@ Custom OpenAI-compatible endpoints are supported. Credentials are referenced by 
 
 Provider/OpenCode/GitHub service URLs reject embedded credentials, query parameters and fragments so URLs cannot become an accidental secret-storage channel. Arbitrary remote error response bodies are not copied into persisted error state.
 
+## SDK integration boundaries
+
+Transport plumbing is delegated to maintained upstream SDKs instead of duplicating their HTTP protocols:
+
+- OpenCode uses pinned `@opencode-ai/sdk`. The adapter uses official session, status, message, diff, abort, provider, agent, tool, MCP/LSP/formatter and event-stream surfaces.
+- Configured OpenCode role names are capability-discovered from the live harness. Unknown roles are not sent as invalid agent IDs; role semantics remain in the control-plane prompt.
+- OpenCode model discovery records tool-calling, reasoning, attachment, context/output-limit, modality and lifecycle metadata so a later chat-agent surface can select capable harness/model combinations without guessing.
+- GitHub uses pinned `octokit` for REST routing, authentication, pagination, retry/throttling primitives and rate-limit inspection.
+- GitHub check completeness, required-check policy, expected-head merge, checkpoint/tree identity, restart recovery and fail-closed decisions remain AI Dashboard control-plane responsibilities.
+
+OpenCode's stable pinned SDK currently does not expose the documented structured-output `format` field on `prompt`/`promptAsync`. The existing versioned `AI_DASHBOARD_RESULT` contract therefore remains authoritative until the published SDK surface actually supports that field; the dashboard does not depend on documentation-only API shapes.
+
+See `docs/06-sdk-integrations.md` for the transport/control-plane boundary and upgrade rules.
+
 ## Coding autonomy pipeline
 
 A successful coding Task follows one control-plane-owned pipeline:
@@ -150,7 +164,7 @@ Verification commands run through argument arrays, not an interpolated shell. Co
 
 OpenCode session/prompt dispatch has explicit crash-window handling.
 
-Runs use deterministic session identity tied to the control-plane Run. If session creation succeeded but the HTTP acknowledgement was lost, the existing session can be read-recovered rather than duplicated.
+Runs use deterministic session identity tied to the control-plane Run. If session creation succeeded but the SDK/HTTP acknowledgement was lost, the existing session can be read-recovered rather than duplicated.
 
 If `prompt_async` may have been accepted but the acknowledgement is lost, the Run becomes uncertain and is reconciled against the same session. The control plane does not silently replay a potentially accepted worker/planner/supervisor prompt.
 
@@ -215,14 +229,17 @@ Broken, closed or backpressured SSE clients are dropped so a slow phone/browser 
 - registration of existing local projects/repositories
 - direct Task creation
 - optional Idea/planner flow
-- OpenCode coding delegation with isolated worktrees
+- OpenCode coding delegation with isolated worktrees through the official OpenCode SDK
+- OpenCode agent/capability discovery and model tool-calling/reasoning metadata
+- OpenCode SDK event-stream/MCP/LSP/formatter/tool surfaces available behind the harness adapter
 - per-Task and per-role model selection
 - direct provider/model discovery
 - read-only Project Research Runs
 - versioned worker/planner/supervisor contracts
 - independent machine evidence gate
 - verification secret redaction
-- GitHub branch publish / PR / CI / branch-policy feedback loop
+- GitHub branch publish / PR / CI / branch-policy feedback loop through Octokit
+- GitHub API rate-limit budget exposed in integration overview
 - bounded CI repair loop
 - independent supervisor approval gate
 - expected-SHA guarded GitHub merge
@@ -254,11 +271,12 @@ Requirements:
 
 ```bash
 cp .env.example .env
+npm install --ignore-scripts
 npm test
 npm start
 ```
 
-`npm start` and `npm run dev` use Node's built-in env-file support.
+`@opencode-ai/sdk` and `octokit` are pinned application dependencies. `npm start` and `npm run dev` use Node's built-in env-file support.
 
 Important environment variables:
 
@@ -304,8 +322,8 @@ Models/integrations:
 - `POST /api/model-providers`
 - `POST /api/model-providers/:id/discover`
 - `GET /api/integrations/opencode`
-- `GET /api/integrations/opencode/models`
-- `GET /api/integrations/github`
+- `GET /api/integrations/opencode/models` (includes tool-calling/reasoning/modality metadata from OpenCode)
+- `GET /api/integrations/github` (includes safe rate-limit budget when authenticated)
 
 Coding/GitHub loop:
 
@@ -332,6 +350,6 @@ Keep claims separate:
 
 The next project gate is level 4, not more feature breadth.
 
-See `docs/02-architecture.md`, `docs/04-roadmap.md` and `docs/05-pc-beta-checklist.md`.
+See `docs/02-architecture.md`, `docs/04-roadmap.md`, `docs/05-pc-beta-checklist.md` and `docs/06-sdk-integrations.md`.
 
 Canonical tracking issue: https://github.com/B4kke/AI-Dashboard/issues/1

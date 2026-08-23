@@ -131,6 +131,18 @@ export class OpenCodeClient {
     }));
   }
 
+  async prompt({ directory, sessionId, prompt, agent, model, tools, system }) {
+    const body = { parts: [{ type: 'text', text: prompt }] };
+    const resolvedAgent = await this.resolveAgent(directory, agent);
+    if (resolvedAgent) body.agent = resolvedAgent;
+    if (model) body.model = normalizeModelRef(model);
+    if (tools && typeof tools === 'object') body.tools = tools;
+    if (typeof system === 'string' && system.trim()) body.system = system;
+    return this.call('session.prompt', () => this.client.session.prompt({
+      ...this.options(directory, 120_000), path: { id: sessionId }, body,
+    }));
+  }
+
   async promptAsync({ directory, sessionId, prompt, agent, model, tools }) {
     const body = { parts: [{ type: 'text', text: prompt }] };
     const resolvedAgent = await this.resolveAgent(directory, agent);
@@ -199,6 +211,24 @@ export class OpenCodeClient {
     return this.call('tool.ids', () => this.client.tool.ids(this.options(directory, 10_000)));
   }
 
+  async toolsForModel(directory, model) {
+    const resolved = normalizeModelRef(model);
+    if (!resolved) throw new Error('OpenCode tool discovery requires provider/model');
+    return this.call('tool.list', () => this.client.tool.list({
+      ...this.options(directory, 10_000),
+      query: { ...(directory ? { directory } : {}), provider: resolved.providerID, model: resolved.modelID },
+    }));
+  }
+
+  respondPermission({ directory, sessionId, permissionId, response }) {
+    if (!['once', 'always', 'reject'].includes(response)) throw new Error('OpenCode permission response must be once, always, or reject');
+    return this.call('session.permission', () => this.client.postSessionIdPermissionsPermissionId({
+      ...this.options(directory),
+      path: { id: sessionId, permissionID: permissionId },
+      body: { response },
+    }));
+  }
+
   subscribeEvents(directory) {
     try {
       return this.client.event.subscribe({ ...scope(directory), throwOnError: true });
@@ -219,6 +249,8 @@ export class OpenCodeClient {
     return {
       transport: '@opencode-ai/sdk',
       events: true,
+      synchronousPrompt: true,
+      permissionResponses: true,
       agents,
       models,
       chat: {

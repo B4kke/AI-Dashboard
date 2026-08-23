@@ -146,10 +146,55 @@ test('OpenCode capabilities include agents, tools, MCP/LSP/formatter status and 
     const capabilities = await client.capabilities('/tmp/repo');
     assert.equal(capabilities.transport, '@opencode-ai/sdk');
     assert.equal(capabilities.events, true);
+    assert.equal(capabilities.synchronousPrompt, true);
+    assert.equal(capabilities.permissionResponses, true);
     assert.deepEqual(capabilities.chat.toolCallingModels, ['p/m']);
     assert.deepEqual(capabilities.tools, ['read', 'write', 'bash']);
     assert.deepEqual(capabilities.mcp, [{ name: 'github', status: 'connected' }]);
     assert.equal(capabilities.agents.some((agent) => agent.id === 'reviewer'), true);
+  } finally {
+    await close(server);
+  }
+});
+
+test('OpenCode SDK chat path supports tool maps, tool schema discovery and permission responses', async () => {
+  const seen = { prompt: null, permission: null, toolQuery: null };
+  const server = await listen(async (req, res) => {
+    const url = requestPath(req);
+    res.setHeader('content-type', 'application/json');
+    if (url.pathname === '/agent') return res.end(JSON.stringify([{ name: 'general' }]));
+    if (url.pathname === '/experimental/tool') {
+      seen.toolQuery = Object.fromEntries(url.searchParams);
+      return res.end(JSON.stringify([{ id: 'read', description: 'Read files' }]));
+    }
+    if (url.pathname === '/session/chat-1/message' && req.method === 'POST') {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      seen.prompt = JSON.parse(Buffer.concat(chunks));
+      return res.end(JSON.stringify({ info: { role: 'assistant' }, parts: [{ type: 'text', text: 'done' }] }));
+    }
+    if (url.pathname === '/session/chat-1/permissions/perm-1' && req.method === 'POST') {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      seen.permission = JSON.parse(Buffer.concat(chunks));
+      return res.end(JSON.stringify(true));
+    }
+    res.statusCode = 404; res.end('{}');
+  });
+  try {
+    const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+    const tools = await client.toolsForModel('/tmp/repo', 'lmstudio/qwen3');
+    const reply = await client.prompt({
+      directory: '/tmp/repo', sessionId: 'chat-1', prompt: 'Inspect the repo', agent: 'general', model: 'lmstudio/qwen3',
+      system: 'You are a read-only project assistant.', tools: { read: true, write: false, bash: false },
+    });
+    await client.respondPermission({ directory: '/tmp/repo', sessionId: 'chat-1', permissionId: 'perm-1', response: 'once' });
+    assert.deepEqual(tools, [{ id: 'read', description: 'Read files' }]);
+    assert.deepEqual(seen.toolQuery, { directory: '/tmp/repo', provider: 'lmstudio', model: 'qwen3' });
+    assert.deepEqual(seen.prompt.tools, { read: true, write: false, bash: false });
+    assert.equal(seen.prompt.system, 'You are a read-only project assistant.');
+    assert.equal(reply.parts[0].text, 'done');
+    assert.deepEqual(seen.permission, { response: 'once' });
   } finally {
     await close(server);
   }
