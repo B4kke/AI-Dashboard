@@ -24,6 +24,9 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
+      - name: Install pinned SDK dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
       - name: Syntax checks
         run: |
           find server test scripts -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
@@ -45,6 +48,9 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
+
+      - name: Install pinned SDK dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
 
       - name: Tests
         run: npm test

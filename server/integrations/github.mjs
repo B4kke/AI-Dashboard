@@ -1,10 +1,9 @@
-const DEFAULT_API = 'https://api.github.com';
-const CHECK_RUN_PAGE_SIZE = 100;
-const MAX_CHECK_RUN_PAGES = 10;
-const RULE_PAGE_SIZE = 100;
-const MAX_RULE_PAGES = 10;
+import { Octokit } from 'octokit';
 
-function normalizeGitHubApiUrl(value) {
+const DEFAULT_API = 'https://api.github.com';
+const PAGE_SIZE = 100;
+
+export function normalizeGitHubApiUrl(value) {
   let url;
   try { url = new URL(String(value || '').trim()); } catch { throw new Error('GitHub API URL must be absolute'); }
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('GitHub API URL must use http or https');
@@ -79,7 +78,7 @@ export function aggregateGitHubChecks({ checkRuns = [], combinedStatus = null, e
 
   const legacyState = combinedStatus?.state || null;
   if (!legacyStatuses.length && legacyState && legacyState !== 'success' && legacyState !== 'pending') {
-    checks.push({ id: 'combined-status', name: 'commit status', status: legacyState, conclusion: legacyState, state: legacyState === 'pending' ? 'pending' : 'failure', url: null, appId: null, source: 'combined-status' });
+    checks.push({ id: 'combined-status', name: 'commit status', status: legacyState, conclusion: legacyState, state: 'failure', url: null, appId: null, source: 'combined-status' });
   }
 
   const normalizedErrors = errors.filter(Boolean).map((error) => String(error));
@@ -160,118 +159,142 @@ export function normalizeBranchMergePolicy({ branch, rules = [], protection = nu
   };
 }
 
+function safeGitHubError(operation, error) {
+  const status = Number(error?.status || error?.response?.status);
+  const wrapped = new Error(`GitHub ${operation} failed${Number.isInteger(status) ? ` (HTTP ${status})` : ''}`);
+  wrapped.name = 'GitHubSdkError';
+  if (Number.isInteger(status)) wrapped.status = status;
+  const headers = error?.response?.headers || error?.headers || {};
+  const retryAfter = Number(headers['retry-after'] || headers.get?.('retry-after'));
+  if (Number.isFinite(retryAfter) && retryAfter >= 0) wrapped.retryAfterSeconds = retryAfter;
+  const remaining = Number(headers['x-ratelimit-remaining'] || headers.get?.('x-ratelimit-remaining'));
+  const reset = Number(headers['x-ratelimit-reset'] || headers.get?.('x-ratelimit-reset'));
+  if (Number.isFinite(remaining)) wrapped.rateLimitRemaining = remaining;
+  if (Number.isFinite(reset)) wrapped.rateLimitReset = reset;
+  return wrapped;
+}
+
 export class GitHubClient {
   constructor({
     baseUrl = process.env.GITHUB_API_URL || DEFAULT_API,
     token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '',
-    timeoutMs = 8000,
+    timeoutMs = 8_000,
+    retries = 2,
   } = {}) {
     this.baseUrl = normalizeGitHubApiUrl(baseUrl);
     this.token = token;
     this.timeoutMs = timeoutMs;
+    this.octokit = new Octokit({
+      auth: token || undefined,
+      baseUrl: this.baseUrl,
+      userAgent: 'ai-dashboard',
+      request: { timeout: timeoutMs, retries },
+      throttle: {
+        onRateLimit: () => false,
+        onSecondaryRateLimit: () => false,
+      },
+    });
   }
 
-  async request(path, { method = 'GET', body, timeoutMs = this.timeoutMs, allowNotFound = false } = {}) {
-    const headers = {
-      accept: 'application/vnd.github+json',
-      'x-github-api-version': '2022-11-28',
-      'user-agent': 'ai-dashboard',
-    };
-    if (this.token) headers.authorization = `Bearer ${this.token}`;
-    if (body !== undefined) headers['content-type'] = 'application/json';
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!response.ok) {
-      if (allowNotFound && response.status === 404) return null;
-      // GitHub errors may be stored on task/publication evidence. Do not persist arbitrary remote
-      // response bodies because GitHub Enterprise/proxies can echo request or credential material.
-      const error = new Error(`GitHub ${method} ${path} returned HTTP ${response.status}`);
-      error.name = 'GitHubHttpError';
-      error.status = response.status;
-      const retryAfter = Number(response.headers.get('retry-after'));
-      if (Number.isFinite(retryAfter) && retryAfter >= 0) error.retryAfterSeconds = retryAfter;
-      throw error;
+  async call(operation, fn, { allowNotFound = false } = {}) {
+    try {
+      const response = await fn();
+      return response?.data ?? response;
+    } catch (error) {
+      const status = Number(error?.status || error?.response?.status);
+      if (allowNotFound && status === 404) return null;
+      throw safeGitHubError(operation, error);
     }
-    if (response.status === 204) return null;
-    return response.json();
   }
 
   repository(repository) {
     const { owner, repo } = parseGitHubRepository(repository);
-    return this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+    return this.call('repos.get', () => this.octokit.rest.repos.get({ owner, repo }));
   }
 
-  currentUser() { return this.request('/user'); }
+  currentUser() {
+    return this.call('users.getAuthenticated', () => this.octokit.rest.users.getAuthenticated());
+  }
+
+  async rateLimit() {
+    const value = await this.call('rateLimit.get', () => this.octokit.rest.rateLimit.get());
+    const core = value?.resources?.core || value?.rate || null;
+    return core ? {
+      limit: core.limit ?? null,
+      remaining: core.remaining ?? null,
+      used: core.used ?? null,
+      reset: core.reset ? new Date(core.reset * 1000).toISOString() : null,
+    } : null;
+  }
 
   async overview(repository = null) {
-    if (!this.token) return { configured: false, authenticated: false, apiUrl: this.baseUrl, repository: repository || null };
-    const user = await this.currentUser();
-    let repo = null;
-    if (repository) repo = await this.repository(repository);
+    if (!this.token) return { configured: false, authenticated: false, apiUrl: this.baseUrl, repository: repository || null, transport: 'octokit' };
+    const [user, repo, rateLimit] = await Promise.all([
+      this.currentUser(),
+      repository ? this.repository(repository) : Promise.resolve(null),
+      this.rateLimit().catch(() => null),
+    ]);
     return {
       configured: true,
       authenticated: true,
       apiUrl: this.baseUrl,
+      transport: 'octokit',
       login: user?.login || null,
       repository: repo?.full_name || repository || null,
       defaultBranch: repo?.default_branch || null,
+      rateLimit,
     };
   }
 
   async findOpenPullRequest({ repository, headBranch, baseBranch }) {
     const { owner, repo } = parseGitHubRepository(repository);
-    const query = new URLSearchParams({ state: 'open', head: `${owner}:${headBranch}`, base: baseBranch, per_page: '10' });
-    const pulls = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?${query}`);
+    const pulls = await this.call('pulls.list', () => this.octokit.rest.pulls.list({
+      owner, repo, state: 'open', head: `${owner}:${headBranch}`, base: baseBranch, per_page: 10,
+    }));
     return Array.isArray(pulls) ? pulls[0] || null : null;
   }
 
   createPullRequest({ repository, title, headBranch, baseBranch, body = '', draft = true }) {
     const { owner, repo } = parseGitHubRepository(repository);
-    return this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`, {
-      method: 'POST',
-      body: { title, head: headBranch, base: baseBranch, body, draft },
-    });
+    return this.call('pulls.create', () => this.octokit.rest.pulls.create({ owner, repo, title, head: headBranch, base: baseBranch, body, draft }));
   }
 
   pullRequest({ repository, number }) {
     const { owner, repo } = parseGitHubRepository(repository);
-    return this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${Number(number)}`);
+    return this.call('pulls.get', () => this.octokit.rest.pulls.get({ owner, repo, pull_number: Number(number) }));
   }
 
-  async completeCheckRuns(root) {
-    const first = await this.request(`${root}/check-runs?per_page=${CHECK_RUN_PAGE_SIZE}`);
-    const all = Array.isArray(first?.check_runs) ? [...first.check_runs] : [];
-    const reportedTotal = Number(first?.total_count);
-
-    if (!Number.isFinite(reportedTotal)) {
-      if (all.length < CHECK_RUN_PAGE_SIZE) return all;
-      throw new Error(`GitHub check-runs completeness is unknown: received a full ${CHECK_RUN_PAGE_SIZE}-item page without total_count`);
+  async completeCheckRuns({ repository, sha }) {
+    const { owner, repo } = parseGitHubRepository(repository);
+    let reportedTotal = null;
+    try {
+      const runs = await this.octokit.paginate(
+        this.octokit.rest.checks.listForRef,
+        { owner, repo, ref: sha, per_page: PAGE_SIZE },
+        (response) => {
+          const total = Number(response?.data?.total_count);
+          if (reportedTotal === null && Number.isFinite(total)) reportedTotal = total;
+          return Array.isArray(response?.data?.check_runs) ? response.data.check_runs : [];
+        },
+      );
+      if (reportedTotal === null && runs.length >= PAGE_SIZE) {
+        throw new Error(`GitHub check-runs completeness is unknown: received ${runs.length} check(s) without total_count`);
+      }
+      if (Number.isFinite(reportedTotal) && runs.length < reportedTotal) {
+        throw new Error(`GitHub check-runs evidence truncated: GitHub reports ${reportedTotal} checks but Octokit collected ${runs.length}`);
+      }
+      return runs;
+    } catch (error) {
+      if (error?.message?.startsWith('GitHub check-runs')) throw error;
+      throw safeGitHubError('checks.listForRef', error);
     }
-    if (reportedTotal <= all.length) return all;
-
-    for (let page = 2; page <= MAX_CHECK_RUN_PAGES && all.length < reportedTotal; page += 1) {
-      const value = await this.request(`${root}/check-runs?per_page=${CHECK_RUN_PAGE_SIZE}&page=${page}`);
-      const batch = Array.isArray(value?.check_runs) ? value.check_runs : [];
-      all.push(...batch);
-      if (!batch.length) break;
-    }
-
-    if (all.length < reportedTotal) {
-      throw new Error(`GitHub check-runs evidence truncated: GitHub reports ${reportedTotal} checks but only ${all.length} were collected`);
-    }
-    return all;
   }
 
   async commitChecks({ repository, sha }) {
     const { owner, repo } = parseGitHubRepository(repository);
-    const root = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}`;
     const [checkRunsResult, statusResult] = await Promise.allSettled([
-      this.completeCheckRuns(root),
-      this.request(`${root}/status`),
+      this.completeCheckRuns({ repository, sha }),
+      this.call('repos.getCombinedStatusForRef', () => this.octokit.rest.repos.getCombinedStatusForRef({ owner, repo, ref: sha, per_page: PAGE_SIZE })),
     ]);
     const errors = [];
     if (checkRunsResult.status === 'rejected') errors.push(`check-runs: ${checkRunsResult.reason?.message || checkRunsResult.reason}`);
@@ -285,23 +308,20 @@ export class GitHubClient {
 
   async completeBranchRules({ repository, branch }) {
     const { owner, repo } = parseGitHubRepository(repository);
-    const encodedBranch = encodeURIComponent(branch);
-    const all = [];
-    for (let page = 1; page <= MAX_RULE_PAGES; page += 1) {
-      const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/rules/branches/${encodedBranch}?per_page=${RULE_PAGE_SIZE}&page=${page}`);
-      if (!Array.isArray(value)) throw new Error('GitHub branch rules response was not an array');
-      all.push(...value);
-      if (value.length < RULE_PAGE_SIZE) return all;
+    try {
+      return await this.octokit.paginate('GET /repos/{owner}/{repo}/rules/branches/{branch}', {
+        owner, repo, branch, per_page: PAGE_SIZE,
+      });
+    } catch (error) {
+      throw safeGitHubError('repos.getRulesForBranch', error);
     }
-    throw new Error(`GitHub branch rules evidence may be truncated after ${MAX_RULE_PAGES * RULE_PAGE_SIZE} rules`);
   }
 
   async branchMergePolicy({ repository, branch }) {
     const { owner, repo } = parseGitHubRepository(repository);
-    const encodedBranch = encodeURIComponent(branch);
     const [rulesResult, protectionResult] = await Promise.allSettled([
       this.completeBranchRules({ repository, branch }),
-      this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodedBranch}/protection`, { allowNotFound: true }),
+      this.call('repos.getBranchProtection', () => this.octokit.rest.repos.getBranchProtection({ owner, repo, branch }), { allowNotFound: true }),
     ]);
     const errors = [];
     if (rulesResult.status === 'rejected') errors.push(`branch-rules: ${rulesResult.reason?.message || rulesResult.reason}`);
@@ -339,17 +359,18 @@ export class GitHubClient {
 
   mergePullRequest({ repository, number, expectedHeadSha, method = 'squash', commitTitle = null }) {
     const { owner, repo } = parseGitHubRepository(repository);
-    const body = { merge_method: method };
-    if (expectedHeadSha) body.sha = expectedHeadSha;
-    if (commitTitle) body.commit_title = commitTitle;
-    return this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${Number(number)}/merge`, { method: 'PUT', body });
+    return this.call('pulls.merge', () => this.octokit.rest.pulls.merge({
+      owner,
+      repo,
+      pull_number: Number(number),
+      merge_method: method,
+      ...(expectedHeadSha ? { sha: expectedHeadSha } : {}),
+      ...(commitTitle ? { commit_title: commitTitle } : {}),
+    }));
   }
 
-  async deleteBranch({ repository, branch }) {
+  deleteBranch({ repository, branch }) {
     const { owner, repo } = parseGitHubRepository(repository);
-    const ref = branch.split('/').map(encodeURIComponent).join('/');
-    return this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs/heads/${ref}`, { method: 'DELETE' });
+    return this.call('git.deleteRef', () => this.octokit.rest.git.deleteRef({ owner, repo, ref: `heads/${branch}` }));
   }
 }
-
-export { normalizeGitHubApiUrl };
