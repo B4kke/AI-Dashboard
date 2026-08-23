@@ -18,11 +18,8 @@
       <p class="nav-label">Explore</p>
       <a href="#explorations">Explorations</a>
       <a href="#research">Research</a>
-      <a href="#ideas">Ideas</a>
       <p class="nav-label">System</p>
-      <a href="#integrations">Integrations</a>
-      <a href="#models">Models</a>
-      <a href="#automations">Autonomy</a>
+      <a href="#integrations">System</a>
     </nav>
     <div class="sidebar-foot"><span class="dot" id="system-dot"></span><span id="system-label">Connecting…</span></div>
   </aside>
@@ -70,7 +67,7 @@
     </section>
 
     <section class="workspace-section" id="projects">
-      <div class="section-heading"><div><p class="eyebrow">PROJECTS</p><h2>Execution roots</h2><p class="section-copy">Register an existing repository directly, then create ordinary Tasks without passing through Idea or Exploration.</p></div><button id="new-project-inline" type="button" onclick="document.getElementById('project-dialog').showModal()">+ Project</button></div>
+      <div class="section-heading"><div><p class="eyebrow">PROJECTS</p><h2>Execution roots</h2><p class="section-copy">Register an existing repository directly, then create ordinary Tasks without passing through Idea or Exploration.</p></div><button id="new-project-inline" type="button">+ Project</button></div>
       <div id="project-list" class="stack list-surface"></div>
 
       <details class="subsection" id="ideas">
@@ -200,6 +197,7 @@
   <dialog id="evidence-dialog"><form method="dialog"><div class="panel-head"><div><p class="eyebrow">TASK EVIDENCE</p><h2 id="evidence-title">Evidence</h2></div><button value="cancel">Close</button></div><pre id="evidence-content">Loading…</pre></form></dialog>
 
   <datalist id="opencode-models"></datalist><datalist id="direct-models"></datalist>
+  <script type="module" src="/navigation.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
