@@ -188,7 +188,8 @@ export class GitHubClient {
       auth: token || undefined,
       baseUrl: this.baseUrl,
       userAgent: 'ai-dashboard',
-      request: { timeout: timeoutMs, retries },
+      request: { timeout: timeoutMs },
+      retry: { enabled: retries > 0 },
       throttle: {
         onRateLimit: () => false,
         onSecondaryRateLimit: () => false,
@@ -274,6 +275,7 @@ export class GitHubClient {
         (response) => {
           const total = Number(response?.data?.total_count);
           if (reportedTotal === null && Number.isFinite(total)) reportedTotal = total;
+          if (Array.isArray(response?.data)) return response.data;
           return Array.isArray(response?.data?.check_runs) ? response.data.check_runs : [];
         },
       );
