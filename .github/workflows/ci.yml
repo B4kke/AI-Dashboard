@@ -8,7 +8,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -24,22 +24,8 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
-      - name: Install pinned SDK dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
-
-      - name: Commit generated dependency lock once
-        if: github.event_name == 'push' && github.ref_name == 'bootstrap/control-center-foundation'
-        shell: bash
-        run: |
-          if git ls-files --error-unmatch package-lock.json >/dev/null 2>&1; then
-            echo 'package-lock.json already tracked'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add package-lock.json
-          git commit -m 'Lock runtime SDK dependencies'
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Syntax checks
         run: |
@@ -63,8 +49,8 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
-      - name: Install pinned SDK dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Tests
         run: npm test
