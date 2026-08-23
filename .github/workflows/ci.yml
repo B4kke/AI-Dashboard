@@ -27,6 +27,14 @@ jobs:
       - name: Install pinned SDK dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
 
+      - name: Capture generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-package-lock
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Syntax checks
         run: |
           find server test scripts -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
