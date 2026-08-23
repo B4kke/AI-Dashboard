@@ -1,58 +1,65 @@
-const ACTIVE_RUN_STATES = new Set(['preparing', 'running', 'retrying', 'dispatch_unknown']);
+export const MCP_PROFILE_ORDER = Object.freeze(['read', 'worker', 'supervisor', 'master']);
 
-function projectForTask(store, taskId) {
-  const task = store.getTask(taskId);
-  if (!task) throw new Error('Task not found');
-  const project = store.getProject(task.projectId);
-  if (!project) throw new Error('Project not found');
-  return project;
+const READ_TOOLS = Object.freeze([
+  'dashboard_status',
+  'project_list',
+  'project_get',
+  'task_list',
+  'task_get',
+  'task_evidence',
+  'agent_list',
+  'agent_get',
+  'run_get',
+  'research_get',
+  'scope_check',
+]);
+
+export const MCP_PROFILES = Object.freeze({
+  read: Object.freeze({
+    description: 'Read-only project, task, run, agent and evidence inspection.',
+    tools: READ_TOOLS,
+    mutating: false,
+  }),
+  worker: Object.freeze({
+    description: 'Read-only worker context scoped to implementation work; no approval or control-plane mutation.',
+    tools: READ_TOOLS,
+    mutating: false,
+  }),
+  supervisor: Object.freeze({
+    description: 'Read-only review/evidence context. Supervisors never mutate, publish, approve through tools or merge.',
+    tools: READ_TOOLS,
+    mutating: false,
+  }),
+  master: Object.freeze({
+    description: 'Master-agent orchestration tools. Mutations still pass through AI Dashboard control-plane invariants.',
+    tools: Object.freeze([
+      ...READ_TOOLS,
+      'agent_create',
+      'agent_update',
+      'task_create',
+      'task_assign_agent',
+      'task_delegate',
+      'task_requeue',
+      'research_start',
+      'idea_create',
+      'idea_plan',
+      'run_abort',
+    ]),
+    mutating: true,
+  }),
+});
+
+export function normalizeMcpProfile(value) {
+  const profile = String(value || 'read').trim().toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(MCP_PROFILES, profile)) throw new Error(`Unknown MCP profile: ${profile}`);
+  return profile;
 }
 
-function projectForIdea(store, ideaId) {
-  const idea = store.getIdea(ideaId);
-  if (!idea) throw new Error('Idea not found');
-  const project = store.getProject(idea.projectId);
-  if (!project) throw new Error('Project not found');
-  return project;
+export function profileAllowsTool(profile, toolName) {
+  return MCP_PROFILES[normalizeMcpProfile(profile)].tools.includes(toolName);
 }
 
-export function activeRunCount(store, projectId) {
-  return store.snapshot().runs.filter((run) => (
-    run.projectId === projectId
-    && (ACTIVE_RUN_STATES.has(run.status) || run.dispatchUncertain === true)
-  )).length;
+export function isLoopbackHost(host) {
+  const value = String(host || '').trim().toLowerCase();
+  return value === '127.0.0.1' || value === 'localhost' || value === '::1' || value === '[::1]';
 }
-
-export function decorateRunAdmission({ orchestrator, store, locks }) {
-  async function admit(project, operation) {
-    if (project.status !== 'active') throw new Error(`Project is ${project.status}; autonomous run admission is blocked`);
-    return locks.withLock(`project:${project.id}:run-admission`, async () => {
-      const current = store.getProject(project.id);
-      if (!current || current.status !== 'active') throw new Error(`Project is ${current?.status || 'missing'}; autonomous run admission is blocked`);
-      const maxConcurrentRuns = Math.max(1, Number(current.autonomy?.maxConcurrentRuns || 1));
-      const active = activeRunCount(store, current.id);
-      if (active >= maxConcurrentRuns) {
-        throw new Error(`Project run concurrency budget exhausted (${active}/${maxConcurrentRuns} active runs)`);
-      }
-      return operation();
-    });
-  }
-
-  return {
-    ...orchestrator,
-    startWorker(taskId) {
-      const project = projectForTask(store, taskId);
-      return admit(project, () => orchestrator.startWorker(taskId));
-    },
-    startSupervisor(taskId) {
-      const project = projectForTask(store, taskId);
-      return admit(project, () => orchestrator.startSupervisor(taskId));
-    },
-    startIdeaPlanning(ideaId) {
-      const project = projectForIdea(store, ideaId);
-      return admit(project, () => orchestrator.startIdeaPlanning(ideaId));
-    },
-  };
-}
-
-export { ACTIVE_RUN_STATES };

@@ -3,31 +3,20 @@ import assert from 'node:assert/strict';
 import { buildPlannerPrompt, buildSupervisorPrompt, buildTaskPrompt } from '../server/core/task-prompt.mjs';
 
 test('worker prompt reserves Git commits and publication for the control plane', () => {
-  const prompt = buildTaskPrompt({
-    project: { name: 'Test project' },
-    task: {
-      title: 'Implement safely',
-      priority: 'P1',
-      acceptanceCriteria: ['change is verified'],
-    },
-    iteration: 1,
-  });
-  assert.match(prompt, /Do not create Git commits/);
-  assert.match(prompt, /control plane owns the checkpoint commit/);
-  assert.match(prompt, /control plane owns publication, approval and merge/);
-  assert.match(prompt, /reported tests are claims only/);
+  const prompt = buildTaskPrompt({ project: { name: 'Test project' }, task: { title: 'Implement safely', priority: 'P1', acceptanceCriteria: ['change is verified'] }, iteration: 1 });
+  assert.match(prompt, /Do not create Git commits/); assert.match(prompt, /control plane owns the checkpoint commit/); assert.match(prompt, /control plane owns publication, approval and merge/); assert.match(prompt, /reported tests are claims only/);
+});
+
+test('assigned specialist identity, instructions and ownership scope reach the worker prompt', () => {
+  const prompt = buildTaskPrompt({ project: { name: 'Test project' }, task: { id: 'task-1', title: 'Harden MCP server', priority: 'P1', agentId: 'agent-1', agentName: 'MCP specialist', agentRole: 'builder', agentInstructions: 'Own the MCP boundary. Do not change the renderer.', workScopes: ['server/mcp', 'test/mcp-server.test.mjs'], acceptanceCriteria: ['MCP remains fail-closed'] }, iteration: 1 });
+  assert.match(prompt, /Assigned specialist: MCP specialist/); assert.match(prompt, /server\/mcp/); assert.match(prompt, /test\/mcp-server\.test\.mjs/);
+  assert.match(prompt, /Own the MCP boundary\. Do not change the renderer\./); assert.match(prompt, /do not modify files outside .*prefixes/i); assert.match(prompt, /needs_input/i);
 });
 
 test('promoted Exploration brief is context for every agent role but never implementation proof', () => {
   const project = { name: 'Promoted project', brief: 'Build the smallest auditable autonomous control loop.' };
   const task = { title: 'Implement safely', priority: 'P1', acceptanceCriteria: ['verified'] };
-  const worker = buildTaskPrompt({ project, task, iteration: 1 });
-  const planner = buildPlannerPrompt({ project, idea: { title: 'Plan this', description: 'Details' } });
-  const supervisor = buildSupervisorPrompt({ project, task, workerResult: {}, iteration: 1 });
-  for (const prompt of [worker, planner, supervisor]) {
-    assert.match(prompt, /Build the smallest auditable autonomous control loop/);
-    assert.match(prompt, /historical intent/i);
-    assert.match(prompt, /not proof|not implementation evidence/i);
-  }
+  const worker = buildTaskPrompt({ project, task, iteration: 1 }); const planner = buildPlannerPrompt({ project, idea: { title: 'Plan this', description: 'Details' } }); const supervisor = buildSupervisorPrompt({ project, task, workerResult: {}, iteration: 1 });
+  for (const prompt of [worker, planner, supervisor]) { assert.match(prompt, /Build the smallest auditable autonomous control loop/); assert.match(prompt, /historical intent/i); assert.match(prompt, /not proof|not implementation evidence/i); }
   assert.match(worker, /Repository code\/tests\/instructions are canonical/);
 });

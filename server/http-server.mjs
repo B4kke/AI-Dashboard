@@ -9,12 +9,10 @@ const SECURITY_HEADERS = {
   'x-frame-options': 'DENY',
   'content-security-policy': "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
-
 function json(response, status, value) {
   response.writeHead(status, { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   response.end(`${JSON.stringify(value)}\n`);
 }
-
 async function body(request) {
   const chunks = []; let total = 0;
   for await (const chunk of request) { total += chunk.length; if (total > 1_000_000) throw new Error('Request body too large'); chunks.push(chunk); }
@@ -22,17 +20,21 @@ async function body(request) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-export function createHttpServer({ store, events, orchestrator, autonomy, research, github, publicDir, version = '0.0.5' }) {
+export function createHttpServer({ store, events, orchestrator, autonomy, research, github, mcp = null, mcpClients = null, privateMode = false, publicDir, version = '0.0.6' }) {
   async function api(request, response, url) {
     if (request.method === 'GET' && url.pathname === '/api/health') {
       const [openCode, providers] = await Promise.all([orchestrator.opencodeOverview(), research.listProviders().catch(() => [])]);
       return json(response, 200, {
         ok: true, service: 'ai-dashboard', version, now: new Date().toISOString(),
         persistence: store.persistenceInfo?.() || { type: 'unknown' }, eventClients: events.clientCount,
-        integrations: { opencode: openCode, github: { configured: Boolean(github.token), apiUrl: github.baseUrl }, modelProviders: providers },
+        integrations: {
+          opencode: openCode,
+          github: { configured: Boolean(github.token), apiUrl: github.baseUrl },
+          modelProviders: providers,
+          mcp: { enabled: Boolean(mcp), privateMode, protocolTarget: mcp ? '2026-07-28' : null, profiles: mcp?.profiles || [], registeredServers: mcpClients?.definitions?.().length || 0 },
+        },
       });
     }
-
     if (request.method === 'GET' && url.pathname === '/api/state') return json(response, 200, store.snapshot());
     if (request.method === 'GET' && url.pathname === '/api/events') { events.subscribe(response); return; }
     if (request.method === 'GET' && url.pathname === '/api/workspaces') return json(response, 200, await orchestrator.workspaceInventory());
@@ -45,6 +47,22 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       const value = await orchestrator.githubOverview(url.searchParams.get('repository')); await store.setIntegration('github', value); return json(response, value.authenticated ? 200 : 503, value);
     }
 
+    if (url.pathname.startsWith('/api/mcp')) {
+      if (!privateMode || !mcpClients) return json(response, 403, { error: 'MCP administration is available only on a loopback/private AI Dashboard bind' });
+      if (request.method === 'GET' && url.pathname === '/api/mcp/servers') return json(response, 200, mcpClients.definitions());
+      if (request.method === 'POST' && url.pathname === '/api/mcp/servers') return json(response, 201, await mcpClients.register(await body(request)));
+      const serverDelete = url.pathname.match(/^\/api\/mcp\/servers\/([^/]+)$/);
+      if (request.method === 'DELETE' && serverDelete) return json(response, 200, await mcpClients.remove(decodeURIComponent(serverDelete[1])));
+      const discover = url.pathname.match(/^\/api\/mcp\/servers\/([^/]+)\/discover$/);
+      if (request.method === 'POST' && discover) return json(response, 200, await mcpClients.discover(decodeURIComponent(discover[1])));
+      const callTool = url.pathname.match(/^\/api\/mcp\/servers\/([^/]+)\/tools\/call$/);
+      if (request.method === 'POST' && callTool) return json(response, 200, await mcpClients.callTool(decodeURIComponent(callTool[1]), await body(request)));
+      const readResource = url.pathname.match(/^\/api\/mcp\/servers\/([^/]+)\/resources\/read$/);
+      if (request.method === 'POST' && readResource) { const input = await body(request); return json(response, 200, await mcpClients.readResource(decodeURIComponent(readResource[1]), input.uri)); }
+      const getPrompt = url.pathname.match(/^\/api\/mcp\/servers\/([^/]+)\/prompts\/get$/);
+      if (request.method === 'POST' && getPrompt) return json(response, 200, await mcpClients.getPrompt(decodeURIComponent(getPrompt[1]), await body(request)));
+    }
+
     if (request.method === 'GET' && url.pathname === '/api/model-providers') return json(response, 200, await research.listProviders());
     if (request.method === 'POST' && url.pathname === '/api/model-providers') return json(response, 201, await research.upsertProvider(await body(request)));
     const providerDiscover = url.pathname.match(/^\/api\/model-providers\/([^/]+)\/discover$/);
@@ -52,9 +70,7 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
 
     if (request.method === 'POST' && url.pathname === '/api/explorations') return json(response, 201, await store.addExploration(await body(request)));
     const explorationAnalyze = url.pathname.match(/^\/api\/explorations\/([^/]+)\/analyze$/);
-    if (request.method === 'POST' && explorationAnalyze) {
-      return json(response, 202, await research.startExplorationRun({ explorationId: decodeURIComponent(explorationAnalyze[1]), ...(await body(request)) }));
-    }
+    if (request.method === 'POST' && explorationAnalyze) return json(response, 202, await research.startExplorationRun({ explorationId: decodeURIComponent(explorationAnalyze[1]), ...(await body(request)) }));
     const explorationPromote = url.pathname.match(/^\/api\/explorations\/([^/]+)\/promote$/);
     if (request.method === 'POST' && explorationPromote) return json(response, 200, await research.promoteExploration(decodeURIComponent(explorationPromote[1]), await body(request)));
     const explorationRetry = url.pathname.match(/^\/api\/exploration-runs\/([^/]+)\/retry$/);
@@ -91,15 +107,12 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       const runs = store.snapshot().runs.filter((run) => run.taskId === taskId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       return json(response, 200, { task, runs, publication: task.publication || null });
     }
-
     const tick = url.pathname.match(/^\/api\/projects\/([^/]+)\/autonomy\/tick$/);
     if (request.method === 'POST' && tick) { const project = store.getProject(decodeURIComponent(tick[1])); if (!project) throw new Error('Project not found'); return json(response, 200, await autonomy.tick()); }
-
     const abortRun = url.pathname.match(/^\/api\/runs\/([^/]+)\/abort$/);
     if (request.method === 'POST' && abortRun) return json(response, 200, await orchestrator.abortRun(decodeURIComponent(abortRun[1])));
     const runDiff = url.pathname.match(/^\/api\/runs\/([^/]+)\/diff$/);
     if (request.method === 'GET' && runDiff) return json(response, 200, await orchestrator.runDiff(decodeURIComponent(runDiff[1])));
-
     return false;
   }
 
@@ -109,23 +122,24 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
     if (filePath !== resolve(publicDir, 'index.html') && !filePath.startsWith(prefix)) return false;
     try {
       const content = await readFile(filePath);
-      response.writeHead(200, { ...SECURITY_HEADERS, 'content-type': MIME[extname(filePath)] || 'application/octet-stream' });
-      response.end(content);
-      return true;
+      response.writeHead(200, { ...SECURITY_HEADERS, 'content-type': MIME[extname(filePath)] || 'application/octet-stream' }); response.end(content); return true;
     } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
   }
 
   return createServer(async (request, response) => {
     try {
       const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
+      if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
+        if (!mcp) return json(response, 403, { error: 'MCP is disabled unless AI Dashboard is bound to loopback/private mode' });
+        const handled = await mcp.handleNode(request, response, url.pathname); if (!handled) json(response, 404, { error: 'MCP profile not found' }); return;
+      }
       if (url.pathname.startsWith('/api/')) { const handled = await api(request, response, url); if (handled === false) json(response, 404, { error: 'API route not found' }); return; }
       if (!(await staticFile(response, url.pathname))) { response.writeHead(404, { ...SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' }); response.end('Not found\n'); }
     } catch (error) {
       const message = String(error?.message || error || 'Request failed');
       const status = /not found/i.test(message) ? 404
-        : /already in progress|cannot .* from state|already promoted|integrity review|cannot be promoted while|already has an active/i.test(message) ? 409
-        : /required|valid .*id|choose .*model|invalid|request body too large|JSON/i.test(message) ? 400
-        : 500;
+        : /already in progress|cannot .* from state|already promoted|integrity review|cannot be promoted while|already has an active|overlaps active task/i.test(message) ? 409
+        : /required|valid .*id|choose .*model|invalid|request body too large|JSON|allowlist|workScope/i.test(message) ? 400 : 500;
       json(response, status, { error: message });
     }
   });
