@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { StateStore } from '../server/core/state-store.mjs';
 import { createOrchestrator } from '../server/orchestrator.mjs';
 import { GitHubClient } from '../server/integrations/github.mjs';
+import { pushTaskBranch } from '../server/git/worktrees.mjs';
 
 const exec = promisify(execFile);
 
@@ -43,7 +44,6 @@ test('task -> worker -> PR -> CI fail -> repair -> supervisor -> merge', async (
     await git(repo, ['add', '.']); await git(repo, ['commit', '-m', 'base']);
     await git(repo, ['remote', 'add', 'seed', `file://${bare}`]); await git(repo, ['push', 'seed', 'main']); await git(repo, ['remote', 'remove', 'seed']);
     await git(repo, ['remote', 'add', 'origin', 'git@github.com:owner/repo.git']);
-    await git(repo, ['remote', 'set-url', '--push', 'origin', `file://${bare}`]);
 
     const server = createServer(async (req, res) => {
       res.setHeader('content-type', 'application/json');
@@ -88,7 +88,8 @@ test('task -> worker -> PR -> CI fail -> repair -> supervisor -> merge', async (
       const task = await store.addTask({ projectId: project.id, title: 'Repair loop', description: 'Implement and then repair CI', acceptanceCriteria: ['feature is present'], priority: 'P1' });
       const opencode = new FakeOpenCode();
       const github = new GitHubClient({ baseUrl: `http://127.0.0.1:${address.port}`, token: 'test' });
-      const orchestrator = createOrchestrator({ store, opencode, github });
+      const pushBranch = (options) => pushTaskBranch({ ...options, remoteUrl: `file://${bare}` });
+      const orchestrator = createOrchestrator({ store, opencode, github, pushBranch });
 
       const worker1 = await orchestrator.startWorker(task.id);
       await writeFile(join(worker1.worktreePath, 'feature.txt'), 'iteration one\n');
