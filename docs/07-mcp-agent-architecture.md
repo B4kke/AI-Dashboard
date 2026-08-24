@@ -1,12 +1,10 @@
 # MCP and specialist-agent architecture
 
-Status: implemented early M3 slice, August 2026. This document describes the code currently present on the foundation branch and the boundaries that future Master AI/fleet work must preserve.
+Status: implemented early M3 slice, August 2026. This document describes the current foundation-branch code and the boundaries future Master AI/fleet work must preserve.
 
 ## Purpose
 
-AI Dashboard uses MCP as a capability bus, not as a replacement for the control plane.
-
-Two directions exist:
+AI Dashboard uses MCP as a capability/context/operator-input bus, not as a replacement for the control plane.
 
 ```text
 External MCP host / OpenCode / other agent
@@ -25,26 +23,26 @@ AI Dashboard MCP host/client
           External MCP servers
 ```
 
-The first direction lets other MCP-capable systems inspect/use bounded Dashboard capabilities. The second lets Dashboard consume explicitly registered external tools/resources/prompts.
+The first direction lets MCP-capable systems inspect/use bounded Dashboard capabilities. The second lets Dashboard consume explicitly registered external tools/resources/prompts and, when a trusted UI handler exists, satisfy external operator-input requests.
 
-Neither direction transfers ownership of checkpointing, CI truth, supervisor approval or merge away from the control plane.
+Neither direction transfers checkpointing, CI truth, supervisor approval or merge ownership away from the control plane.
 
 ## Protocol generation
 
-The implementation targets MCP protocol generation `2026-07-28` using the stable split TypeScript SDK v2 packages pinned in `package.json`:
+The implementation targets MCP `2026-07-28` through pinned split TypeScript SDK v2 packages:
 
 - `@modelcontextprotocol/server@2.0.0`
 - `@modelcontextprotocol/client@2.0.0`
 - `@modelcontextprotocol/node@2.0.0`
-- `zod@4.4.3` for tool/prompt input schemas
+- `zod@4.4.3`
 
-The host uses SDK version negotiation in auto mode. New code should not depend on the deprecated monolithic TypeScript package or build architecture around legacy HTTP+SSE transport, Roots, Sampling or MCP Logging.
+The host uses SDK version negotiation in auto mode. Do not depend on the deprecated monolithic TypeScript package or build new architecture around legacy HTTP+SSE transport, Roots, Sampling or MCP Logging.
 
 ## Dashboard MCP server
 
-`server/mcp/dashboard-server.mjs` builds four independent server profiles. Each profile is a separate MCP endpoint so a host can be given the minimum capability surface it needs.
+`server/mcp/dashboard-server.mjs` builds four independent profiles so hosts receive the minimum surface they need.
 
-Endpoints while Dashboard is bound to loopback:
+Loopback endpoints:
 
 ```text
 /mcp             alias for read
@@ -54,11 +52,11 @@ Endpoints while Dashboard is bound to loopback:
 /mcp/master
 ```
 
-MCP is disabled when the main control server is bound to a non-loopback host. This is deliberate until authentication, authorization and audit exist.
+Built-in MCP is disabled when the main control server is bound to a non-loopback host. This remains deliberate until authentication, authorization and audit exist.
 
 ### Capability profiles
 
-`read`, `worker` and `supervisor` expose only read-only tools:
+`read`, `worker` and `supervisor` expose read-only inspection:
 
 ```text
 dashboard_status
@@ -83,23 +81,41 @@ task_create
 task_assign_agent
 task_delegate
 task_requeue
+task_resolve_input
 research_start
 idea_create
 idea_plan
 run_abort
 ```
 
-There is intentionally no MCP tool for direct publish, supervisor approval or merge. Those operations remain controlled by the existing coding lifecycle and its machine gates.
+There is intentionally no direct MCP publish, supervisor-approval or merge tool. Those operations remain inside the normal coding lifecycle and its machine gates.
 
-### Why worker and supervisor are read-only MCP profiles
+Worker mutation already occurs through its isolated harness/worktree; giving it Dashboard mutation tools would create a second path around checkpoint ownership. Supervisor remains structurally read-only.
 
-A coding worker already receives mutation capability through its isolated harness/worktree. Giving it Dashboard mutation tools would create a second path around worktree/checkpoint ownership.
+## Native MCP `input_required`
 
-A supervisor must be structurally independent and read-only. It may inspect evidence and try to disprove completion, but it must not edit the implementation it is reviewing.
+`task_resolve_input` connects Dashboard `needs_input` state to modern MCP multi-round operator dialogue.
+
+The first tool entry returns `input_required` with structured form elicitation. The client asks the operator, then the MCP SDK re-enters the same tool handler with the current round's input response. Accepted content is validated with the same Zod schema advertised to the client.
+
+Operator fields are deliberately separate:
+
+```text
+response: missing decision/context
+action:   record_only | resume
+```
+
+`record_only` persists context while keeping the Task blocked. `resume` explicitly calls the existing Task requeue transition. Decline/cancel performs no Task mutation.
+
+This mechanism cannot complete, approve, publish or merge work. It only provides missing context and, when explicitly selected by the operator, makes a blocked Task eligible for ordinary admission again.
+
+Form elicitation warns against passwords/API keys/tokens/private keys. Operator input is untrusted context, not machine evidence.
+
+AI Dashboard's domain `Task` model is separate from any MCP Tasks extension. See `docs/08-mcp-input-required.md`.
 
 ## MCP resources
 
-Resources expose canonical Dashboard context without turning reads into action tools:
+Canonical context is available without turning reads into action tools:
 
 ```text
 dashboard://summary
@@ -111,25 +127,23 @@ dashboard://agents/{agentId}
 dashboard://research/{runId}
 ```
 
-Local filesystem paths such as `repoPath` and `worktreePath` are deliberately removed from MCP result serialization. Resource content is bounded before leaving the Dashboard MCP boundary.
+Local filesystem paths such as `repoPath` and `worktreePath` are removed from MCP serialization. Content is bounded before leaving the Dashboard MCP boundary.
 
-State transitions emit resource-update notifications for affected canonical URIs. MCP notifications are an observation mechanism; durable SQLite state/revisions remain source of truth.
+Committed state transitions emit resource-update notifications. Notifications are observation only; SQLite revisioned state remains canonical.
 
 ## MCP prompts
 
-The first reusable protocol prompts are:
+Reusable prompts:
 
-- `orchestrate-project` — Master AI procedure for reading current state, partitioning work, checking scopes and delegating non-overlapping Tasks.
-- `specialist-task` — reminds a worker that its effective work scopes are authoritative and that scope expansion requires `needs_input`.
-- `review-task` — evidence-first independent review workflow.
+- `orchestrate-project` — dependency/scope-first Master orchestration and `needs_input` handling.
+- `specialist-task` — effective work-scope discipline for a worker.
+- `review-task` — evidence-first independent supervisor review.
 
-Prompts are guidance, never authorization. Every important invariant must also exist in control-plane code.
+Prompts are guidance, never authorization. Important invariants also exist in control-plane code.
 
 ## Agent Registry
 
-State schema v7 promotes the existing `agents` collection into a real project-scoped registry.
-
-A specialist record contains:
+State schema v7 contains durable project-scoped specialists:
 
 ```text
 id
@@ -145,9 +159,7 @@ enabled
 createdAt / updatedAt
 ```
 
-Agent identity is durable. A Task assignment snapshots name/role/instructions and selected model so an in-flight or historical Task is not silently reinterpreted if the agent definition later changes.
-
-Backlog/`needs_input` Tasks assigned to an agent can be refreshed when the agent's safe mutable metadata changes; active work cannot have ownership moved underneath it.
+Agent identity is durable. Task assignment snapshots name/role/instructions/model so in-flight/history state is not silently reinterpreted after an agent definition changes.
 
 ## Work scopes
 
@@ -159,50 +171,34 @@ public
 test/mcp-server.test.mjs
 ```
 
-Normalization rejects absolute/traversal-style ambiguous paths and glob syntax. Parent/child relationships count as overlap:
+Normalization rejects absolute/traversal-style ambiguous paths and glob syntax. Parent/child relationships overlap: `server` overlaps `server/mcp`; `server/mcp` does not overlap `public`. `*` means whole-project ownership and overlaps everything.
 
-```text
-server           overlaps server/mcp
-server/mcp       overlaps server/mcp/client.mjs
-server/mcp       does not overlap public
-```
+### Static ownership
 
-`*` is an explicit whole-project scope and therefore overlaps everything.
-
-### Static agent ownership
-
-Two enabled mutating specialists in the same Project cannot be registered with overlapping scopes. This makes the registry itself a first line of defense against a Master AI designing a fleet with contradictory ownership.
-
-Read-only roles (`supervisor`, `reviewer`, `research`, `planner`, `master`) are not file owners and may inspect overlapping context.
+Two enabled mutating specialists in the same Project cannot be registered with overlapping scopes. Read-only supervisor/reviewer/research/planner/master roles are not file owners.
 
 ### Task ownership
 
-An agent-assigned Task must have at least one explicit work scope, and every Task scope must be contained within that agent's registered scopes.
-
-Assignments and scope changes are allowed only before execution (`backlog` or `needs_input`). Agent scopes cannot be changed while assigned work is active, and cannot be shrunk so unfinished assigned Tasks fall outside the new boundary.
+An assigned Task must remain within its agent's registered scopes. Assignment/scope changes are allowed only before execution (`backlog` or `needs_input`). Active ownership cannot be moved underneath a running worker.
 
 ### Runtime anti-overlap
 
-Static registry checks are not sufficient because unassigned Tasks and temporary subdivisions also exist. Therefore `server/core/run-admission-guard.mjs` enforces overlap at worker admission.
+`server/core/run-admission-guard.mjs` enforces overlap during worker admission under the same durable `project:<id>:run-admission` lock used for concurrency:
 
-Inside the same durable `project:<id>:run-admission` lock used for concurrency it:
+1. verify Project active,
+2. count active and uncertain Runs,
+3. enforce concurrency,
+4. resolve effective Task/agent scopes,
+5. inspect other active worker Tasks,
+6. reject any overlap,
+7. only then start the inner worker operation.
 
-1. verifies the Project remains active,
-2. counts active and uncertain Runs,
-3. enforces the Project concurrency policy,
-4. resolves effective Task/agent scopes,
-5. finds active worker Tasks in the same Project,
-6. rejects the new worker when any scopes overlap,
-7. only then invokes the inner worker start operation.
-
-`dispatch_unknown` and `dispatchUncertain` continue to own their scopes until recovery establishes the outcome. This prevents a lost OpenCode acknowledgement from accidentally freeing a path and admitting a competing specialist.
+`dispatch_unknown` and `dispatchUncertain` retain scope ownership until reconciled, preventing a lost runner acknowledgement from freeing a path prematurely.
 
 ## Master AI orchestration model
 
-Master AI is expected to orchestrate projects approximately as follows:
-
 ```text
-read project + tasks + active runs + evidence
+read Project + Tasks + Runs + evidence
                     |
                     v
              build dependency graph
@@ -233,35 +229,28 @@ read project + tasks + active runs + evidence
                    isolated worktree
 ```
 
-A Master AI should prefer reuse over continuously spawning disposable identities. Agent creation is useful when a persistent, materially distinct responsibility exists, not as a substitute for creating Tasks.
+If a Task reaches `needs_input`, Master reads the reason and uses `task_resolve_input`; it must not invent the missing operator decision. Master should prefer specialist reuse over continuously spawning disposable identities.
 
-Dependencies and scopes solve different problems: dependencies express ordering/data requirements; scopes express mutation ownership. A safe plan may need both.
+Dependencies and scopes solve different problems: dependencies express ordering/data requirements; scopes express mutation ownership. Safe plans may require both.
 
 ## Worker prompt integration
 
-Agent Registry state is not merely UI metadata. For assigned Tasks, the coding prompt receives:
+For assigned Tasks the coding prompt receives specialist name, role, instructions, exact owned scopes, sibling-scope prohibition and the requirement to return `needs_input` when correct work crosses the boundary.
 
-- specialist name,
-- role,
-- specialist instructions,
-- exact owned scopes,
-- explicit requirement not to modify sibling scopes,
-- requirement to return `needs_input` when correct implementation requires crossing ownership boundaries.
+Prompt discipline complements runtime admission and Git evidence; it does not replace them.
 
-The prompt complements, but does not replace, runtime admission and later Git evidence.
-
-## External MCP host/client
+## Dashboard as external MCP host/client
 
 `server/mcp/client-manager.mjs` manages external MCP definitions stored in StateStore.
 
-Supported transports in the current loopback slice:
+Current transports:
 
 - Streamable HTTP
-- stdio
+- stdio in loopback/private mode
 
-A connection is created for an operation, negotiated, used, and closed. Discovery can retrieve tools, resources, resource templates and prompts.
+Connections are negotiated, used and closed per operation. Discovery retrieves tools, resources, resource templates, prompts and server capability information.
 
-Administration API, while loopback/private:
+Loopback administration API:
 
 ```text
 GET    /api/mcp/servers
@@ -273,106 +262,89 @@ POST   /api/mcp/servers/:id/resources/read
 POST   /api/mcp/servers/:id/prompts/get
 ```
 
-There is not yet a public/mobile registry UI, authentication layer or general Master-AI chat surface around these APIs.
+There is not yet a public/mobile MCP registry UI, authentication layer or complete Master-chat surface.
 
-## External tool authorization
+### External tool authorization
 
-External MCP servers are untrusted by default.
+External MCP servers are untrusted by default:
 
-A stored definition separates:
+1. empty `allowedTools` means deny all,
+2. a tool not allowlisted cannot execute,
+3. remote `readOnlyHint: true` is metadata only,
+4. a tool not asserted read-only must additionally be in `mutatingTools`,
+5. every mutating tool must also be allowlisted.
 
-```text
-allowedTools[]
-mutatingTools[]
-```
+This requires two affirmative signals for unknown/mutating tools and prevents a remote server annotation from becoming authority.
 
-Rules:
+### External operator-input bridge
 
-1. An empty `allowedTools` means deny all.
-2. A tool not in `allowedTools` cannot execute.
-3. `readOnlyHint: true` from the external server is metadata and permits an allowlisted tool to be treated as read-only.
-4. If the remote server does not assert a tool read-only, the Dashboard requires the tool to also appear explicitly in `mutatingTools`.
-5. Every mutating tool must also be allowlisted.
+The host accepts an optional higher-level `elicitationHandler`. Only when this handler exists does it advertise the MCP `elicitation` capability and answer `elicitation/create` requests. The handler receives bounded server/request metadata and may return accept + structured content, decline or cancel. Invalid actions normalize to cancel.
 
-This intentionally requires two affirmative signals for unknown/mutating tools. Tool annotations alone are not trusted authorization because a compromised or poorly implemented MCP server can mislabel itself.
+Without a handler, external `input_required` calls fail closed. Dashboard never fabricates operator input.
 
-## Secrets and configuration
+External tool allowlist/mutation checks still occur before the multi-round flow.
 
-MCP bearer credentials are stored as environment-variable names only:
+## Secrets and prompt injection
 
-```text
-bearerTokenEnv = LOCAL_MCP_TOKEN
-```
+Bearer credentials are stored as environment-variable names only. MCP URLs reject embedded credentials/query strings/fragments. stdio executable/arguments reject NUL/newline injection and execute as argument arrays rather than shell strings.
 
-The value of `LOCAL_MCP_TOKEN` is resolved from process environment only when connecting and is not persisted in StateStore.
-
-MCP URLs reject embedded credentials, query strings and fragments. stdio command/argument values reject NUL/newline injection and are passed as argument arrays rather than shell-interpolated commands.
-
-## Prompt injection and untrusted results
-
-MCP tool/resource/prompt output is third-party content. It can contain instructions designed to manipulate an LLM. Therefore:
-
-- result size/depth is bounded,
-- remote annotations do not grant authority,
-- canonical coding evidence never comes from arbitrary MCP prose,
-- future Master AI context assembly must label origin/trust level,
-- secrets and privileged local paths must not be injected into external MCP calls by default.
-
-A successful MCP call means only that the protocol call completed. It does not mean a Task, CI run, review or merge succeeded.
+Tool/resource/prompt/elicitation content is third-party untrusted data and can contain prompt injection. Result size/depth is bounded; remote annotations do not grant authority; arbitrary MCP prose never becomes canonical coding evidence.
 
 ## Network boundary
 
-The built-in Dashboard MCP endpoints and MCP administration API are enabled only for loopback binds in this slice. The Node adapter validates localhost Host and Origin values to reduce DNS-rebinding risk.
+Built-in MCP endpoints and administration are loopback-only in this phase. The Node adapter validates localhost Host and Origin values to reduce DNS-rebinding risk.
 
-This is not authentication. It is a local-beta boundary. Public/private-remote exposure remains blocked until authentication, authorization, audit log and kill-switch requirements are implemented.
+This is not authentication. Remote/public exposure remains blocked until authentication, authorization, audit log and kill-switch requirements are implemented.
 
-## Relationship to OpenCode SDK
-
-MCP and the OpenCode SDK have different directions:
+## Relationship to other integrations
 
 ```text
 OpenCode/other MCP host -> AI Dashboard MCP
 AI Dashboard -> OpenCode SDK -> OpenCode harness
+AI Dashboard -> Octokit -> GitHub
+future AI Dashboard -> ACP -> generic harness
 ```
 
-Dashboard can therefore start/control an OpenCode Run through the OpenCode SDK while an OpenCode host can separately consume Dashboard MCP capabilities. The SDK remains useful for OpenCode-specific session, event, tool, permission, provider/model and recovery behavior.
+MCP and OpenCode SDK solve opposite directions. OpenCode SDK remains useful for native session/event/tool/permission/provider/model/recovery functions.
 
-The future generic harness layer may add ACP while retaining the OpenCode-native adapter for richer OpenCode capabilities.
+An external GitHub MCP may be useful for conversational exploration, but canonical PR/check/branch-policy/merge evidence stays on Octokit + control-plane logic.
 
-## Relationship to GitHub/Octokit
+ACP may later standardize generic coding-harness control while OpenCode-native support remains for richer capabilities.
 
-An external GitHub MCP can be useful for conversational exploration, but canonical autonomous GitHub control remains the Octokit/control-plane path. PR identity, required checks, branch/ruleset policy, exact reviewed head and merge proof are deterministic control-plane evidence and must not be delegated to LLM interpretation of a generic GitHub MCP response.
+## Deterministic test evidence
 
-## Test evidence in this slice
+The suite covers:
 
-The deterministic suite covers, among other existing control-plane tests:
-
-- MCP 2026-era client/server negotiation,
+- modern MCP client/server negotiation,
 - tools/resources/prompts discovery,
-- master vs worker/supervisor profile separation,
-- absence of merge/publish/approve tools in Master profile,
+- Master vs worker/supervisor separation,
+- absence of direct merge/publish/approve tools,
+- native `input_required` form round-trip for a `needs_input` Task,
+- accepted/resume input persistence and normal requeue transition,
+- decline leaving Task unchanged,
+- external host without elicitation handler failing closed,
+- external host with handler completing multi-round input,
 - external MCP default-deny and explicit mutation approval,
 - unsafe URL/secret configuration rejection,
 - StateStore schema v7 migration,
 - durable agent assignment/scope persistence,
-- static agent-scope conflicts,
-- runtime worker-scope conflicts,
-- uncertain dispatch retaining scope ownership,
+- static and runtime scope conflicts,
+- uncertain dispatch retaining ownership,
 - specialist instructions/scopes reaching the actual worker prompt.
 
-GitHub Actions verification and real external dogfood are separate levels of evidence.
+GitHub Actions verification and real external dogfood remain separate evidence levels.
 
-## Explicit non-claims / next steps
+## Explicit non-claims / next gates
 
-This slice does **not** yet prove:
+This implementation does not yet prove:
 
-- OpenCode configured as an external MCP host against the real Dashboard endpoint on the user's PC,
+- real OpenCode configured as an MCP host against Dashboard on the user's PC,
 - interoperability with every MCP client/server implementation,
-- authenticated remote MCP access,
-- a complete Master AI chat/memory implementation,
-- automatic fleet planning/agent creation loops,
+- authenticated remote MCP,
+- complete persistent Master chat/memory,
+- automatic fleet scheduling/rebalancing above ordinary Task delegation,
 - persistent per-agent memory/SOUL-style identity,
-- ACP harness support,
-- multi-instance distributed locking/fencing.
+- ACP/Codex/Claude/local harness breadth,
+- production multi-instance fencing.
 
-The immediate external verification should connect a real OpenCode MCP configuration to `/mcp/read` and `/mcp/master`, prove resource/tool discovery, create/assign bounded test work, and verify that overlapping work is rejected by the control plane. The broader real PC/OpenCode/GitHub beta remains a higher-level gate.
+Immediate external proof should connect real OpenCode to `/mcp/read` and `/mcp/master`, prove discovery and operator input, create two disjoint specialists/Tasks, prove parallel admission, then prove an overlapping scope is rejected. The broader real OpenCode + GitHub Actions PC beta remains the higher-level control-plane gate.
