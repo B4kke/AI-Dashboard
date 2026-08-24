@@ -11,6 +11,7 @@ import { decorateGitHubPolicy } from './core/github-policy-guard.mjs';
 import { decorateMergeRetry } from './core/merge-retry-guard.mjs';
 import { createRecoverableOpenCode, decorateOpenCodeDispatchRecovery } from './core/opencode-dispatch-safety.mjs';
 import { decorateOpenCodeOutcome } from './core/opencode-outcome-guard.mjs';
+import { decoratePlannerScopes } from './core/planner-scope-guard.mjs';
 import { decorateRunAdmission } from './core/run-admission-guard.mjs';
 import { OpenCodeClient } from './integrations/opencode.mjs';
 import { GitHubClient } from './integrations/github.mjs';
@@ -61,7 +62,8 @@ const baseOrchestrator = createOrchestrator({ store, opencode, github, locks: sq
 const dispatchOrchestrator = decorateOpenCodeDispatchRecovery({ orchestrator: baseOrchestrator, store, opencode });
 const guardedOrchestrator = decorateControlPlane({ orchestrator: dispatchOrchestrator, store, locks: sqlite, github, opencode });
 const outcomeOrchestrator = decorateOpenCodeOutcome({ orchestrator: guardedOrchestrator, store });
-const admittedOrchestrator = decorateRunAdmission({ orchestrator: outcomeOrchestrator, store, locks: sqlite });
+const scopedPlannerOrchestrator = decoratePlannerScopes({ orchestrator: outcomeOrchestrator, store });
+const admittedOrchestrator = decorateRunAdmission({ orchestrator: scopedPlannerOrchestrator, store, locks: sqlite });
 const diagnosticOrchestrator = decorateCiDiagnostics({ orchestrator: admittedOrchestrator, store, github });
 const integrityOrchestrator = decorateGitHubIntegrity({ orchestrator: diagnosticOrchestrator, store, github });
 const policyOrchestrator = decorateGitHubPolicy({ orchestrator: integrityOrchestrator, store, github });
