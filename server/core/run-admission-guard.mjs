@@ -1,4 +1,4 @@
-import { scopeSetsOverlap, taskWorkScopes } from './work-scope.mjs';
+import { normalizeWorkScopes, scopeSetsOverlap, taskWorkScopes } from './work-scope.mjs';
 
 const ACTIVE_RUN_STATES = new Set(['preparing', 'running', 'retrying', 'dispatch_unknown']);
 
@@ -25,17 +25,30 @@ export function activeRunCount(store, projectId) {
   )).length;
 }
 
-export function activeScopeConflicts(store, taskId) {
-  const task = store.getTask(taskId);
-  if (!task) throw new Error('Task not found');
-  const agent = task.agentId ? store.getAgent?.(task.agentId) : null;
-  const scopes = taskWorkScopes(task, agent);
-  if (!scopes.length) return [];
+export function activeScopeConflicts(store, taskOrProjectId, proposedScopes = null, excludeTaskId = null) {
+  let projectId;
+  let taskId;
+  let scopes;
+
+  if (Array.isArray(proposedScopes)) {
+    projectId = taskOrProjectId;
+    taskId = excludeTaskId || null;
+    scopes = normalizeWorkScopes(proposedScopes);
+    if (!scopes.length) scopes = ['*'];
+    if (!store.getProject(projectId)) throw new Error('Project not found');
+  } else {
+    const task = store.getTask(taskOrProjectId);
+    if (!task) throw new Error('Task not found');
+    const agent = task.agentId ? store.getAgent?.(task.agentId) : null;
+    projectId = task.projectId;
+    taskId = task.id;
+    scopes = taskWorkScopes(task, agent);
+  }
 
   const snapshot = store.snapshot();
   const activeRuns = snapshot.runs.filter((run) => (
-    run.projectId === task.projectId
-    && run.taskId !== task.id
+    run.projectId === projectId
+    && run.taskId !== taskId
     && (ACTIVE_RUN_STATES.has(run.status) || run.dispatchUncertain === true)
   ));
   const conflicts = [];
@@ -44,7 +57,7 @@ export function activeScopeConflicts(store, taskId) {
     if (!otherTask) continue;
     const otherAgent = otherTask.agentId ? snapshot.agents?.find((item) => item.id === otherTask.agentId) : null;
     const otherScopes = taskWorkScopes(otherTask, otherAgent);
-    if (otherScopes.length && scopeSetsOverlap(scopes, otherScopes)) {
+    if (scopeSetsOverlap(scopes, otherScopes)) {
       conflicts.push({ runId: run.id, taskId: otherTask.id, scopes: otherScopes });
     }
   }
