@@ -9,12 +9,15 @@ function projectBrief(project) {
   return ['', 'Project bootstrap brief (historical intent; repository evidence overrides it when they conflict):', String(project.brief).slice(0, 12_000)];
 }
 function specialistContext(task) {
-  if (!task?.agentId) return [];
   const scopes = taskWorkScopes(task, null);
   return [
-    '', `Assigned specialist: ${task.agentName || task.agentId}`, `Specialist role: ${task.agentRole || 'worker'}`, `Owned work scopes: ${scopes.join(', ')}`,
-    ...(task.agentInstructions ? ['Specialist instructions:', String(task.agentInstructions).slice(0, 12_000)] : []),
-    'Scope ownership is authoritative for this run. Do not modify files outside these project-relative path prefixes. If required work crosses the boundary, stop with needs_input instead of taking over another specialist scope.',
+    '',
+    ...(task?.agentId
+      ? [`Assigned specialist: ${task.agentName || task.agentId}`, `Specialist role: ${task.agentRole || 'worker'}`]
+      : ['No specialist is assigned. The Task work scope is still authoritative for this run.']),
+    `Owned work scopes: ${scopes.join(', ')}`,
+    ...(task?.agentInstructions ? ['Specialist instructions:', String(task.agentInstructions).slice(0, 12_000)] : []),
+    'Scope ownership is authoritative for this run. Do not modify files outside these project-relative path prefixes. The `*` scope means this Task conservatively owns the whole project and therefore must not overlap another mutating Task. If required work crosses the boundary, stop with needs_input instead of taking over another specialist scope.',
   ];
 }
 
@@ -44,11 +47,11 @@ export function buildPlannerPrompt({ project, idea }) {
     '- Inspect the repository and existing project instructions before planning.',
     '- Treat the project bootstrap brief as intent/context, not proof of current implementation.',
     '- Prefer the smallest vertical slices that can be independently verified.',
-    '- Avoid duplicate or overlapping tasks. When parallel work is intended, describe mutually exclusive project-relative work scopes.',
+    '- Avoid duplicate or overlapping tasks. Give every implementation Task explicit project-relative workScopes. Use ["*"] only when the work cannot be safely narrowed; `*` serializes against all other mutating work.',
     '- Give each implementation task concrete acceptance criteria.',
     '- Call out prerequisites, risks, and questions that genuinely require human input.',
     '- Do not implement the feature in this planning run.',
-    ...jsonContract({ schemaVersion: RESULT_SCHEMA_VERSION, kind: 'planner', status: 'ready', summary: 'Plan summary', tasks: [{ title: 'Concrete task title', description: 'Implementation scope', priority: 'P1', agentRole: 'builder', acceptanceCriteria: ['verifiable criterion'], dependsOn: [] }], questions: [], risks: [] })].join('\n');
+    ...jsonContract({ schemaVersion: RESULT_SCHEMA_VERSION, kind: 'planner', status: 'ready', summary: 'Plan summary', tasks: [{ title: 'Concrete task title', description: 'Implementation scope', priority: 'P1', agentRole: 'builder', workScopes: ['server/feature'], acceptanceCriteria: ['verifiable criterion'], dependsOn: [] }], questions: [], risks: [] })].join('\n');
 }
 
 export function buildSupervisorPrompt({ project, task, workerResult, iteration, publication = null, controlEvidence = null }) {
