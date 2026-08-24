@@ -28,12 +28,13 @@ The implementation targets MCP protocol generation `2026-07-28` and uses the spl
 The v2 SDK owns:
 
 - MCP request/response encoding,
-- protocol initialization/version negotiation,
+- initialization and version negotiation,
 - Streamable HTTP transport,
 - stdio client transport,
 - tools/resources/prompts protocol methods,
 - server notifications/subscription transport,
-- Zod-backed tool/prompt input schemas.
+- Zod-backed schemas,
+- modern multi-round `input_required` request re-entry and elicitation mechanics.
 
 AI Dashboard owns:
 
@@ -44,6 +45,7 @@ AI Dashboard owns:
 - Project/Task/Run/Agent identity,
 - specialist work-scope ownership,
 - concurrency/admission,
+- `needs_input` semantics and Task transitions,
 - worktree/checkpoint/evidence,
 - supervisor separation,
 - publication/CI/merge policy,
@@ -52,11 +54,21 @@ AI Dashboard owns:
 
 Remote MCP `readOnlyHint` is metadata, not authorization. Empty `allowedTools` is deny-all. A non-read-only external tool must be both allowlisted and explicitly present in `mutatingTools`.
 
-Dashboard MCP endpoints are enabled only for loopback binds in the current slice. Host/Origin validation is applied at the Node boundary. This is not a substitute for authentication; public/remote MCP remains out of scope until auth/authz/audit/kill-switch work exists.
+Dashboard MCP endpoints are enabled only for loopback binds in the current slice. Host/Origin validation is applied at the Node boundary. This is not authentication; public/remote MCP remains out of scope until auth/authz/audit/kill-switch work exists.
 
 MCP credentials are stored only as environment-variable names such as `LOCAL_MCP_TOKEN`; secret values are resolved at call time and must not enter StateStore.
 
-See `docs/07-mcp-agent-architecture.md` for the complete server/host and specialist-agent model.
+### MCP 2026 input-required boundary
+
+For the 2026 protocol generation, AI Dashboard uses `inputRequired(...)`, `inputRequired.elicit(...)`, `inputResponse(...)` and `acceptedContent(...)` from the pinned server SDK. The server handler is written once and the SDK re-enters it with the current round's validated input-response envelope.
+
+`task_resolve_input` is a Master-only Dashboard tool. It can collect an operator response for a domain Task already in `needs_input`, but it cannot mark work done or approve anything. `record_only` persists context and remains blocked; `resume` must be explicitly chosen and then enters the existing `requeueTask` transition.
+
+The Dashboard MCP host advertises elicitation only when a real `elicitationHandler` is configured. Without one, an external MCP server that requires operator input fails closed. The protocol layer never fabricates a user response.
+
+Do not confuse AI Dashboard's durable Project/Task/Run domain objects with an MCP Tasks extension. Any future `io.modelcontextprotocol/tasks` support is an interoperability adapter, not a replacement for control-plane state.
+
+See `docs/07-mcp-agent-architecture.md` for the server/host and specialist-agent model and `docs/08-mcp-input-required.md` for the full operator-input contract.
 
 ## OpenCode
 
@@ -109,37 +121,17 @@ The versioned `AI_DASHBOARD_RESULT` contract therefore remains authoritative for
 
 The GitHub adapter uses pinned `octokit@5.0.5` instead of maintaining a second handwritten GitHub REST transport.
 
-Octokit owns:
+Octokit owns authentication/API routing, generated REST endpoint bindings, GitHub Enterprise `baseUrl`, pagination primitives, request timeout/retry/throttling primitives and rate-limit endpoint access.
 
-- authentication/API routing,
-- generated REST endpoint bindings,
-- GitHub Enterprise `baseUrl`,
-- pagination primitives,
-- request timeout/retry/throttling primitives,
-- rate-limit endpoint access.
+AI Dashboard owns configured repository versus local-origin identity, checkpoint SHA/tree identity, PR head/base identity, CI/check evidence completeness, required-check/integration identity semantics, branch/ruleset policy interpretation, base movement detection, durable reconciliation/backoff, supervisor gate, expected-head merge, post-merge proof and fail-closed treatment of unknown evidence.
 
-AI Dashboard owns:
-
-- configured repository versus local-origin identity,
-- checkpoint SHA/tree identity,
-- PR head/base identity,
-- CI/check evidence completeness,
-- required-check and integration/app identity semantics,
-- branch/ruleset merge policy interpretation,
-- base movement detection,
-- durable reconciliation/backoff,
-- supervisor gate,
-- expected-head merge requirement,
-- post-merge proof and replay safety,
-- fail-closed treatment of unknown/incomplete evidence.
-
-An external GitHub MCP may later be useful to a conversational agent, but it must not replace Octokit for canonical autonomous merge evidence.
+An external GitHub MCP may be useful to a conversational agent, but it must not replace Octokit for canonical autonomous merge evidence.
 
 ## ACP relationship
 
 ACP remains a planned generic harness-control boundary. It may eventually provide a common interface for OpenCode and other coding agents. It does not make MCP or native SDK adapters obsolete:
 
-- MCP exposes/consumes capabilities,
+- MCP exposes/consumes capabilities and operator interaction,
 - ACP controls compatible coding agents generically,
 - the OpenCode SDK can retain richer OpenCode-specific control/capability discovery.
 
@@ -153,10 +145,10 @@ For SDK upgrades:
 2. Commit the npm lockfile and use `npm ci` in deterministic CI.
 3. Inspect the API actually shipped by the pinned version, not only current online docs.
 4. Keep SDK-specific shapes inside integration/MCP adapters.
-5. Preserve sanitized error/output boundaries.
+5. Preserve sanitized error/output/input boundaries.
 6. Run the complete deterministic suite on Linux and Windows on the exact final PR head.
-7. Re-run real PC beta when transport behavior that affects OpenCode/GitHub side effects changes.
-8. Re-run real MCP interoperability when server/client transport or protocol generation changes.
+7. Re-run real PC beta when transport behavior affecting OpenCode/GitHub side effects changes.
+8. Re-run real MCP interoperability when server/client transport, input-required behavior or protocol generation changes.
 9. Do not add raw HTTP fallbacks unless a reviewed compatibility requirement cannot be met through the supported SDK.
 
 Protocol success is not domain success. A successful MCP, OpenCode or GitHub API call becomes trustworthy only to the extent the control plane can reconcile it with durable state and machine evidence.
