@@ -58,6 +58,25 @@ function validateAcceptanceResults(results, criteria, errors) {
   }
 }
 
+function validatePlannerTasks(tasks, errors) {
+  if (!Array.isArray(tasks)) return;
+  for (const [index, task] of tasks.entries()) {
+    if (!task || typeof task !== 'object' || Array.isArray(task)) {
+      errors.push(`tasks[${index}] must be an object`);
+      continue;
+    }
+    requireString(task.title, `tasks[${index}].title`, errors);
+    if (task.description !== undefined && typeof task.description !== 'string') errors.push(`tasks[${index}].description must be a string`);
+    if (task.priority !== undefined && !['P0', 'P1', 'P2', 'P3'].includes(task.priority)) errors.push(`tasks[${index}].priority is invalid`);
+    requireArray(task.workScopes, `tasks[${index}].workScopes`, errors);
+    if (Array.isArray(task.workScopes) && task.workScopes.length === 0) errors.push(`tasks[${index}].workScopes requires at least one scope`);
+    if (Array.isArray(task.workScopes) && task.workScopes.some((scope) => typeof scope !== 'string' || !scope.trim())) errors.push(`tasks[${index}].workScopes must contain non-empty strings`);
+    requireArray(task.acceptanceCriteria, `tasks[${index}].acceptanceCriteria`, errors);
+    if (Array.isArray(task.acceptanceCriteria) && task.acceptanceCriteria.length === 0) errors.push(`tasks[${index}].acceptanceCriteria requires at least one criterion`);
+    requireArray(task.dependsOn, `tasks[${index}].dependsOn`, errors);
+  }
+}
+
 export function validateResultContract(value, kind, { acceptanceCriteria = [] } = {}) {
   const errors = [];
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false, errors: ['result must be an object'] };
@@ -90,6 +109,7 @@ export function validateResultContract(value, kind, { acceptanceCriteria = [] } 
     requireArray(value.questions, 'questions', errors);
     requireArray(value.risks, 'risks', errors);
     if (value.status === 'ready' && Array.isArray(value.tasks) && value.tasks.length === 0) errors.push('ready planner result requires at least one task');
+    validatePlannerTasks(value.tasks, errors);
   } else {
     errors.push(`unsupported result kind: ${kind}`);
   }
