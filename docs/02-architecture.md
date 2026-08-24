@@ -32,7 +32,7 @@ Exploration remains outside Project until promotion. Research remains outside th
 - **Harness** — execution mechanism; OpenCode is first.
 - **Provider** — inference endpoint such as LM Studio/NVIDIA/OpenAI-compatible.
 - **Model** — selected concrete model.
-- **MCP** — capability/context protocol. Dashboard is both MCP server and MCP host/client.
+- **MCP** — capability/context/operator-input protocol. Dashboard is both MCP server and MCP host/client.
 - **ACP** — planned generic coding-agent protocol; not yet a production harness adapter.
 
 Protocol adapters never own Dashboard domain authority.
@@ -94,19 +94,11 @@ State schema v7 contains durable project specialists. An agent has stable identi
 
 A Task may reference an `agentId`. Assignment snapshots agent name/role/instructions and uses scopes constrained to the agent's registered scopes.
 
-### Static scope rule
-
 Enabled mutating specialists may not own overlapping registered scopes. Parent/child prefixes overlap (`server` conflicts with `server/mcp`). Read-only roles such as supervisor/reviewer/research/planner/master do not claim mutation ownership.
 
-### Runtime scope rule
+Static registry checks are not enough, so worker admission checks effective Task scopes against every other active worker Task in the Project while holding the same durable run-admission lock used for concurrency. `dispatch_unknown` and `dispatchUncertain` retain scope ownership until reconciled.
 
-Static registry checks are not enough, so worker admission checks the Task's effective scopes against every other active worker Task in the Project while holding the same durable project run-admission lock used for concurrency.
-
-`dispatch_unknown` and `dispatchUncertain` retain scope ownership until reconciled. A lost runner acknowledgement therefore cannot accidentally admit a second worker into the same path.
-
-Scope instructions are also included in the worker prompt, but prompt compliance is defense-in-depth rather than the authority mechanism.
-
-See `docs/07-mcp-agent-architecture.md`.
+Scope instructions are included in the worker prompt, but prompt compliance is defense-in-depth rather than the authority mechanism.
 
 ## MCP topology — August 2026
 
@@ -136,8 +128,6 @@ AI Dashboard targets MCP protocol generation `2026-07-28` via the split official
                 registered external MCPs
 ```
 
-### Dashboard as MCP server
-
 Built-in endpoints, only on loopback in the current security phase:
 
 - `/mcp/read`
@@ -146,26 +136,43 @@ Built-in endpoints, only on loopback in the current security phase:
 - `/mcp/master`
 - `/mcp` aliases read-only.
 
-Read/worker/supervisor profiles expose inspection tools only. Master additionally receives bounded orchestration actions for agent creation/update, Task creation/assignment/delegation/requeue, Research/Idea planning and Run abort.
+Read/worker/supervisor profiles expose inspection tools only. Master additionally receives bounded orchestration actions for agent creation/update, Task creation/assignment/delegation/requeue, native operator-input resolution, Research/Idea planning and Run abort.
 
-Master deliberately has no direct MCP merge/publish/approve bypass. Any coding execution it requests enters the normal Task -> worker -> evidence -> GitHub/CI -> supervisor -> merge control loop.
+Master deliberately has no direct MCP merge/publish/approve bypass. Coding execution enters the normal Task -> worker -> evidence -> GitHub/CI -> supervisor -> merge control loop.
 
 MCP resources expose canonical project/task/agent/run/research/evidence views and emit resource-update notifications after committed state transitions. Local repo/worktree paths are stripped from MCP output.
 
 Reusable prompts provide Master orchestration, specialist-scope and independent-review guidance. Prompt text never replaces control-plane enforcement.
 
+### Native `input_required` / operator dialogue
+
+A Task that reaches `needs_input` can be resolved through the Master-only `task_resolve_input` tool. The first tool invocation returns native MCP 2026 `input_required` with structured form elicitation. The MCP client asks the operator and the SDK re-enters the same tool handler with the current input response.
+
+Accepted input is schema-validated. The operator supplies both text and an explicit action:
+
+- `record_only` — persist the answer as Task context but remain `needs_input`.
+- `resume` — persist the answer and call the ordinary `requeueTask` transition back to `backlog`.
+
+Decline/cancel makes no Task mutation. An answer is never treated as approval, completion, review or merge authority. Form elicitation explicitly excludes secrets.
+
+AI Dashboard's durable domain `Task` is not an MCP Tasks object. Any future MCP Tasks extension support is a transport/interoperability adapter and must not replace Project/Task/Run state.
+
 ### Dashboard as MCP host/client
 
 External MCP definitions are durable state, but credentials are not: bearer credentials are stored as environment-variable names only.
 
-Supported current transports:
+Supported transports:
 
 - Streamable HTTP
 - stdio, only in loopback/private mode
 
-External tool execution is default-deny. `allowedTools` must explicitly contain the tool. A remote `readOnlyHint` is metadata, not authorization; a tool without a trusted read-only assertion also requires explicit presence in `mutatingTools`.
+External tool execution is default-deny. `allowedTools` must explicitly contain the tool. A remote `readOnlyHint` is metadata, not authorization; a tool without a read-only assertion also requires explicit presence in `mutatingTools`.
 
-Third-party MCP outputs are bounded/untrusted and must be treated as prompt-injection-capable content.
+The MCP host advertises elicitation only when a trusted higher-level `elicitationHandler` is actually configured. Without a handler, external `input_required` calls fail closed rather than receiving fabricated responses. With a handler, request/response payloads are bounded and actions normalize to accept/decline/cancel.
+
+Third-party MCP outputs and input requests are untrusted, prompt-injection-capable content.
+
+See `docs/07-mcp-agent-architecture.md` and `docs/08-mcp-input-required.md`.
 
 ## OpenCode dispatch and restart safety
 
@@ -205,7 +212,7 @@ No worktree/branch/merge path is created. Interrupted queued/running direct-mode
 7. GitHub publication validates local origin against configured repository.
 8. PR head/base, branch policy and CI must match the reviewed checkpoint.
 9. Base movement blocks stale continuation.
-10. Merge is expected-head guarded and its resulting tree is verified.
+10. Merge is expected-head guarded and resulting tree is verified.
 11. Cleanup occurs only after accepted merge state.
 
 No force push, destructive reset or branch-protection bypass is part of recovery.
@@ -233,9 +240,7 @@ Leases renew during long operations but are not full distributed fencing tokens.
 
 ## Eventing
 
-Browser state refresh uses SSE. MCP clients receive MCP resource-update notifications. Neither stream is source of truth; SQLite state/revision is canonical.
-
-Slow/broken SSE clients are removed rather than accumulating unbounded buffers.
+Browser refresh uses SSE. MCP clients receive MCP resource-update notifications. Neither stream is source of truth; SQLite state/revision is canonical. Slow/broken SSE clients are removed rather than accumulating unbounded buffers.
 
 ## Security boundaries
 
@@ -246,6 +251,8 @@ Slow/broken SSE clients are removed rather than accumulating unbounded buffers.
 - Worker cannot approve/merge itself.
 - External MCP tool annotations do not grant authorization.
 - External MCP configuration never stores bearer secret values.
+- MCP elicitation is not a secret-entry mechanism.
+- Declined/cancelled operator input never resumes work.
 - subprocess/Git/stdio execution uses argument arrays, not shell interpolation.
 - provider/OpenCode/GitHub/MCP URLs and repository paths are privileged inputs.
 - remote outputs and repository context must be bounded/redacted/secret-filtered before persistence/model use.
@@ -261,8 +268,8 @@ node:http control API
    +-> SSE EventHub
    +-> AutonomyEngine + fail-closed policy decorators
    +-> Agent Registry + scope-aware run admission
-   +-> MCP server profiles (loopback only)
-   +-> MCP client/host registry (loopback administration)
+   +-> MCP server profiles + native input_required (loopback only)
+   +-> MCP client/host registry + optional elicitation bridge
    +-> OpenCode SDK -> coding harness
    +-> Git/worktree adapter
    +-> Octokit -> GitHub PR/CI/policy/merge evidence
