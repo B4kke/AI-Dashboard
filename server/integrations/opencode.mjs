@@ -1,5 +1,6 @@
 import { createOpencodeClient } from '@opencode-ai/sdk';
-import { normalizeModelRef } from './model-provider.mjs';
+import { formatModelRef, normalizeModelRef } from './model-provider.mjs';
+import { assertSessionMessages, assertSessionStatusRecord } from '../core/runner-session-status.mjs';
 
 function basicAuth(username, password) {
   if (!password) return null;
@@ -91,12 +92,16 @@ export class OpenCodeClient {
     return this.call('session.list', () => this.client.session.list(this.options(directory)));
   }
 
-  sessionStatus(directory) {
-    return this.call('session.status', () => this.client.session.status(this.options(directory)));
+  async sessionStatus(directory) {
+    return assertSessionStatusRecord(await this.call('session.status', () => this.client.session.status(this.options(directory))));
   }
 
   providers(directory) {
     return this.call('provider.list', () => this.client.provider.list(this.options(directory, 10_000)));
+  }
+
+  configuration(directory) {
+    return this.call('config.get', () => this.client.config.get(this.options(directory, 10_000)));
   }
 
   async availableAgents(directory) {
@@ -125,10 +130,10 @@ export class OpenCodeClient {
     return matches[0] || null;
   }
 
-  messages({ directory, sessionId, limit = 50 }) {
-    return this.call('session.messages', () => this.client.session.messages({
+  async messages({ directory, sessionId, limit = 50 }) {
+    return assertSessionMessages(await this.call('session.messages', () => this.client.session.messages({
       ...this.options(directory), path: { id: sessionId }, query: { ...(directory ? { directory } : {}), limit },
-    }));
+    })));
   }
 
   async prompt({ directory, sessionId, prompt, agent, model, tools, system }) {
@@ -167,9 +172,15 @@ export class OpenCodeClient {
   }
 
   async availableModels(directory) {
-    const value = await this.providers(directory);
+    const [value, configuration] = await Promise.all([
+      this.providers(directory),
+      this.configuration(directory).catch(() => null),
+    ]);
     const providers = Array.isArray(value?.all) ? value.all : [];
     const connected = new Set(Array.isArray(value?.connected) ? value.connected : []);
+    const defaults = value?.default && typeof value.default === 'object' ? value.default : {};
+    let configuredDefault = null;
+    try { configuredDefault = formatModelRef(configuration?.model || null); } catch { /* invalid/missing global default fails closed */ }
     const models = [];
     for (const provider of providers) {
       const providerID = provider?.id || provider?.providerID;
@@ -182,6 +193,8 @@ export class OpenCodeClient {
           modelID,
           name: info?.name || modelID,
           connected: connected.has(providerID),
+          default: configuredDefault === `${providerID}/${modelID}`,
+          providerDefault: defaults[providerID] === modelID,
           toolCall: info?.tool_call === true,
           reasoning: info?.reasoning === true,
           attachment: info?.attachment === true,
@@ -267,7 +280,7 @@ export class OpenCodeClient {
   async overview(directory) {
     const [sessions, statuses, agents] = await Promise.all([
       this.sessions(directory),
-      this.sessionStatus(directory).catch(() => ({})),
+      this.sessionStatus(directory),
       this.availableAgents(directory),
     ]);
     const list = Array.isArray(sessions) ? sessions : [];

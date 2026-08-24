@@ -33,6 +33,7 @@ test('Exploration HTTP flow creates, analyzes and promotes idempotently into one
       openCodeModels: async () => [],
     },
     github: { token: null, baseUrl: 'https://api.github.test' },
+    privateMode: true,
     publicDir: dir,
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');

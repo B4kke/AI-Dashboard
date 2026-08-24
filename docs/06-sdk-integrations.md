@@ -54,7 +54,7 @@ AI Dashboard owns:
 
 Remote MCP `readOnlyHint` is metadata, not authorization. Empty `allowedTools` is deny-all. A non-read-only external tool must be both allowlisted and explicitly present in `mutatingTools`.
 
-Dashboard MCP endpoints are enabled only for loopback binds in the current slice. Host/Origin validation is applied at the Node boundary. This is not authentication; public/remote MCP remains out of scope until auth/authz/audit/kill-switch work exists.
+The production process refuses any non-loopback Dashboard bind before listening; changing `PORT` does not widen the default `127.0.0.1` host. Host/Origin validation is also applied at the Node boundary for the complete HTTP control surface, and Dashboard MCP remains loopback/private-only. These controls are not authentication; public/remote MCP remains out of scope until auth/authz/audit/kill-switch work exists.
 
 MCP credentials are stored only as environment-variable names such as `LOCAL_MCP_TOKEN`; secret values are resolved at call time and must not enter StateStore.
 

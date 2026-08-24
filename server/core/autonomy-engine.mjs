@@ -1,4 +1,5 @@
 const ACTIVE_RUN_STATUSES = new Set(['preparing', 'dispatch_unknown', 'running', 'retrying']);
+const retainsRunOwnership = (run) => ACTIVE_RUN_STATUSES.has(run.status) || run.dispatchUncertain === true || Boolean(run.quarantineReason);
 
 export class AutonomyEngine {
   constructor({ store, operations, intervalMs = Number(process.env.AI_DASHBOARD_AUTONOMY_INTERVAL_MS || 3000) }) {
@@ -28,7 +29,10 @@ export class AutonomyEngine {
     const actions = [];
     try {
       const before = this.store.snapshot();
-      for (const run of before.runs.filter((item) => ['dispatch_unknown', 'running', 'retrying'].includes(item.status))) {
+      for (const run of before.runs.filter((item) => (
+        ['dispatch_unknown', 'running', 'retrying'].includes(item.status)
+        || item.dispatchUncertain === true || Boolean(item.quarantineReason)
+      ))) {
         const result = await this.operations.reconcileRun(run).catch((error) => ({ error }));
         actions.push({ type: 'reconcile', runId: run.id, result: result?.error ? result.error.message : result });
       }
@@ -73,14 +77,14 @@ export class AutonomyEngine {
         }
 
         current = this.store.snapshot();
-        const projectRuns = current.runs.filter((item) => item.projectId === project.id && ACTIVE_RUN_STATUSES.has(item.status));
+        const projectRuns = current.runs.filter((item) => item.projectId === project.id && retainsRunOwnership(item));
         let capacity = Math.max(0, Number(config.maxConcurrentRuns || 1) - projectRuns.length);
 
         if (capacity > 0) {
           const tasks = current.tasks.filter((item) => item.projectId === project.id);
           for (const task of tasks.filter((item) => item.kind === 'work' && item.state === 'awaiting_review')) {
             if (capacity <= 0) break;
-            const activeReview = current.runs.some((run) => run.taskId === task.id && run.kind === 'supervisor' && ACTIVE_RUN_STATUSES.has(run.status));
+            const activeReview = current.runs.some((run) => run.taskId === task.id && run.kind === 'supervisor' && retainsRunOwnership(run));
             if (!activeReview) {
               try {
                 await this.operations.startSupervisor(task.id);
@@ -98,7 +102,7 @@ export class AutonomyEngine {
           const refreshedTasks = refreshed.tasks.filter((item) => item.projectId === project.id);
           const ready = refreshedTasks.filter((task) => {
             if (task.kind !== 'work' || task.state !== 'backlog') return false;
-            const active = refreshed.runs.some((run) => run.taskId === task.id && ACTIVE_RUN_STATUSES.has(run.status));
+            const active = refreshed.runs.some((run) => run.taskId === task.id && retainsRunOwnership(run));
             if (active) return false;
             return task.blockedBy.every((id) => refreshedTasks.find((candidate) => candidate.id === id)?.state === 'done');
           });

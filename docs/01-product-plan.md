@@ -117,7 +117,7 @@ Automation can create/resume Tasks from schedules, CI failures, GitHub events or
 
 ## Machine-readable agent handoff
 
-Planner, worker and supervisor prompts end with an `AI_DASHBOARD_RESULT` JSON contract. The control plane parses this result instead of guessing completion from prose. OpenCode session status is treated as advisory because stale `busy` and retry edge cases can occur.
+Planner, worker and supervisor prompts end with an `AI_DASHBOARD_RESULT` JSON contract. The control plane parses this result instead of guessing completion from prose, but applies it only after the owned OpenCode session is proven `idle` or missing. `busy`, retrying and unknown status retain Run/scope ownership; timeout or abort does not release that ownership until explicit stop evidence exists.
 
 Later versions should replace or supplement text parsing with an MCP/ACP-native result submission tool.
 

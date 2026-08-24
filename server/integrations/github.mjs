@@ -243,6 +243,7 @@ export class GitHubClient {
       login: user?.login || null,
       repository: repo?.full_name || repository || null,
       defaultBranch: repo?.default_branch || null,
+      permissions: repo ? { pull: repo?.permissions?.pull === true, push: repo?.permissions?.push === true } : null,
       rateLimit,
     };
   }

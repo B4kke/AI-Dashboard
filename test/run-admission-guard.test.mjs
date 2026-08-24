@@ -132,3 +132,31 @@ test('blocked project is rejected by admission before any harness operation', as
     assert.equal(calls, 0);
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
+
+test('run admission preserves exact readiness identities and base evidence for every start entrypoint', async () => {
+  const f = await fixture({ maxConcurrentRuns: 3 });
+  const admission = Object.freeze({
+    expectedTaskIdentity: 'task-identity',
+    expectedProjectIdentity: 'project-identity',
+    expectedBaseHead: 'a'.repeat(40),
+  });
+  const seen = [];
+  try {
+    const guarded = decorateRunAdmission({
+      store: f.store,
+      locks: new SerialLocks(),
+      orchestrator: {
+        async startWorker(id, value) { seen.push(['worker', id, value]); },
+        async startSupervisor(id, value) { seen.push(['supervisor', id, value]); },
+        async startIdeaPlanning(id, value) { seen.push(['planner', id, value]); },
+      },
+    });
+
+    await guarded.startWorker(f.taskA.id, admission);
+    await guarded.startSupervisor(f.taskA.id, admission);
+    await guarded.startIdeaPlanning(f.idea.id, admission);
+
+    assert.equal(seen.length, 3);
+    for (const [, , value] of seen) assert.strictEqual(value, admission);
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});

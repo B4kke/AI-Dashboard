@@ -1,6 +1,11 @@
 import { deleteTaskBranch, listRepositoryWorktrees, removeTaskWorktree, syncBaseBranch, worktreePathKey } from '../git/worktrees.mjs';
+import { inspectProjectReadiness } from './project-readiness.mjs';
+import { projectAdmissionIdentity, taskAdmissionIdentity } from './admission-identity.mjs';
+import { activeScopeConflicts } from './run-admission-guard.mjs';
+import { inspectSessionMessages, inspectSessionStatusRecord } from './runner-session-status.mjs';
 
 const DISPATCH_GRACE_SECONDS = 30;
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'merged', 'failed', 'aborted']);
 
 function projectForTask(store, taskId) {
   const task = store.getTask(taskId);
@@ -8,6 +13,14 @@ function projectForTask(store, taskId) {
   const project = store.getProject(task.projectId);
   if (!project) throw new Error('Project not found');
   return { task, project };
+}
+
+function projectForIdea(store, ideaId) {
+  const idea = store.getIdea(ideaId);
+  if (!idea) throw new Error('Idea not found');
+  const project = store.getProject(idea.projectId);
+  if (!project) throw new Error('Project not found');
+  return { idea, project };
 }
 
 function latestTaskRun(store, taskId, predicate = () => true) {
@@ -24,30 +37,127 @@ function secondsSince(iso) {
 function publicationIdentityMatches(project, worker, evidence) {
   return evidence?.headSha === worker?.checkpointHead
     && evidence?.headBranch === worker?.branch
-    && evidence?.baseBranch === (project?.baseBranch || 'main');
+    && evidence?.baseBranch === (project?.baseBranch || 'main')
+    && evidence?.baseSha === worker?.scopeBaseHead;
 }
 
-export function decorateControlPlane({ orchestrator, store, locks, github = null, opencode = null }) {
+function provenReadinessBaseHead(readiness) {
+  const synchronized = readiness?.checks?.find((item) => item.id === 'base_sync' && item.status === 'pass')?.evidence?.head;
+  const inspected = readiness?.checks?.find((item) => item.id === 'repository' && item.status === 'pass')?.evidence?.head;
+  const head = synchronized || inspected || null;
+  if (!/^[0-9a-f]{40,64}$/i.test(head || '')) throw new Error('Project preflight did not produce a trusted base commit SHA');
+  return head;
+}
+
+function provenReadinessModel(readiness) {
+  const modelCheck = readiness?.checks?.find((item) => item.id === 'model' && item.status === 'pass');
+  const model = modelCheck?.evidence?.requested || modelCheck?.evidence?.resolvedDefault || null;
+  if (!String(model || '').trim()) throw new Error('Project preflight did not bind a concrete execution model');
+  return String(model).trim();
+}
+
+export function decorateControlPlane({ orchestrator, store, locks, github = null, opencode = null, syncBase = syncBaseBranch }) {
+  const readinessAdmissions = new WeakMap();
+
+  async function projectReadiness(projectId, { taskId = null, kind = 'worker' } = {}) {
+    return locks.withLock(`project:${projectId}:preflight`, async () => {
+      const project = store.getProject(projectId);
+      if (!project) throw new Error('Project not found');
+      const task = taskId ? store.getTask(taskId) : null;
+      if (taskId && !task) throw new Error('Task not found');
+      if (task && task.projectId !== project.id) throw new Error('Task belongs to a different project');
+      const projectIdentity = projectAdmissionIdentity(project);
+      const taskIdentity = taskAdmissionIdentity(task);
+
+      const repairingSync = project.status === 'needs_sync';
+      const readiness = await inspectProjectReadiness({
+        project: repairingSync ? { ...project, status: 'active' } : project,
+        task,
+        kind,
+        opencode,
+        github,
+        repairingSync,
+        syncBase: project.repository
+          ? () => locks.withLock(`project:${project.id}:base-sync`, () => {
+            const current = store.getProject(project.id);
+            if (projectAdmissionIdentity(current) !== projectIdentity) throw new Error('Project configuration changed during preflight');
+            return syncBase({ repoPath: current.repoPath, baseBranch: current.baseBranch || 'main' });
+          })
+          : null,
+      });
+
+      const currentProject = store.getProject(project.id);
+      const currentTask = task ? store.getTask(task.id) : null;
+      if (projectAdmissionIdentity(currentProject) !== projectIdentity || taskAdmissionIdentity(currentTask) !== taskIdentity) {
+        throw new Error('Project or Task configuration changed during preflight; retry the check');
+      }
+
+      const statusBefore = project.status;
+      const hasProjectBlocker = readiness.blockers.some((blocker) => blocker.scope !== 'task');
+      const statusAfter = hasProjectBlocker
+        ? (['active', 'needs_sync'].includes(project.status) ? 'needs_sync' : project.status)
+        : (repairingSync ? 'active' : project.status);
+      readiness.projectStatusBefore = statusBefore;
+      readiness.projectStatus = statusAfter;
+      const statusCheck = readiness.checks.find((item) => item.id === 'project_status');
+      if (statusCheck && statusBefore === 'needs_sync') {
+        statusCheck.summary = hasProjectBlocker
+          ? 'Project remains paused as needs_sync until every Project readiness blocker is repaired.'
+          : 'Project returned to active after successful Project readiness repair.';
+        statusCheck.evidence = { statusBefore, statusAfter };
+      } else if (statusCheck && statusAfter === 'needs_sync') {
+        statusCheck.summary = 'Project was active when checked and is now paused as needs_sync because Project readiness blockers remain.';
+        statusCheck.evidence = { statusBefore, statusAfter };
+      }
+      const persistedProject = await store.recordProjectPreflight(project.id, readiness, {
+        status: statusAfter,
+        expectedProjectIdentity: projectIdentity,
+        taskId: task?.id || null,
+        expectedTaskIdentity: task ? taskIdentity : null,
+      });
+      readinessAdmissions.set(readiness, {
+        projectIdentity: projectAdmissionIdentity(persistedProject),
+        taskIdentity: task ? taskIdentity : null,
+        expectedModel: readiness.ok ? provenReadinessModel(readiness) : null,
+      });
+      return readiness;
+    });
+  }
+
+  async function assertReady(readiness, { taskId = null } = {}) {
+    if (readiness.ok) return;
+    const summary = readiness.blockers.slice(0, 6).map((blocker) => `${blocker.id}: ${blocker.summary}`).join('; ');
+    const taskBlockers = readiness.blockers.filter((blocker) => blocker.scope === 'task');
+    if (taskId && taskBlockers.length) {
+      const task = store.getTask(taskId);
+      if (task && !['done', 'needs_input'].includes(task.state)) {
+        await store.updateTask(taskId, { state: 'needs_input', supervisorFeedback: `Task preflight failed: ${taskBlockers.map((blocker) => blocker.summary).join('; ')}` });
+      }
+    }
+    const error = new Error(`Project preflight failed: ${summary}`);
+    error.readiness = readiness;
+    throw error;
+  }
+
   async function startWorker(taskId) {
     const { task, project } = projectForTask(store, taskId);
     if (project.status !== 'active') throw new Error(`Project is ${project.status}; resolve project state before starting more work`);
     if (!task.acceptanceCriteria?.length) throw new Error('Coding task requires at least one acceptance criterion before delegation');
-    if (!task.verificationCommands?.length && !project.verificationCommands?.length) throw new Error('Coding task requires at least one control-plane verification command before delegation');
-    if (project.repository) {
-      await locks.withLock(`project:${project.id}:base-sync`, async () => {
-        try {
-          await syncBaseBranch({ repoPath: project.repoPath, baseBranch: project.baseBranch || 'main' });
-          if (project.status !== 'active') await store.updateProject(project.id, { status: 'active' });
-        } catch (error) {
-          await store.updateProject(project.id, { status: 'needs_sync' });
-          throw new Error(`Project base sync failed before worker start: ${error.message}`);
-        }
-      });
-    }
+    const readiness = await projectReadiness(project.id, { taskId: task.id, kind: 'worker' });
+    await assertReady(readiness, { taskId: task.id });
+    const admission = readinessAdmissions.get(readiness);
+    if (!admission) throw new Error('Project readiness admission identity is unavailable; retry delegation');
 
+    const conflicts = activeScopeConflicts(store, taskId);
+    if (conflicts.length) throw new Error(`Task work scope overlaps active task ${conflicts[0].taskId} (${conflicts[0].scopes.join(', ')}); refusing delegation after preflight`);
     const runsBefore = new Set(store.snapshot().runs.filter((run) => run.taskId === taskId).map((run) => run.id));
     try {
-      return await orchestrator.startWorker(taskId);
+      return await orchestrator.startWorker(taskId, {
+        expectedTaskIdentity: admission.taskIdentity,
+        expectedProjectIdentity: admission.projectIdentity,
+        expectedBaseHead: provenReadinessBaseHead(readiness),
+        expectedModel: admission.expectedModel,
+      });
     } catch (error) {
       // OpenCode prompt_async can have an ambiguous outcome: the request may have been accepted even when
       // the client loses the 204 acknowledgement. Only a session created by this exact start attempt may be
@@ -69,10 +179,39 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
     }
   }
 
+  async function startIdeaPlanning(ideaId) {
+    const { project } = projectForIdea(store, ideaId);
+    if (project.status !== 'active') throw new Error(`Project is ${project.status}; resolve project state before planning`);
+    const readiness = await projectReadiness(project.id, { kind: 'planner' });
+    await assertReady(readiness);
+    const admission = readinessAdmissions.get(readiness);
+    if (!admission) throw new Error('Project readiness admission identity is unavailable; retry planning');
+    return orchestrator.startIdeaPlanning(ideaId, {
+      expectedProjectIdentity: admission.projectIdentity,
+      expectedBaseHead: provenReadinessBaseHead(readiness),
+      expectedModel: admission.expectedModel,
+    });
+  }
+
+  async function startSupervisor(taskId) {
+    const { task, project } = projectForTask(store, taskId);
+    if (project.status !== 'active') throw new Error(`Project is ${project.status}; resolve project state before review`);
+    const readiness = await projectReadiness(project.id, { taskId: task.id, kind: 'supervisor' });
+    await assertReady(readiness, { taskId: task.id });
+    const admission = readinessAdmissions.get(readiness);
+    if (!admission) throw new Error('Project readiness admission identity is unavailable; retry review');
+    return orchestrator.startSupervisor(taskId, {
+      expectedTaskIdentity: admission.taskIdentity,
+      expectedProjectIdentity: admission.projectIdentity,
+      expectedBaseHead: provenReadinessBaseHead(readiness),
+      expectedModel: admission.expectedModel,
+    });
+  }
+
   async function reconcileUncertainDispatch(run) {
     if (!opencode || !run?.sessionId || !run?.worktreePath) {
       const message = 'Cannot reconcile uncertain OpenCode dispatch because session/worktree evidence is missing.';
-      await store.updateRun(run.id, { status: 'failed', error: message, finishedAt: new Date().toISOString() });
+      await store.updateRun(run.id, { status: 'dispatch_unknown', dispatchUncertain: true, error: message, finishedAt: null });
       if (run.taskId) await store.updateTask(run.taskId, { state: 'needs_input', supervisorFeedback: message });
       return { status: 'dispatch_unconfirmed', error: message };
     }
@@ -89,16 +228,35 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
       return { status: 'runner_unavailable', error: error.message };
     }
 
-    const status = statuses?.[run.sessionId] || { type: 'idle' };
-    const assistantObserved = Array.isArray(messages) && messages.some((message) => message?.info?.role === 'assistant');
+    const statusEvidence = inspectSessionStatusRecord(statuses, run.sessionId);
+    if (!statusEvidence.valid) {
+      const message = 'Runner returned malformed session-status evidence while reconciling uncertain dispatch; retaining ownership.';
+      await store.updateRun(run.id, { error: message });
+      return { status: 'runner_status_invalid', error: message };
+    }
+    const messageEvidence = inspectSessionMessages(messages);
+    if (!messageEvidence.valid) {
+      const message = 'Runner returned malformed session-message evidence while reconciling uncertain dispatch; retaining ownership.';
+      await store.updateRun(run.id, { error: message });
+      return { status: 'runner_messages_invalid', error: message };
+    }
+    const status = statusEvidence.present ? statusEvidence.status : { type: 'idle' };
+    const assistantObserved = messageEvidence.messages.some((message) => message.info.role === 'assistant');
     if (status.type === 'busy' || status.type === 'retry' || assistantObserved) {
-      await store.updateRun(run.id, { status: 'running', dispatchUncertain: false, error: null });
-      return orchestrator.reconcileRun(run.id);
+      await store.updateRun(run.id, {
+        status: 'running',
+        dispatchPhase: 'dispatched',
+        dispatchedAt: run.dispatchedAt || new Date().toISOString(),
+        dispatchUncertain: false,
+        error: null,
+      });
+      return { status: 'running', dispatchReconciled: true };
     }
 
     if (status.type === 'idle' && secondsSince(run.startedAt) >= DISPATCH_GRACE_SECONDS) {
       const message = 'OpenCode dispatch could not be confirmed: the persisted session remained idle without an assistant message. Automatic retry is blocked to avoid duplicate workers.';
-      await store.updateRun(run.id, { status: 'failed', error: message, finishedAt: new Date().toISOString(), dispatchUncertain: false });
+      const finishedAt = new Date().toISOString();
+      await store.updateRun(run.id, { status: 'failed', error: message, finishedAt, terminationConfirmedAt: finishedAt, dispatchUncertain: false });
       if (run.taskId) await store.updateTask(run.taskId, { state: 'needs_input', supervisorFeedback: message });
       return { status: 'dispatch_unconfirmed', error: message };
     }
@@ -106,10 +264,99 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
     return { status: 'dispatch_unknown' };
   }
 
+  async function reconcileQuarantinedRun(run) {
+    const message = run.quarantineReason || 'Planner recovery quarantined an external worker session.';
+    if (!opencode || !run?.sessionId || !run?.worktreePath) {
+      await store.updateRun(run.id, {
+        status: 'dispatch_unknown', dispatchUncertain: true,
+        error: message + ' External session termination cannot be confirmed because runner/session/worktree evidence is unavailable.',
+        finishedAt: null,
+      });
+      if (run.taskId) await store.updateTask(run.taskId, { state: 'needs_input', supervisorFeedback: message });
+      return { status: 'quarantine_abort_pending', runId: run.id };
+    }
+    await opencode.abort({ directory: run.worktreePath, sessionId: run.sessionId }).catch(() => {});
+    try {
+      const statuses = await opencode.sessionStatus(run.worktreePath);
+      const statusEvidence = inspectSessionStatusRecord(statuses, run.sessionId);
+      if (!statusEvidence.valid || (statusEvidence.present && statusEvidence.status.type !== 'idle')) {
+        await store.updateRun(run.id, {
+          status: 'dispatch_unknown', dispatchUncertain: true,
+          error: message + (statusEvidence.valid
+            ? ' Abort was requested, but the external session is still active.'
+            : ' Abort was requested, but runner status evidence was malformed.'),
+          finishedAt: null,
+        });
+        return { status: 'quarantine_abort_pending', runId: run.id };
+      }
+      const finishedAt = new Date().toISOString();
+      await store.updateRun(run.id, {
+        status: 'failed', dispatchUncertain: false,
+        error: message + ' External session termination was confirmed.',
+        finishedAt, terminationConfirmedAt: finishedAt, legacyTerminationUnconfirmed: false,
+      });
+      if (run.taskId) await store.updateTask(run.taskId, { state: 'needs_input', supervisorFeedback: message });
+      return { status: 'quarantine_stopped', runId: run.id };
+    } catch {
+      await store.updateRun(run.id, {
+        status: 'dispatch_unknown', dispatchUncertain: true,
+        error: message + ' External session termination could not be confirmed.',
+        finishedAt: null,
+      });
+      return { status: 'quarantine_abort_pending', runId: run.id };
+    }
+  }
+
+  async function reconcileTerminalTermination(run) {
+    if (!opencode || !run?.sessionId || !run?.worktreePath) {
+      return { status: 'terminal_termination_pending', runId: run.id };
+    }
+    try {
+      const evidence = inspectSessionStatusRecord(await opencode.sessionStatus(run.worktreePath), run.sessionId);
+      if (!evidence.valid || (evidence.present && evidence.status.type !== 'idle')) {
+        return { status: 'terminal_termination_pending', runId: run.id };
+      }
+      await store.updateRun(run.id, {
+        dispatchUncertain: false, quarantineReason: null, legacyTerminationUnconfirmed: false,
+        terminationConfirmedAt: run.terminationConfirmedAt || new Date().toISOString(),
+      });
+      return { status: run.status, runId: run.id, terminationConfirmed: true };
+    } catch {
+      return { status: 'terminal_termination_pending', runId: run.id };
+    }
+  }
+
   async function reconcileRun(run) {
     const current = typeof run === 'string' ? store.getRun(run) : store.getRun(run.id);
+    if (current && TERMINAL_RUN_STATUSES.has(current.status)
+      && (current.dispatchUncertain === true || current.quarantineReason || current.legacyTerminationUnconfirmed === true)) {
+      return locks.withLock(`task:${current.taskId || current.id}`, async () => {
+        const locked = store.getRun(current.id);
+        if (!locked || !TERMINAL_RUN_STATUSES.has(locked.status)
+          || (locked.dispatchUncertain !== true && !locked.quarantineReason && locked.legacyTerminationUnconfirmed !== true)) {
+          return { status: locked?.status || 'missing' };
+        }
+        return reconcileTerminalTermination(locked);
+      });
+    }
+    if (current && TERMINAL_RUN_STATUSES.has(current.status)) return { status: current.status };
+    if (current?.quarantineReason) {
+      return locks.withLock(`task:${current.taskId || current.id}`, async () => {
+        const locked = store.getRun(current.id);
+        if (!locked || TERMINAL_RUN_STATUSES.has(locked.status) || !locked.quarantineReason) {
+          return { status: locked?.status || 'missing' };
+        }
+        return reconcileQuarantinedRun(locked);
+      });
+    }
     if (current?.status === 'dispatch_unknown' || current?.dispatchUncertain === true) {
-      return reconcileUncertainDispatch(current);
+      return locks.withLock(`task:${current.taskId || current.id}`, async () => {
+        const locked = store.getRun(current.id);
+        if (!locked || (locked.status !== 'dispatch_unknown' && locked.dispatchUncertain !== true)) {
+          return { status: locked?.status || 'missing' };
+        }
+        return reconcileUncertainDispatch(locked);
+      });
     }
 
     const value = await orchestrator.reconcileRun(run);
@@ -170,6 +417,7 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
     try {
       return await orchestrator.publishTask(taskId);
     } catch (error) {
+      if (error?.resumable === true && ['PROJECT_INACTIVE', 'PROJECT_IDENTITY_CHANGED'].includes(error.code)) throw error;
       try {
         const recovered = await recoverPublishedPullRequest(store.getTask(taskId) || task, project);
         if (recovered) return recovered;
@@ -210,12 +458,24 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
   }
 
   async function syncAfterRemoteMerge(project, result) {
+    const expectedProjectIdentity = projectAdmissionIdentity(project);
     try {
-      const sync = await locks.withLock(`project:${project.id}:base-sync`, () => syncBaseBranch({ repoPath: project.repoPath, baseBranch: project.baseBranch || 'main' }));
-      await store.updateProject(project.id, { status: 'active' });
+      const sync = await locks.withLock(`project:${project.id}:base-sync`, () => {
+        const current = store.getProject(project.id);
+        if (projectAdmissionIdentity(current) !== expectedProjectIdentity) {
+          throw new Error('Project changed before the merged base could be synchronized');
+        }
+        return syncBase({ repoPath: current.repoPath, baseBranch: current.baseBranch || 'main' });
+      });
       return { ...result, localBaseSync: { ok: true, ...sync } };
     } catch (error) {
-      await store.updateProject(project.id, { status: 'needs_sync' });
+      if (project.status === 'active') {
+        await store.compareAndSetProjectStatus(project.id, {
+          expectedProjectIdentity,
+          expectedStatus: 'active',
+          status: 'needs_sync',
+        });
+      }
       return { ...result, localBaseSync: { ok: false, error: error.message }, warning: 'Remote merge completed, but local base sync failed. Project autonomy is paused.' };
     }
   }
@@ -252,8 +512,13 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
 
     for (const run of uncertainBefore) {
       const current = store.getRun(run.id);
-      if (!current?.sessionId || !current?.taskId || ['completed', 'merged', 'aborted'].includes(current.status)) continue;
+      if (!current?.sessionId || !current?.taskId || TERMINAL_RUN_STATUSES.has(current.status)) continue;
       await store.updateRun(current.id, { status: 'dispatch_unknown', dispatchUncertain: true, finishedAt: null });
+      if (current.quarantineReason) {
+        await store.updateTask(current.taskId, { state: 'needs_input', supervisorFeedback: current.quarantineReason });
+        actions.push({ type: 'run.quarantine_recovered', runId: current.id, taskId: current.taskId });
+        continue;
+      }
       await store.updateTask(current.taskId, {
         state: 'in_progress',
         supervisorFeedback: 'Recovered an uncertain OpenCode dispatch after process restart; reconciling the existing session before any retry.',
@@ -282,7 +547,9 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
 
   async function workspaceInventory() {
     const snapshot = store.snapshot();
-    const owned = new Map(snapshot.runs.filter((run) => run.worktreePath).map((run) => [worktreePathKey(run.worktreePath), run]));
+    const owned = new Map(snapshot.runs
+      .filter((run) => run.worktreePath && !(run.kind === 'planner' && ['completed', 'failed', 'aborted'].includes(run.status)))
+      .map((run) => [worktreePathKey(run.worktreePath), run]));
     const projects = [];
     for (const project of snapshot.projects.filter((item) => item.repoPath)) {
       try {
@@ -302,5 +569,17 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
     return { projects, abandonedCount: projects.reduce((sum, project) => sum + project.worktrees.filter((worktree) => worktree.abandoned).length, 0) };
   }
 
-  return { ...orchestrator, startWorker, reconcileRun, publishTask, reconcilePublishedTask, mergeApprovedTask, recover, workspaceInventory };
+  return {
+    ...orchestrator,
+    projectReadiness,
+    startIdeaPlanning,
+    startWorker,
+    startSupervisor,
+    reconcileRun,
+    publishTask,
+    reconcilePublishedTask,
+    mergeApprovedTask,
+    recover,
+    workspaceInventory,
+  };
 }

@@ -74,7 +74,7 @@ test('restart preserves a possibly accepted prompt as uncertain instead of repla
   const f = await fixture();
   let deletes = 0;
   try {
-    await f.store.updateRun(f.run.id, { sessionId: 'session-1', status: 'failed', dispatchPhase: 'prompting', dispatchUncertain: false, finishedAt: new Date().toISOString() });
+    await f.store.updateRun(f.run.id, { sessionId: 'session-1', status: 'running', dispatchPhase: 'prompting', dispatchUncertain: false, finishedAt: null });
     const guarded = decorateOpenCodeDispatchRecovery({
       store: f.store,
       opencode: { async deleteSession() { deletes += 1; } },
@@ -86,5 +86,49 @@ test('restart preserves a possibly accepted prompt as uncertain instead of repla
     assert.equal(run.dispatchUncertain, true);
     assert.equal(run.finishedAt, null);
     assert.equal(deletes, 0);
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});
+
+test('restart recovery never resurrects terminal Runs from stale dispatch phases', async () => {
+  const f = await fixture();
+  try {
+    const terminalRuns = [];
+    const inputs = [
+      { status: 'completed', dispatchPhase: 'prompt_ack_unknown' },
+      { status: 'merged', dispatchPhase: 'prompting' },
+      { status: 'failed', dispatchPhase: 'session_created' },
+      { status: 'aborted', dispatchPhase: 'creating_session' },
+    ];
+    for (const [index, input] of inputs.entries()) {
+      const run = index === 0
+        ? f.run
+        : await f.store.createRun({
+          taskId: f.task.id,
+          projectId: f.project.id,
+          kind: 'worker',
+          runner: 'opencode',
+          worktreePath: `/tmp/worktree-${index}`,
+          branch: `ai/work-${index}`,
+        });
+      terminalRuns.push(await f.store.updateRun(run.id, {
+        ...input,
+        sessionId: `session-${index}`,
+        dispatchUncertain: true,
+        finishedAt: new Date().toISOString(),
+        result: { preserved: input.status },
+      }));
+    }
+
+    let deletes = 0;
+    const guarded = decorateOpenCodeDispatchRecovery({
+      store: f.store,
+      opencode: { async deleteSession() { deletes += 1; } },
+      orchestrator: { async recover() { return []; } },
+    });
+    const actions = await guarded.recover();
+
+    assert.deepEqual(actions, []);
+    assert.equal(deletes, 0);
+    for (const before of terminalRuns) assert.deepEqual(f.store.getRun(before.id), before);
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });

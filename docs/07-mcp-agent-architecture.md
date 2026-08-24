@@ -1,6 +1,6 @@
 # MCP and specialist-agent architecture
 
-Status: implemented early M3 slice, August 2026. This document describes the current foundation-branch code and the boundaries future Master AI/fleet work must preserve.
+Status: implemented early M3 slice, August 2026. This document describes the current foundation-branch code and the boundaries future Master AI/fleet work must preserve. Focused deterministic hardening coverage exists; fresh Linux + Windows GitHub Actions on the exact final commit and full real-PC OpenCode/GitHub dogfood remain open.
 
 ## Purpose
 
@@ -52,7 +52,7 @@ Loopback endpoints:
 /mcp/master
 ```
 
-Built-in MCP is disabled when the main control server is bound to a non-loopback host. This remains deliberate until authentication, authorization and audit exist.
+The production entrypoint refuses to start on a non-loopback host, and the entire HTTP control surface rejects non-loopback Host/Origin before routing. Built-in MCP additionally remains private-mode/loopback-only. These are deliberate fail-closed boundaries until authentication, authorization and audit exist.
 
 ### Capability profiles
 
@@ -143,7 +143,7 @@ Prompts are guidance, never authorization. Important invariants also exist in co
 
 ## Agent Registry
 
-State schema v7 contains durable project-scoped specialists:
+State schema v8 retains the durable project-scoped specialists introduced in v7 and adds explicit coding-Run termination proof:
 
 ```text
 id
@@ -159,7 +159,7 @@ enabled
 createdAt / updatedAt
 ```
 
-Agent identity is durable. Task assignment snapshots name/role/instructions/model so in-flight/history state is not silently reinterpreted after an agent definition changes.
+Agent identity is durable. Task assignment snapshots name/role/instructions/model so in-flight/history state is not silently reinterpreted after an agent definition changes. Assignment and Task scope changes are allowed only before all execution history: any persisted Run or positive iteration freezes them, including after the Task returns to `backlog` or `needs_input`.
 
 ## Work scopes
 
@@ -175,11 +175,13 @@ Normalization rejects absolute/traversal-style ambiguous paths and glob syntax. 
 
 ### Static ownership
 
-Two enabled mutating specialists in the same Project cannot be registered with overlapping scopes. Read-only supervisor/reviewer/research/planner/master roles are not file owners.
+Two enabled mutating specialists in the same Project cannot be registered with overlapping scopes. Read-only supervisor/reviewer/research/planner/master roles are not file owners and cannot be assigned executable work Tasks.
 
 ### Task ownership
 
-An assigned Task must remain within its agent's registered scopes. Assignment/scope changes are allowed only before execution (`backlog` or `needs_input`). Active ownership cannot be moved underneath a running worker.
+An assigned Task must remain within its agent's registered scopes. An unassigned Task still has authoritative Task scopes in its prompt and claim. Empty/unknown scope is normalized conservatively to `*`; if an enabled mutating specialist owns an overlapping registry path, the unassigned worker is rejected until assigned to that owner. Task state alone is insufficient permission to reassign after execution history exists.
+
+Scope prefixes are NFKC-normalized and compared case-insensitively. Absolute, traversal, wildcard and cross-platform ambiguous values are rejected. Evidence retains exact NUL-delimited Git paths (including both sides of rename/copy) and fails closed on non-canonical or ambiguous filenames rather than mapping them into an owned scope.
 
 ### Runtime anti-overlap
 
@@ -191,9 +193,24 @@ An assigned Task must remain within its agent's registered scopes. Assignment/sc
 4. resolve effective Task/agent scopes,
 5. inspect other active worker Tasks,
 6. reject any overlap,
-7. only then start the inner worker operation.
+7. only then enter Project preflight/inner worker operation,
+8. atomically revalidate current capacity, duplicate active/uncertain Run, registry ownership and overlap when StateStore claims the Task.
 
-`dispatch_unknown` and `dispatchUncertain` retain scope ownership until reconciled, preventing a lost runner acknowledgement from freeing a path prematurely.
+Only active/uncertain worker Runs own mutation scopes. Planner/supervisor Runs remain read-only for file ownership while still consuming concurrency. `dispatch_unknown` and `dispatchUncertain` retain scope ownership until reconciled, preventing a lost runner acknowledgement from freeing a path prematurely.
+
+## Project preflight and MCP delegation
+
+Master `task_delegate` and `idea_plan` call the same orchestrator entry points as HTTP/autonomy; MCP cannot skip readiness. Worker, planner and supervisor entry points prove active Project status, valid clean configured base checkout, safe verification commands, live OpenCode plus a concrete explicit or single unambiguous default model and, when GitHub-backed, exact origin/access/fast-forward-synchronized base evidence.
+
+Project blockers pause the Project as `needs_sync`; Task-local blockers move only that Task to `needs_input`. The admission object binds readiness-relevant Project/Task identities, the concrete selected/default model and exact base SHA. StateStore revalidates current identity/capacity/duplicate-Run/ownership atomically before claim, worktree creation requires that exact base, and a retry/review refuses a stale original `scopeBaseHead`. MCP text or caller-supplied confidence cannot forge this internal readiness admission.
+
+The same identity/current-active condition is CAS-confirmed again at irreversible publish, PR-create and merge boundaries. Project pause/identity drift is resumable control-plane state, not worker failure; push evidence already proven before a pause is retained for safe publication recovery.
+
+## Planner result materialization
+
+A ready planner Run does not create immediately executable Tasks one by one. The completed result is first persisted, then one StateStore transaction validates the canonical Idea/planning-Task linkage, explicit scopes/criteria/dependencies and any crash-surviving exact candidate prefix. It creates only an exact missing suffix in `planning`, rebuilds dependency IDs and Idea linkage, and releases the complete set to `backlog` only at the final commit point.
+
+Replays are idempotent. Ambiguous/invalid candidates, dependency errors or execution history quarantine the planning Task, Idea and generated candidates in `needs_input`. Active/uncertain candidate workers retain scope ownership until external termination is confirmed. Explicit replan creates a new canonical planning Task and supersedes/quarantines the previous candidates rather than adopting them into the new plan.
 
 ## Master AI orchestration model
 
@@ -235,9 +252,11 @@ Dependencies and scopes solve different problems: dependencies express ordering/
 
 ## Worker prompt integration
 
-For assigned Tasks the coding prompt receives specialist name, role, instructions, exact owned scopes, sibling-scope prohibition and the requirement to return `needs_input` when correct work crosses the boundary.
+For assigned Tasks the coding prompt receives specialist name, role, instructions, exact owned scopes, sibling-scope prohibition and the requirement to return `needs_input` when correct work crosses the boundary. Unassigned Tasks receive an explicit “no specialist” statement and their authoritative Task scopes; omission of `agentId` does not omit ownership.
 
-Prompt discipline complements runtime admission and Git evidence; it does not replace them.
+Prompt discipline complements runtime admission and Git evidence; it does not replace them. The control plane persists a checkpoint intent and accepts only an exact one-parent commit/tree matching that intent, then checks the cumulative original-scope-base-to-checkpoint diff before verification/review.
+
+Harness prose/result data also does not release ownership. A result contract is applied only once the owned session is proven `idle` or missing; busy/retry/unknown status and unconfirmed timeout/abort continue to own their Run and mutation scopes.
 
 ## Dashboard as external MCP host/client
 
@@ -292,7 +311,7 @@ Tool/resource/prompt/elicitation content is third-party untrusted data and can c
 
 ## Network boundary
 
-Built-in MCP endpoints and administration are loopback-only in this phase. The Node adapter validates localhost Host and Origin values to reduce DNS-rebinding risk.
+The main process refuses an explicit non-loopback `AI_DASHBOARD_HOST` before listening; the generic `PORT` variable changes only the port and leaves the default host at `127.0.0.1`. The complete HTTP control surface validates loopback Host and Origin values before API/static/MCP routing to reduce DNS-rebinding risk. Built-in MCP endpoints and administration are additionally loopback/private-mode-only.
 
 This is not authentication. Remote/public exposure remains blocked until authentication, authorization, audit log and kill-switch requirements are implemented.
 
@@ -306,6 +325,8 @@ future AI Dashboard -> ACP -> generic harness
 ```
 
 MCP and OpenCode SDK solve opposite directions. OpenCode SDK remains useful for native session/event/tool/permission/provider/model/recovery functions.
+
+Dashboard preserves configured agent-role names and asks the SDK-backed adapter to discover the live OpenCode catalog before dispatch. The name is sent only on an exact match; an unavailable role is omitted so OpenCode uses its default. Hardcoded alias rewriting is not part of current behavior.
 
 An external GitHub MCP may be useful for conversational exploration, but canonical PR/check/branch-policy/merge evidence stays on Octokit + control-plane logic.
 
@@ -326,18 +347,27 @@ The suite covers:
 - external host with handler completing multi-round input,
 - external MCP default-deny and explicit mutation approval,
 - unsafe URL/secret configuration rejection,
-- StateStore schema v7 migration,
+- StateStore schema v8 migration (with the Agent Registry introduced in v7),
 - durable agent assignment/scope persistence,
+- assignment/scope freeze after any execution history,
+- read-only roles rejected for executable work and unassigned Tasks blocked from bypassing registered scope owners,
 - static and runtime scope conflicts,
+- atomic identity/capacity/duplicate-Run/registry/scope claim revalidation,
 - uncertain dispatch retaining ownership,
-- specialist instructions/scopes reaching the actual worker prompt.
+- specialist instructions/scopes reaching the actual worker prompt,
+- fail-closed Project readiness, concrete model/exact-base binding and stale retry/review rejection,
+- exact-one-parent checkpoint intent/tree/cumulative-diff ownership,
+- atomic planner materialization, crash-suffix/dependency repair, stale/replan quarantine and replay idempotency,
+- process bind refusal plus full control-surface Host/Origin rejection.
 
-GitHub Actions verification and real external dogfood remain separate evidence levels.
+These are focused deterministic claims. Fresh Linux + Windows GitHub Actions on the exact final commit and full real external dogfood remain separate, currently open evidence levels.
 
 ## Explicit non-claims / next gates
 
 This implementation does not yet prove:
 
+- fresh Linux + Windows GitHub Actions on the exact final hardening commit,
+- a complete full PC-beta campaign on that same clean commit,
 - real OpenCode configured as an MCP host against Dashboard on the user's PC,
 - interoperability with every MCP client/server implementation,
 - authenticated remote MCP,
@@ -347,4 +377,4 @@ This implementation does not yet prove:
 - ACP/Codex/Claude/local harness breadth,
 - production multi-instance fencing.
 
-Immediate external proof should connect real OpenCode to `/mcp/read` and `/mcp/master`, prove discovery and operator input, create two disjoint specialists/Tasks, prove parallel admission, then prove an overlapping scope is rejected. The broader real OpenCode + GitHub Actions PC beta remains the higher-level control-plane gate.
+Immediate external proof should first produce green Linux + Windows GitHub Actions on one exact commit, then connect real OpenCode to `/mcp/read` and `/mcp/master`, prove discovery and operator input, create two disjoint specialists/Tasks, prove parallel admission, and prove an overlapping scope is rejected. The full real OpenCode + disposable GitHub Actions PC beta on that same commit remains the higher-level control-plane gate.

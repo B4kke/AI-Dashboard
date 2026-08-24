@@ -1,18 +1,17 @@
-function scopeText(value) {
-  return String(value || '').trim().replaceAll('\\', '/');
-}
-
 export function normalizeWorkScope(value) {
-  let scope = scopeText(value);
+  const raw = String(value || '').trim().normalize('NFKC');
+  if (/^[\\/]/.test(raw) || /^[a-z]:/i.test(raw)) throw new Error(`Work scope must be project-relative: ${value}`);
+  let scope = raw.replaceAll('\\', '/');
   if (!scope) return null;
   if (scope === '*') return '*';
   while (scope.startsWith('./')) scope = scope.slice(2);
-  scope = scope.replace(/^\/+|\/+$/g, '').replace(/\/{2,}/g, '/');
+  scope = scope.replace(/\/+$/g, '').replace(/\/{2,}/g, '/');
   if (!scope || scope === '.') return null;
   const parts = scope.split('/');
   if (parts.some((part) => !part || part === '.' || part === '..')) throw new Error(`Invalid work scope: ${value}`);
-  if (scope.includes('*') || scope.includes('?') || scope.includes('\0')) throw new Error(`Work scope must be a concrete project-relative path prefix: ${value}`);
-  return scope;
+  if (scope.includes('*') || scope.includes('?') || scope.includes(':') || scope.includes('\0')) throw new Error(`Work scope must be a concrete project-relative path prefix: ${value}`);
+  if (parts.some((part) => /[. ]$/.test(part))) throw new Error(`Work scope contains a cross-platform ambiguous path segment: ${value}`);
+  return scope.toLowerCase();
 }
 
 export function normalizeWorkScopes(values) {

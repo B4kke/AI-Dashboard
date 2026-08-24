@@ -2,6 +2,8 @@
 
 > Current focus: prove and harden the autonomous control plane against real OpenCode/GitHub/MCP use. The project owner explicitly reprioritized MCP + specialist-agent foundations on 2026-08-24 because they are required for the intended Master AI orchestration model. This does not relax M1/M2 reliability gates.
 
+> Evidence boundary: the hardening items described below are implemented with focused deterministic coverage in the working tree. Fresh Linux + Windows GitHub Actions on the exact final commit and the full current-stack real OpenCode + disposable GitHub/Actions PC beta have not yet been run; both remain open gates.
+
 ## Pre-project Exploration — IMPLEMENTED / BETA-CANDIDATE
 
 Implemented and deterministic-test covered: global Exploration independent of Project/Idea; direct-model analysis runs; no repo/worktree/coding Run before promotion; persisted report/model/usage/error history; fail-closed restart handling; durable lifecycle locking; explicit idempotent promotion; latest report as bounded bootstrap context; mobile-friendly UI.
@@ -21,15 +23,23 @@ Limitation: Exploration research is model analysis only; live source-aware retri
 Implemented/tested:
 
 - existing repository/project registration,
+- fail-closed Project preflight for status, clean/configured base, verification, harness/model and optional GitHub origin/access/synchronization,
+- durable `needs_sync` Project repair state plus Task-local `needs_input` blockers,
+- bound Project/Task admission identities, concrete model and exact proven base SHA,
+- atomic current-capacity, duplicate-Run and scope/registry ownership revalidation when work is claimed,
 - direct Tasks; Idea optional,
 - versioned planner/worker/supervisor contracts,
+- atomic/idempotent planner materialization with exact-prefix/suffix recovery, dependency rebuilding and replan quarantine,
 - isolated worktrees,
 - official OpenCode SDK session/message/status/tool/event integration,
 - per-Run model selection,
 - deterministic Run-scoped OpenCode session identity,
 - lost-ack recovery/fail-closed uncertain dispatch,
-- control-plane checkpoint + Git evidence,
-- shell-free verification commands + secret redaction,
+- result application only after structurally valid message evidence plus explicit harness idle/missing evidence; busy/retry/unknown and unconfirmed termination retain ownership with durable termination proof,
+- persisted checkpoint intent and exact-one-parent `commit-tree` ownership proof,
+- cumulative original-scope-base -> checkpoint Git evidence,
+- replacement-ref isolation, legacy-graft rejection and NUL-safe changed-path evidence,
+- shell-free verification commands through trusted executables outside the worktree + secret redaction,
 - real-diff requirement,
 - independent read-only supervisor,
 - bounded iterations and autonomy modes,
@@ -48,6 +58,7 @@ Implemented/tested:
 - official Octokit transport,
 - repository/local-origin identity,
 - shell-free branch push,
+- current-active Project identity guards immediately before push/PR creation/merge, with resumable pause-after-push evidence,
 - create/reuse PR and lost-ack repair,
 - PR head/base/merge evidence,
 - paginated check-runs + legacy statuses,
@@ -61,9 +72,9 @@ Implemented/tested:
 - post-review revalidation,
 - expected-head guarded merge + post-merge proof,
 - optional cleanup,
-- Linux + Windows CI.
+- Linux + Windows GitHub Actions workflow definitions; a fresh exact-final-commit result remains open.
 
-A disposable real GitHub/Actions happy-path dogfood succeeded before the MCP slice. The full loop must be repeated on the current final head, including deliberate CI failure/repair, moved base, supervisor rejection/correction and protected-branch behavior.
+A disposable real GitHub/Actions happy-path dogfood succeeded before the MCP/hardening slice. It is historical context, not evidence for the current tree. Fresh Linux + Windows GitHub Actions and the full loop must be repeated on the exact current final commit, including deliberate CI failure/repair, moved base, supervisor rejection/correction and protected-branch behavior.
 
 Deferred breadth: GitHub issue sync, webhooks, review-comment workflow and raw Actions-log ingestion.
 
@@ -124,7 +135,8 @@ Implemented/tested:
 - native multi-round `input_required` + form elicitation for `needs_input`,
 - accept/decline/cancel handling with Zod validation,
 - explicit `record_only`/`resume` semantics,
-- Host/Origin validation and loopback-only built-in MCP,
+- process-level refusal of non-loopback Dashboard binds,
+- loopback Host/Origin validation for the complete HTTP control surface and loopback-only built-in MCP,
 - Dashboard as MCP client/host,
 - Streamable HTTP and private-loopback stdio,
 - server/tool/resource/template/prompt discovery,
@@ -157,13 +169,18 @@ Implemented/tested:
 - identity/name/role/harness/model/instructions/capabilities/enabled state,
 - explicit project-relative `workScopes`,
 - static conflict rejection for overlapping mutating specialists,
+- read-only roles cannot own or execute mutation scopes,
 - Task -> agent assignment with scope containment,
 - assignment snapshots identity/instructions/model,
-- active ownership cannot silently move,
-- agent scope cannot change around active/unfinished assigned work,
+- assignment/workScopes cannot change after any execution history, including retry `backlog`/`needs_input`,
+- unassigned Tasks retain authoritative scopes and cannot bypass an enabled specialist's registered ownership,
+- missing/unknown Task scope is whole-Project ownership rather than conflict-free,
+- agent execution identity cannot change around an unfinished assigned Task once it has execution history; active scopes cannot move and scopes cannot shrink around unfinished assignments,
 - worker prompt receives specialist identity/instructions/scope,
 - worker returns `needs_input` rather than stealing sibling scope,
 - runtime scope-overlap admission under durable project lock,
+- atomic scope/registry ownership revalidation at worker claim,
+- only active/uncertain worker Runs own mutation scopes; planner/supervisor Runs remain read-only,
 - uncertain OpenCode dispatch retains scope ownership,
 - disjoint scopes can run concurrently when dependencies/concurrency permit.
 
@@ -171,16 +188,16 @@ Still planned: Agent Registry/fleet UI; persistent agent memory/persona; harness
 
 ### M3F — Local/self-hosted model workspace — EARLY FOUNDATION
 
-Already present: Harness/Provider/Model separation; generic OpenAI-compatible direct provider; LM Studio/NVIDIA profiles; per-role/task models; OpenCode model/agent/tool/reasoning/context capability discovery; provider URL/secret validation; read-only Project Research.
+Already present: Harness/Provider/Model separation; generic OpenAI-compatible direct provider; LM Studio/NVIDIA profiles; per-role/task models; preflight-bound concrete default/selected execution model; OpenCode model/agent/tool/reasoning/context capability discovery; configured role names preserved and forwarded only when discovered in the live OpenCode catalog; provider URL/secret validation; read-only Project Research.
 
 Planned: hardware-aware model cookbook, richer local endpoint discovery, role recommendations, usage/cost accounting and degraded-state management.
 
 ## Immediate verification gates
 
-On the exact final PR head:
+On one clean, exact final commit (the beta harness refuses a dirty Dashboard checkout and refuses resume across commit drift):
 
-1. syntax + full Linux suite green,
-2. Windows portability green,
+1. syntax + full deterministic Linux suite green,
+2. Windows GitHub Actions portability green on the same commit,
 3. pinned lockfile + `npm ci`,
 4. real OpenCode configured as MCP host against Dashboard read/master,
 5. real resource/tool/prompt discovery,
@@ -188,7 +205,8 @@ On the exact final PR head:
 7. Master creates two disjoint specialists/Tasks and both can be admitted concurrently,
 8. overlapping specialist/Task is rejected by control plane,
 9. restart retains ownership/uncertain-run protection,
-10. repeat full OpenCode + GitHub Actions beta on current stack.
+10. focused deterministic PC-beta harness/resume tests prove stable Project/Task IDs, exact contracts, canonical evidence validation and fail-closed duplicate rejection,
+11. run the full real OpenCode + disposable GitHub Actions beta on the current stack and preserve its report/evidence.
 
 A failed external scenario is evidence to harden the control plane, not permission to weaken a gate.
 

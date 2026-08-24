@@ -4,6 +4,8 @@ This checklist is the first real end-to-end dogfood gate for AI Dashboard.
 
 It is intentionally stricter than "the UI opened". The goal is to prove that the real OpenCode + Git + GitHub/Actions control loop behaves like the deterministic tests claim.
 
+Current status (2026-08-24): the harness and its fail-closed resume/evidence contract are implemented and deterministically tested. The complete full campaign has **not** yet been rerun on the exact final hardening commit, and fresh Linux + Windows GitHub Actions for that same commit are also open. This checklist records the required proof; it is not a claim that the proof already exists.
+
 ## Automated harness
 
 The preferred beta entrypoint is now the outer harness in `scripts/pc-beta.mjs`:
@@ -18,6 +20,7 @@ The harness is the test controller. OpenCode remains the real worker/supervisor 
 
 The harness:
 
+- refuses to start from a dirty AI Dashboard worktree, records the exact Dashboard commit SHA and refuses resume on a different commit
 - starts an isolated AI Dashboard instance on `127.0.0.1:7332` by default
 - uses an isolated SQLite database under `.ai-dashboard-beta/`
 - requires an explicit disposable-repository confirmation before mutating Git/GitHub
@@ -32,11 +35,15 @@ The harness:
 - creates an unowned `ai/*` worktree to test abandoned-worktree detection
 - temporarily points the isolated dashboard at an unreachable GitHub API endpoint to verify fail-closed outage behavior
 - persists session state and writes both JSON and Markdown evidence reports
+- persists stable Project and per-scenario Task IDs before waiting on autonomous side effects
+- validates the complete stored Project/Task execution contract before resume instead of matching by title alone
+- revalidates previously passed autonomous scenarios against canonical checkpoint/tree/base/CI/supervisor/merge evidence
+- refuses missing, ambiguous, drifted or duplicate Tasks rather than creating a replacement after uncertain history
 - does not delete evidence automatically when a scenario fails
 
 ### Runner/model notes from dogfooding (2026-08-22)
 
-- **OpenCode agent names are load-bearing.** `prompt_async` returns 2xx but silently persists nothing when the `agent` name does not resolve to a real OpenCode agent (built-ins: `build`, `plan`, `general`). The control plane therefore normalizes role names to built-ins at dispatch; if you configure custom agents, verify they exist on the runner first.
+- **OpenCode agent names are load-bearing.** `prompt_async` can acknowledge an unsupported name without useful work. Dashboard now preserves the configured role, discovers the live OpenCode agent catalog before dispatch and forwards the name only on an exact match; otherwise it omits the agent field so OpenCode uses its default. It does not rewrite roles to hardcoded `build`/`plan`/`general` aliases. Verify custom agents are discoverable on the real runner.
 - **Empirical model matrix** (single campaign, disposable repo):
   - `google/gemini-flash-latest` — reliable coder/supervisor, published PRs in ~10 min.
   - `opencode/nemotron-3-ultra-free` — delivered a supervisor `approve` verdict; historically slow, fast again on OpenCode ≥ 1.18.21.
@@ -47,7 +54,7 @@ The harness:
 
 ### Required beta environment
 
-The test repository must already exist on GitHub and be cloned locally. The harness intentionally does **not** create or delete GitHub repositories.
+The test repository must already exist on GitHub and be cloned locally. The harness intentionally does **not** create or delete GitHub repositories. The AI Dashboard checkout itself must be a clean committed tree; untracked or modified files make the harness stop before it labels any evidence with a commit identity.
 
 Put the beta settings in the AI Dashboard `.env` file or export them in the shell:
 
@@ -98,11 +105,12 @@ AI_DASHBOARD_BETA_OPENCODE_COMMAND_JSON=["opencode","serve","--hostname","127.0.
 1. disposable Git fixture/base branch
 2. OpenCode health
 3. optional Exploration analysis/promotion when a direct model is configured
-4. real worker
-5. checkpoint + local verification
-6. real PR/Actions
-7. independent supervisor
-8. real merge with checkpoint/base/tree evidence
+4. Project preflight with clean/synchronized exact base, safe verification and a concrete OpenCode model
+5. real worker admitted against that exact base/model/Project/Task identity
+6. persisted exact-one-parent checkpoint intent + cumulative diff/scope + local verification
+7. real PR/Actions
+8. independent supervisor
+9. real merge with checkpoint/base/tree evidence
 
 `--full` additionally attempts:
 
@@ -115,6 +123,8 @@ AI_DASHBOARD_BETA_OPENCODE_COMMAND_JSON=["opencode","serve","--hostname","127.0.
 7. GitHub API outage fail-closed behavior
 
 A full run is `blocked`, not `passed`, if a scenario cannot actually be exercised. For example, the OpenCode-outage scenario is blocked if the harness does not own the OpenCode process, and Exploration is blocked if no direct model is configured.
+
+“Full” is a fixed contract, not “run whichever scenarios happened to be available.” Every required scenario must produce `passed`; a deliberately unavailable scenario produces `blocked`, and any identity/idempotency violation produces `failed`.
 
 ### Resume and evidence
 
@@ -138,7 +148,11 @@ or choose a new evidence directory:
 AI_DASHBOARD_BETA_DIR=.ai-dashboard-beta/run-2
 ```
 
-Resume reuses the same SQLite/session evidence and skips already-passed destructive scenarios, while rechecking OpenCode health. Repository/path mismatches are rejected rather than silently resuming against a different target.
+Resume reuses the same SQLite/session evidence while rechecking OpenCode health. It requires the same clean Dashboard commit, repository/path/base branch and persisted Project ID, and rejects replacement refs or legacy graft metadata that could relabel Git history. The stored Project must still match the complete beta contract: name, status, repository/path/base, verification command, all model-policy fields and the autonomy values used by the harness.
+
+Each autonomous scenario has a stable evidence key and persisted Task ID. The Task must still match Project, title, description, priority, kind, runner, concrete model, acceptance criteria, verification commands, `workScopes`, dependencies and `allowNoChange=false`. A legacy session without the ID may adopt exactly one full-contract match; it may not guess from a title. Missing IDs, contract drift, multiple active/done matches, `needs_input`, incomplete done evidence or a canonical Task coexisting with a duplicate all stop without creating another Task.
+
+Previously passed autonomous Task scenarios are not blindly skipped: resume revalidates their canonical Dashboard state and full merge evidence. Only safely non-destructive fixture/scenario preservation may reuse an already passed record without weakening its identity checks.
 
 The harness retries transient loopback failures (`ECONNRESET`, timeout and related socket errors) up to four attempts with linear backoff for read-only dashboard requests. It does not blindly replay mutating requests after an ambiguous connection loss; those remain fail-closed so a lost response cannot silently create duplicate work.
 
@@ -156,7 +170,7 @@ The harness deliberately leaves PRs/worktrees/branches/evidence available for in
 Beta assumptions:
 
 - one AI Dashboard control-plane process
-- loopback/private access only
+- loopback/private access only; the production entrypoint refuses non-loopback binds and control HTTP rejects non-loopback Host/Origin
 - one local PC runner/OpenCode instance
 - disposable GitHub test repository for destructive/recovery scenarios
 - no public Render/Internet exposure
@@ -191,10 +205,11 @@ Expected:
 
 - Node is 22+
 - full local test suite passes
+- AI Dashboard `git status --porcelain=v1 --untracked-files=all` is empty
 - the automated harness can start its isolated dashboard on `http://127.0.0.1:7332`
 - `/api/health` reports SQLite persistence
 
-Record the exact Git commit SHA used for beta. The harness records it automatically. Do not switch code revisions mid-run without starting a new beta evidence directory.
+Record the exact Git commit SHA used for beta. The harness records it automatically, refuses dirty source and rejects a resume if that SHA changed. Do not switch code revisions mid-run without starting a new beta evidence directory. Fresh Linux and Windows GitHub Actions must also be green on this exact commit before the overall release gate can close; a local beta report does not manufacture that CI evidence.
 
 ## 1. Exploration smoke test
 
@@ -224,13 +239,19 @@ Register the disposable repository as a Project with:
 - verification command(s)
 - `requireCi=true`
 
+Run/inspect Project preflight before delegation. The actual worker start repeats the same preflight and remains authoritative.
+
 Expected:
 
+- Project is `active`; preflight proves a valid clean base checkout, configured base branch, shell-free verification command, healthy OpenCode and the concrete explicit or single unambiguous default model
+- for the GitHub-backed beta, local origin, authenticated push permission and fast-forward synchronization prove one exact base SHA
+- the StateStore claim rechecks current Project/Task identity, capacity, duplicate Runs and scope ownership atomically
 - one managed `ai/*` branch/worktree appears
 - one OpenCode worker session starts
 - worker does not merge itself
-- control plane checkpoint-commits the change
-- Git diff/tree evidence exists
+- control plane persists checkpoint intent and creates/recovers exactly one commit whose sole parent is the trusted Run base and whose tree equals the intent tree
+- cumulative Git diff/tree evidence spans the original scope base through the latest checkpoint
+- control-plane Git ignores replacement refs, rejects legacy graft metadata and preserves exact special filenames in scope evidence
 - configured verification succeeds
 - Task advances to publish/review state only after machine evidence passes
 
@@ -240,6 +261,7 @@ Expected:
 
 - local origin matches configured repository
 - exact checkpoint branch is pushed
+- Project identity/status is re-confirmed immediately before push and PR creation; a pause after push preserves resumable publication evidence
 - one PR is created/reused
 - PR head equals checkpoint SHA
 - GitHub checks/status are collected
@@ -248,6 +270,7 @@ Expected:
 - supervisor is read-only
 - final verification/head/tree gate runs before merge
 - merge uses expected head SHA
+- Project identity/status is re-confirmed at the local/remote merge boundary
 - recorded merge evidence contains PR/head/base, worker tree/base and merge SHA
 
 ## 4. Deliberate CI failure -> repair
@@ -340,19 +363,23 @@ Durable transient merge backoff/retry-budget behavior remains separately covered
 
 ## Evidence to capture
 
-For each scenario the harness report stores or links as much of the following as is available:
+Treat the full `.ai-dashboard-beta/` bundle as evidence: `session.json`, JSON/Markdown reports, isolated SQLite state, process logs and surviving Git/GitHub artifacts. The human-readable report may summarize rather than duplicate canonical StateStore records, so preserve the complete bundle. Together it must retain or resolve:
 
 - AI Dashboard commit SHA
 - beta session ID
+- stable persisted Project ID and per-scenario evidence key/Task ID
+- exact Project and Task execution-contract fields used for resume validation
+- Project preflight report, concrete model and proven base SHA
 - Project/Task/Run IDs
-- worker checkpoint SHA/tree
-- Git-proven worker base SHA
+- persisted checkpoint intent version/parent/tree plus committed checkpoint SHA/tree/sole parent
+- Git-proven worker `baseHead`, original `scopeBaseHead` and cumulative changed-path evidence
 - PR number/head/base
 - CI/check state
 - supervisor runs/verdict path
 - merge SHA when applicable
 - relevant task/control-plane error state
 - whether restart/retry created an unexpected additional worker Run
+- duplicate/legacy reconciliation evidence when resume refuses ambiguity or incomplete state
 
 ## Beta pass criteria
 
@@ -367,8 +394,11 @@ PC beta passes only when:
 - moved base cannot merge stale work
 - abandoned worktree is detectable
 - final merge/checkpoint/base/tree evidence remains internally consistent
+- persisted scenario Task IDs remain stable; resume validates full contracts/evidence and rejects every ambiguous or duplicate candidate without creating replacement work
 
 If any integrity or idempotency case is ambiguous, mark beta **failed/blocked** and preserve the evidence for the next fix.
+
+The pass claim is intentionally still open for the current hardening tree until one clean exact commit has both fresh Linux + Windows GitHub Actions and a preserved successful full real-PC report. Older dogfood and focused deterministic tests are not substitutes.
 
 ## What beta success will mean
 

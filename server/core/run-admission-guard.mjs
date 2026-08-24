@@ -49,6 +49,7 @@ export function activeScopeConflicts(store, taskOrProjectId, proposedScopes = nu
   const activeRuns = snapshot.runs.filter((run) => (
     run.projectId === projectId
     && run.taskId !== taskId
+    && (run.kind || 'worker') === 'worker'
     && (ACTIVE_RUN_STATES.has(run.status) || run.dispatchUncertain === true)
   ));
   const conflicts = [];
@@ -88,17 +89,17 @@ export function decorateRunAdmission({ orchestrator, store, locks }) {
 
   return {
     ...orchestrator,
-    startWorker(taskId) {
+    startWorker(taskId, admission = {}) {
       const project = projectForTask(store, taskId);
-      return admit(project, () => orchestrator.startWorker(taskId), { taskId, enforceScopes: true });
+      return admit(project, () => orchestrator.startWorker(taskId, admission), { taskId, enforceScopes: true });
     },
-    startSupervisor(taskId) {
+    startSupervisor(taskId, admission = {}) {
       const project = projectForTask(store, taskId);
-      return admit(project, () => orchestrator.startSupervisor(taskId));
+      return admit(project, () => orchestrator.startSupervisor(taskId, admission));
     },
-    startIdeaPlanning(ideaId) {
+    startIdeaPlanning(ideaId, admission = {}) {
       const project = projectForIdea(store, ideaId);
-      return admit(project, () => orchestrator.startIdeaPlanning(ideaId));
+      return admit(project, () => orchestrator.startIdeaPlanning(ideaId, admission));
     },
   };
 }

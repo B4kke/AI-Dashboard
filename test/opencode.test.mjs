@@ -114,16 +114,43 @@ test('OpenCode provider catalog exposes chat/tool capability metadata from the S
   const server = await listen((req, res) => {
     const url = requestPath(req);
     res.setHeader('content-type', 'application/json');
-    if (url.pathname === '/provider') return res.end(JSON.stringify({ all: [{ id: 'lmstudio', models: { 'qwen/qwen3': { name: 'Qwen 3', tool_call: true, reasoning: true, attachment: false, limit: { context: 32768, output: 8192 }, modalities: { input: ['text'], output: ['text'] }, status: 'active' } } }], connected: ['lmstudio'] }));
+    if (url.pathname === '/provider') return res.end(JSON.stringify({ all: [{ id: 'lmstudio', models: { 'qwen/qwen3': { name: 'Qwen 3', tool_call: true, reasoning: true, attachment: false, limit: { context: 32768, output: 8192 }, modalities: { input: ['text'], output: ['text'] }, status: 'active' } } }], default: { lmstudio: 'qwen/qwen3' }, connected: ['lmstudio'] }));
+    if (url.pathname === '/config') return res.end(JSON.stringify({ model: 'lmstudio/qwen/qwen3' }));
     res.statusCode = 404; res.end('{}');
   });
   try {
     const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
     assert.deepEqual(await client.availableModels('/tmp/repo'), [{
       id: 'lmstudio/qwen/qwen3', providerID: 'lmstudio', modelID: 'qwen/qwen3', name: 'Qwen 3', connected: true,
+      default: true, providerDefault: true,
       toolCall: true, reasoning: true, attachment: false, contextWindow: 32768, outputLimit: 8192,
       modalities: { input: ['text'], output: ['text'] }, status: 'active',
     }]);
+  } finally {
+    await close(server);
+  }
+});
+
+test('OpenCode model discovery binds only the configured global default across providers', async () => {
+  const server = await listen((req, res) => {
+    const url = requestPath(req);
+    res.setHeader('content-type', 'application/json');
+    if (url.pathname === '/provider') return res.end(JSON.stringify({
+      all: [
+        { id: 'alpha', models: { first: { name: 'First' } } },
+        { id: 'beta', models: { second: { name: 'Second' } } },
+      ],
+      default: { alpha: 'first', beta: 'second' },
+      connected: ['alpha', 'beta'],
+    }));
+    if (url.pathname === '/config') return res.end(JSON.stringify({ model: 'beta/second' }));
+    res.statusCode = 404; return res.end('{}');
+  });
+  try {
+    const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+    const models = await client.availableModels('/tmp/repo');
+    assert.deepEqual(models.filter((model) => model.default).map((model) => model.id), ['beta/second']);
+    assert.deepEqual(models.filter((model) => model.providerDefault).map((model) => model.id), ['alpha/first', 'beta/second']);
   } finally {
     await close(server);
   }

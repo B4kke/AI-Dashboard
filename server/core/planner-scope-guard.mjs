@@ -1,32 +1,7 @@
-import { normalizeWorkScopes } from './work-scope.mjs';
-
-function runId(value) {
-  return typeof value === 'string' ? value : value?.id || null;
-}
+import { materializePlannerResult, plannerRunId } from './planner-materialization.mjs';
 
 async function persistPlannerScopes(store, run) {
-  if (!run || run.kind !== 'planner' || run.status !== 'completed' || run.result?.status !== 'ready') return [];
-  const planningTask = store.getTask(run.taskId);
-  const idea = planningTask?.sourceIdeaId ? store.getIdea(planningTask.sourceIdeaId) : null;
-  if (!planningTask || !idea) return [];
-
-  const specs = Array.isArray(run.result.tasks) ? run.result.tasks : [];
-  const generatedIds = Array.isArray(idea.generatedTaskIds) ? idea.generatedTaskIds : [];
-  if (specs.length !== generatedIds.length) {
-    throw new Error(`Planner scope recovery cannot map ${specs.length} task spec(s) to ${generatedIds.length} generated Task(s)`);
-  }
-
-  const updated = [];
-  for (let index = 0; index < specs.length; index += 1) {
-    const scopes = normalizeWorkScopes(specs[index]?.workScopes);
-    if (!scopes.length) throw new Error(`Planner task ${index} is missing explicit workScopes`);
-    const task = store.getTask(generatedIds[index]);
-    if (!task) throw new Error(`Planner generated Task is missing: ${generatedIds[index]}`);
-    if (JSON.stringify(normalizeWorkScopes(task.workScopes)) === JSON.stringify(scopes)) continue;
-    await store.updateTask(task.id, { workScopes: scopes });
-    updated.push({ taskId: task.id, workScopes: scopes });
-  }
-  return updated;
+  return materializePlannerResult(store, run);
 }
 
 export function decoratePlannerScopes({ orchestrator, store }) {
@@ -34,15 +9,35 @@ export function decoratePlannerScopes({ orchestrator, store }) {
     ...orchestrator,
     async reconcileRun(value) {
       const result = await orchestrator.reconcileRun(value);
-      const id = runId(value);
-      if (id) await persistPlannerScopes(store, store.getRun(id));
+      const id = plannerRunId(value);
+      if (id) {
+        const run = store.getRun(id);
+        try { await persistPlannerScopes(store, run); }
+        finally {
+          if (run?.kind === 'planner' && run.status === 'completed') await orchestrator.cleanupPlannerRun?.(run.id);
+        }
+      }
       return result;
     },
     async recover() {
       const actions = await orchestrator.recover();
-      for (const run of store.snapshot().runs.filter((item) => item.kind === 'planner' && item.status === 'completed' && item.result?.status === 'ready')) {
-        const repaired = await persistPlannerScopes(store, run);
-        for (const item of repaired) actions.push({ type: 'planner.scope_recovered', runId: run.id, ...item });
+      const plannerRuns = store.snapshot().runs
+        .filter((item) => item.kind === 'planner' && item.status === 'completed' && item.result?.status === 'ready')
+        .sort((left, right) => {
+          const leftTask = store.getTask(left.taskId); const rightTask = store.getTask(right.taskId);
+          const leftIdea = leftTask?.sourceIdeaId ? store.getIdea(leftTask.sourceIdeaId) : null;
+          const rightIdea = rightTask?.sourceIdeaId ? store.getIdea(rightTask.sourceIdeaId) : null;
+          const leftCanonical = leftIdea?.planningTaskId === left.taskId ? 0 : 1;
+          const rightCanonical = rightIdea?.planningTaskId === right.taskId ? 0 : 1;
+          return leftCanonical - rightCanonical;
+        });
+      for (const run of plannerRuns) {
+        try {
+          const repaired = await persistPlannerScopes(store, run);
+          for (const item of repaired) actions.push({ runId: run.id, ...item });
+        } finally {
+          await orchestrator.cleanupPlannerRun?.(run.id);
+        }
       }
       return actions;
     },

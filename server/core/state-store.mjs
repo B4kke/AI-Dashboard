@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { normalizeWorkScopes, scopeSetsOverlap, scopeSubset } from './work-scope.mjs';
+import { normalizeWorkScopes, scopeSetsOverlap, scopeSubset, taskWorkScopes } from './work-scope.mjs';
+import { projectAdmissionIdentity, taskAdmissionIdentity } from './admission-identity.mjs';
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
+const PROJECT_STATUSES = new Set(['active', 'needs_sync', 'blocked']);
 const DEFAULT_AUTONOMY = Object.freeze({
   mode: 'manual', supervisorRole: 'supervisor', plannerRole: 'planner', workerRole: 'builder',
   maxConcurrentRuns: 2, maxTaskIterations: 4, maxRunMinutes: 45, maxRetryAttempts: 5,
@@ -12,6 +14,7 @@ const DEFAULT_AUTONOMY = Object.freeze({
 });
 const DEFAULT_MODEL_POLICY = Object.freeze({ codingModel: null, planningModel: null, supervisorModel: null, researchModel: null });
 const ACTIVE_RUN_STATES = new Set(['preparing', 'running', 'retrying', 'dispatch_unknown']);
+const TERMINAL_RUN_STATES = new Set(['completed', 'merged', 'failed', 'aborted']);
 const READ_ONLY_AGENT_ROLES = new Set(['supervisor', 'reviewer', 'research', 'master', 'planner']);
 const EMPTY_STATE = Object.freeze({
   schemaVersion: SCHEMA_VERSION,
@@ -56,19 +59,22 @@ function autonomy(input = {}) {
 }
 function projectRecord(input, now = new Date().toISOString()) {
   if (!input?.name?.trim()) throw new Error('Project name is required');
+  const status = input.status || 'active';
+  if (!PROJECT_STATUSES.has(status)) throw new Error('Invalid Project status');
   return {
     id: input.id || randomUUID(),
     name: input.name.trim(),
     repoPath: input.repoPath?.trim() || null,
     repository: input.repository?.trim() || null,
     baseBranch: input.baseBranch?.trim() || 'main',
-    status: input.status || 'active',
+    status,
     brief: boundedText(input.brief, 60_000) || null,
     sourceExplorationId: input.sourceExplorationId || null,
     sourceExplorationRunId: input.sourceExplorationRunId || null,
     autonomy: autonomy(input.autonomy),
     modelPolicy: modelPolicy(input.modelPolicy),
     verificationCommands: stringList(input.verificationCommands),
+    lastPreflight: null,
     createdAt: input.createdAt || now,
     updatedAt: now,
   };
@@ -125,21 +131,173 @@ function assertTaskAgentScopes(task, agent, scopes) {
   if (!scopeSubset(scopes, agent.workScopes)) throw new Error('Task workScopes must stay inside the assigned agent workScopes');
 }
 
+function assertAgentCanExecuteTask(kind, agent) {
+  if (agent && kind === 'work' && READ_ONLY_AGENT_ROLES.has(String(agent.role || '').toLowerCase())) {
+    throw new Error(`Read-only agent role ${agent.role} cannot be assigned to an executable work Task`);
+  }
+}
+
+function assertTaskRegistryOwnership(state, task, agent, scopes) {
+  if (task.kind !== 'work') return;
+  const owners = state.agents.filter((candidate) => candidate.projectId === task.projectId
+    && candidate.enabled !== false
+    && !READ_ONLY_AGENT_ROLES.has(String(candidate.role || '').toLowerCase())
+    && scopeSetsOverlap(scopes, candidate.workScopes));
+  const foreignOwners = owners.filter((owner) => owner.id !== agent?.id);
+  if (!agent && owners.length) {
+    throw new Error(`Task work scope is owned by registered specialist ${owners[0].name}; assign the Task before worker claim`);
+  }
+  if (foreignOwners.length) {
+    throw new Error(`Task work scope overlaps registered specialist ${foreignOwners[0].name}; refusing ownership bypass`);
+  }
+}
+
+function assertProjectRunCapacity(state, project) {
+  if (project.status !== 'active') throw new Error(`Project is ${project.status}; autonomous run admission is blocked`);
+  const active = state.runs.filter((run) => run.projectId === project.id
+    && (ACTIVE_RUN_STATES.has(run.status) || run.dispatchUncertain === true)).length;
+  const maximum = Math.max(1, Number(project.autonomy?.maxConcurrentRuns || 1));
+  if (active >= maximum) throw new Error(`Project run concurrency budget exhausted at atomic claim (${active}/${maximum} active runs)`);
+}
+
+function taskRecord(input, project, agent = null, now = new Date().toISOString()) {
+  const kind = ['planning', 'work', 'review'].includes(input.kind) ? input.kind : 'work';
+  const scopes = normalizeWorkScopes(Array.isArray(input.workScopes) && input.workScopes.length ? input.workScopes : (agent?.workScopes || []));
+  if (agent) { assertTaskAgentScopes({ projectId: project.id }, agent, scopes); assertAgentCanExecuteTask(kind, agent); }
+  const taskCommands = Array.isArray(input.verificationCommands) ? stringList(input.verificationCommands) : stringList(project.verificationCommands);
+  return {
+    id: randomUUID(), projectId: project.id, sourceIdeaId: input.sourceIdeaId || null, sourcePlannerRunId: input.sourcePlannerRunId || null,
+    supersededByPlanningTaskId: input.supersededByPlanningTaskId || null,
+    parentTaskId: input.parentTaskId || null,
+    kind, title: input.title.trim(), description: input.description?.trim() || '',
+    priority: ['P0', 'P1', 'P2', 'P3'].includes(input.priority) ? input.priority : 'P2', state: input.state || 'backlog', runner: input.runner || agent?.harness || 'opencode',
+    model: input.model?.trim?.() || agent?.model || project.modelPolicy?.codingModel || null,
+    agentRole: input.agentRole?.trim() || agent?.role || null, agentId: agent?.id || null, agentName: agent?.name || null, agentInstructions: agent?.instructions || null,
+    workScopes: scopes, blockedBy: stringList(input.blockedBy), acceptanceCriteria: stringList(input.acceptanceCriteria), verificationCommands: taskCommands,
+    allowNoChange: input.allowNoChange === true, iteration: Number(input.iteration || 0), supervisorFeedback: null,
+    plannerQuarantineReason: null, publication: null, createdAt: now, updatedAt: now,
+  };
+}
+
+function sameStrings(left, right) {
+  return JSON.stringify(stringList(left)) === JSON.stringify(stringList(right));
+}
+
+function normalizedPlannerSpecs(result, project) {
+  const source = result?.tasks;
+  if (!Array.isArray(source) || source.length < 1 || source.length > 50) throw new Error('Planner materialization requires between 1 and 50 task specs');
+  const specs = source.map((spec, index) => {
+    if (!spec || typeof spec !== 'object' || Array.isArray(spec) || !spec.title?.trim()) throw new Error(`Planner task ${index} has no valid title`);
+    const workScopes = normalizeWorkScopes(spec.workScopes);
+    if (!workScopes.length) throw new Error(`Planner task ${index} is missing explicit workScopes`);
+    const acceptanceCriteria = stringList(spec.acceptanceCriteria);
+    if (!acceptanceCriteria.length) throw new Error(`Planner task ${index} is missing acceptance criteria`);
+    if (!Array.isArray(spec.dependsOn)) throw new Error(`Planner task ${index} has invalid dependsOn`);
+    return {
+      title: spec.title.trim(), description: spec.description?.trim() || '',
+      priority: ['P0', 'P1', 'P2', 'P3'].includes(spec.priority) ? spec.priority : 'P2',
+      runner: spec.runner?.trim?.() || 'opencode', model: spec.model?.trim?.() || project.modelPolicy?.codingModel || null,
+      agentRole: spec.agentRole?.trim?.() || project.autonomy.workerRole, workScopes, acceptanceCriteria,
+      verificationCommands: stringList(project.verificationCommands), dependsOn: spec.dependsOn,
+    };
+  });
+  const titleIndexes = new Map();
+  for (const [index, spec] of specs.entries()) {
+    const matches = titleIndexes.get(spec.title) || [];
+    matches.push(index);
+    titleIndexes.set(spec.title, matches);
+  }
+  for (const [index, spec] of specs.entries()) {
+    const dependencyIndexes = [];
+    for (const dependency of spec.dependsOn) {
+      let dependencyIndex = null;
+      if (Number.isInteger(dependency)) {
+        if (dependency < 0 || dependency >= specs.length) throw new Error(`Planner task ${index} depends on invalid task index ${dependency}`);
+        dependencyIndex = dependency;
+      } else if (typeof dependency === 'string' && dependency.trim()) {
+        const matches = titleIndexes.get(dependency.trim()) || [];
+        if (matches.length !== 1) throw new Error(`Planner task ${index} dependency title is ${matches.length ? 'ambiguous' : 'unknown'}: ${dependency.trim()}`);
+        [dependencyIndex] = matches;
+      } else {
+        throw new Error(`Planner task ${index} has an invalid dependency reference`);
+      }
+      if (dependencyIndex === index) throw new Error(`Planner task ${index} cannot depend on itself`);
+      if (!dependencyIndexes.includes(dependencyIndex)) dependencyIndexes.push(dependencyIndex);
+    }
+    spec.dependencyIndexes = dependencyIndexes;
+    delete spec.dependsOn;
+  }
+  const visiting = new Set();
+  const visited = new Set();
+  const visit = (index) => {
+    if (visiting.has(index)) throw new Error('Planner task dependencies contain a cycle');
+    if (visited.has(index)) return;
+    visiting.add(index);
+    for (const dependency of specs[index].dependencyIndexes) visit(dependency);
+    visiting.delete(index);
+    visited.add(index);
+  };
+  for (const index of specs.keys()) visit(index);
+  return specs;
+}
+
+function plannerCandidateMatches(task, spec) {
+  return task.title === spec.title
+    && (task.description || '') === spec.description
+    && task.priority === spec.priority
+    && task.runner === spec.runner
+    && (task.model || null) === spec.model
+    && (task.agentRole || null) === (spec.agentRole || null)
+    && !task.agentId
+    && !task.parentTaskId
+    && !task.publication
+    && task.allowNoChange !== true
+    && sameStrings(task.acceptanceCriteria, spec.acceptanceCriteria);
+}
+
+function assertTaskAssignmentMutable(state, task) {
+  const hasExecutionHistory = Number(task.iteration || 0) > 0 || state.runs.some((run) => run.taskId === task.id);
+  if (!['backlog', 'needs_input'].includes(task.state) || hasExecutionHistory) {
+    throw new Error(`Task agent/workScopes can only change before execution (state=${task.state}, iteration=${Number(task.iteration || 0)})`);
+  }
+}
+
 function normalizeState(parsed) {
+  const sourceSchemaVersion = Number(parsed?.schemaVersion || 0);
   const state = parsed ? { ...cloneEmpty(), ...parsed, schemaVersion: SCHEMA_VERSION } : cloneEmpty();
   if (!Number.isInteger(state.revision) || state.revision < 0) state.revision = 0;
   for (const key of ['explorations', 'explorationRuns', 'projects', 'ideas', 'tasks', 'agents', 'runs', 'researchRuns', 'modelProviders', 'mcpServers']) {
     if (!Array.isArray(state[key])) state[key] = [];
   }
   if (!state.integrations || typeof state.integrations !== 'object' || Array.isArray(state.integrations)) state.integrations = {};
-  state.projects = state.projects.map((project) => ({ brief: null, sourceExplorationId: null, sourceExplorationRunId: null, ...project,
+  state.projects = state.projects.map((project) => ({ repoPath: null, repository: null, baseBranch: 'main', status: 'active', brief: null, sourceExplorationId: null, sourceExplorationRunId: null, lastPreflight: null, ...project,
     autonomy: autonomy(project.autonomy), modelPolicy: modelPolicy(project.modelPolicy), verificationCommands: stringList(project.verificationCommands) }));
   state.explorations = state.explorations.map((exploration) => ({ state: 'draft', model: null, promotedProjectId: null, promotedAt: null, ...exploration }));
   state.explorationRuns = state.explorationRuns.map((run) => ({ kind: 'analysis', harness: 'direct-model', report: null, reasoning: null, usage: null, error: null, ...run }));
+  state.ideas = state.ideas.map((idea) => ({ materialization: null, ...idea }));
   state.agents = state.agents.map(normalizeAgent);
-  state.tasks = state.tasks.map((task) => ({ publication: null, model: null, agentId: null, agentName: null, agentInstructions: null, workScopes: [], ...task,
+  state.tasks = state.tasks.map((task) => ({ publication: null, model: null, agentId: null, agentName: null, agentInstructions: null,
+    sourcePlannerRunId: null, supersededByPlanningTaskId: null, plannerQuarantineReason: null, workScopes: [], ...task,
     workScopes: normalizeWorkScopes(task.workScopes), verificationCommands: stringList(task.verificationCommands), allowNoChange: task.allowNoChange === true }));
-  state.runs = state.runs.map((run) => ({ model: null, evidence: null, ...run }));
+  state.runs = state.runs.map((run) => ({
+    model: null, evidence: null, baseHead: null, scopeBaseHead: null, checkpointIntent: null,
+    quarantineReason: null, dispatchUncertain: false, terminationConfirmedAt: null,
+    legacyTerminationUnconfirmed: false, ...run,
+  }));
+  if (sourceSchemaVersion < 8) {
+    const message = 'Legacy terminal Run has no persisted external-session termination proof; ownership remains quarantined until runner status confirms idle/missing.';
+    for (const run of state.runs.filter((item) => TERMINAL_RUN_STATES.has(item.status)
+      && item.sessionId && item.worktreePath && !item.terminationConfirmedAt)) {
+      run.dispatchUncertain = true; run.quarantineReason = run.quarantineReason || message;
+      run.legacyTerminationUnconfirmed = true; run.error = run.error || message;
+      const task = state.tasks.find((item) => item.id === run.taskId);
+      if (task && task.state !== 'done') {
+        task.state = 'needs_input'; task.supervisorFeedback = message;
+        const idea = run.kind === 'planner' && task.sourceIdeaId ? state.ideas.find((item) => item.id === task.sourceIdeaId) : null;
+        if (idea && idea.state !== 'completed') idea.state = 'needs_input';
+      }
+    }
+  }
   state.mcpServers = state.mcpServers.map(normalizeMcpServer);
   return state;
 }
@@ -202,18 +360,56 @@ export class StateStore {
   async addProject(input) { return this.#mutate('project.created', (state) => { const project = projectRecord(input); state.projects.push(project); return project; }); }
   async updateProject(id, patch) { return this.#mutate('project.updated', (state) => {
     const project = state.projects.find((item) => item.id === id); if (!project) throw new Error('Project not found');
+    if (patch.status !== undefined && !PROJECT_STATUSES.has(patch.status)) throw new Error('Invalid Project status');
+    const invalidatesPreflight = ['repoPath', 'repository', 'baseBranch', 'verificationCommands', 'modelPolicy'].some((key) => patch[key] !== undefined);
     if (patch.autonomy) project.autonomy = autonomy({ ...project.autonomy, ...patch.autonomy });
     if (patch.modelPolicy) project.modelPolicy = modelPolicy({ ...project.modelPolicy, ...patch.modelPolicy });
     if (patch.verificationCommands !== undefined) project.verificationCommands = stringList(patch.verificationCommands);
     if (patch.brief !== undefined) project.brief = boundedText(patch.brief, 60_000) || null;
     for (const key of ['name', 'repoPath', 'repository', 'baseBranch', 'status']) if (patch[key] !== undefined) project[key] = patch[key];
+    if (invalidatesPreflight) project.lastPreflight = null;
+    project.updatedAt = new Date().toISOString(); return project;
+  }); }
+  async compareAndSetProjectStatus(id, { expectedProjectIdentity, expectedStatus, status }) { return this.#mutate('project.status_changed', (state) => {
+    const project = state.projects.find((item) => item.id === id); if (!project) throw new Error('Project not found');
+    if (!PROJECT_STATUSES.has(expectedStatus) || !PROJECT_STATUSES.has(status)) {
+      throw new Error('Invalid Project status transition');
+    }
+    if (project.status !== expectedStatus || projectAdmissionIdentity(project) !== expectedProjectIdentity) {
+      return { matched: false, changed: false, project };
+    }
+    if (project.status === status) return { matched: true, changed: false, project };
+    project.status = status; project.updatedAt = new Date().toISOString(); return { matched: true, changed: true, project };
+  }, (value) => value, (value) => value.changed ? 'project.status_changed' : (value.matched ? 'project.status_confirmed' : 'project.status_preserved')); }
+  async recordProjectPreflight(id, readiness, {
+    status = null,
+    expectedProjectIdentity = null,
+    taskId = null,
+    expectedTaskIdentity = null,
+  } = {}) { return this.#mutate('project.preflight', (state) => {
+    const project = state.projects.find((item) => item.id === id); if (!project) throw new Error('Project not found');
+    if (expectedProjectIdentity && projectAdmissionIdentity(project) !== expectedProjectIdentity) {
+      throw new Error('Project changed before preflight evidence could be persisted; retry the check');
+    }
+    if (taskId) {
+      const task = state.tasks.find((item) => item.id === taskId);
+      if (!task || task.projectId !== project.id || (expectedTaskIdentity && taskAdmissionIdentity(task) !== expectedTaskIdentity)) {
+        throw new Error('Task changed before preflight evidence could be persisted; retry the check');
+      }
+    }
+    if (!readiness || readiness.projectId !== id || !Array.isArray(readiness.checks) || !Array.isArray(readiness.blockers)) throw new Error('Invalid Project preflight report');
+    project.lastPreflight = structuredClone(readiness);
+    if (status !== null) {
+      if (!PROJECT_STATUSES.has(status)) throw new Error('Invalid Project status');
+      project.status = status;
+    }
     project.updatedAt = new Date().toISOString(); return project;
   }); }
   async addIdea(input) { return this.#mutate('idea.created', (state) => {
     const project = state.projects.find((item) => item.id === input?.projectId); if (!project) throw new Error('Valid projectId is required');
     if (!input?.title?.trim()) throw new Error('Idea title is required'); const now = new Date().toISOString();
     const idea = { id: randomUUID(), projectId: project.id, title: input.title.trim(), description: input.description?.trim() || '', state: input.state || 'inbox',
-      summary: null, questions: [], risks: [], planningTaskId: null, generatedTaskIds: [], createdAt: now, updatedAt: now };
+      summary: null, questions: [], risks: [], planningTaskId: null, generatedTaskIds: [], materialization: null, createdAt: now, updatedAt: now };
     state.ideas.push(idea); return idea;
   }); }
   async updateIdea(id, patch) { return this.#mutate('idea.updated', (state) => { const idea = state.ideas.find((item) => item.id === id);
@@ -231,6 +427,16 @@ export class StateStore {
     const nextScopes = patch.workScopes !== undefined ? normalizeWorkScopes(patch.workScopes) : agent.workScopes; if (!nextScopes.length) throw new Error('Specialist agent requires at least one explicit workScope');
     const candidate = { ...agent, ...patch, name: nextName, workScopes: nextScopes, enabled: patch.enabled !== undefined ? patch.enabled !== false : agent.enabled };
     assertAgentScopeOwnership(state, candidate, agent.id);
+    const assignedTasks = state.tasks.filter((item) => item.agentId === agent.id && item.state !== 'done');
+    if (patch.enabled === false && assignedTasks.length) {
+      throw new Error(`Cannot disable agent while assigned Task ${assignedTasks[0].id} is unfinished`);
+    }
+    const executionIdentityChanged = ['name', 'role', 'model', 'instructions', 'workScopes'].some((key) => patch[key] !== undefined);
+    const executedAssignment = assignedTasks.find((task) => Number(task.iteration || 0) > 0 || state.runs.some((run) => run.taskId === task.id));
+    if (executionIdentityChanged && executedAssignment) {
+      throw new Error(`Cannot change agent execution identity after assigned Task ${executedAssignment.id} has execution history`);
+    }
+    for (const task of assignedTasks) assertAgentCanExecuteTask(task.kind, candidate);
     const activeAssigned = state.runs.some((run) => run.projectId === agent.projectId && (ACTIVE_RUN_STATES.has(run.status) || run.dispatchUncertain === true)
       && state.tasks.find((task) => task.id === run.taskId)?.agentId === agent.id);
     if (activeAssigned && patch.workScopes !== undefined) throw new Error('Cannot change agent workScopes while an assigned run is active');
@@ -250,18 +456,178 @@ export class StateStore {
     if (!input?.title?.trim()) throw new Error('Task title is required');
     const agent = input.agentId ? state.agents.find((item) => item.id === input.agentId) : null; if (input.agentId && !agent) throw new Error('Agent not found');
     if (agent && agent.projectId !== project.id) throw new Error('Agent belongs to a different project'); if (agent?.enabled === false) throw new Error('Agent is disabled');
-    const scopes = normalizeWorkScopes(Array.isArray(input.workScopes) && input.workScopes.length ? input.workScopes : (agent?.workScopes || []));
-    if (agent) assertTaskAgentScopes({ projectId: project.id }, agent, scopes); const now = new Date().toISOString();
-    const taskCommands = Array.isArray(input.verificationCommands) ? stringList(input.verificationCommands) : stringList(project.verificationCommands);
-    const task = { id: randomUUID(), projectId: project.id, sourceIdeaId: input.sourceIdeaId || null, parentTaskId: input.parentTaskId || null,
-      kind: ['planning', 'work', 'review'].includes(input.kind) ? input.kind : 'work', title: input.title.trim(), description: input.description?.trim() || '',
-      priority: ['P0', 'P1', 'P2', 'P3'].includes(input.priority) ? input.priority : 'P2', state: input.state || 'backlog', runner: input.runner || agent?.harness || 'opencode',
-      model: input.model?.trim?.() || agent?.model || project.modelPolicy?.codingModel || null,
-      agentRole: input.agentRole?.trim() || agent?.role || null, agentId: agent?.id || null, agentName: agent?.name || null, agentInstructions: agent?.instructions || null,
-      workScopes: scopes, blockedBy: stringList(input.blockedBy), acceptanceCriteria: stringList(input.acceptanceCriteria), verificationCommands: taskCommands,
-      allowNoChange: input.allowNoChange === true, iteration: Number(input.iteration || 0), supervisorFeedback: null, publication: null, createdAt: now, updatedAt: now };
+    const task = taskRecord(input, project, agent);
     state.tasks.push(task); return task;
   }); }
+
+  async beginIdeaPlanning(ideaId, input = {}) { return this.#mutate('idea.planning_started', (state) => {
+    const idea = state.ideas.find((item) => item.id === ideaId); if (!idea) throw new Error('Idea not found');
+    if (!['inbox', 'needs_input'].includes(idea.state)) throw new Error(`Idea cannot be planned from state ${idea.state}`);
+    const project = state.projects.find((item) => item.id === idea.projectId); if (!project) throw new Error('Project not found');
+    if (input.expectedProjectIdentity && projectAdmissionIdentity(project) !== input.expectedProjectIdentity) {
+      throw new Error('Project changed after planner admission; retry planning');
+    }
+    assertProjectRunCapacity(state, project);
+    const now = new Date().toISOString();
+    const planningTask = taskRecord({
+      projectId: project.id, sourceIdeaId: idea.id, kind: 'planning',
+      title: input.title || `Plan idea: ${idea.title}`, description: input.description ?? idea.description,
+      priority: input.priority || 'P1', state: 'planning', runner: input.runner || 'opencode',
+      model: input.model || project.modelPolicy?.planningModel || project.modelPolicy?.codingModel || null,
+      agentRole: input.agentRole || project.autonomy.plannerRole, verificationCommands: [],
+    }, project, null, now);
+    state.tasks.push(planningTask);
+    const reason = `Superseded by canonical replan ${planningTask.id}`;
+    const priorCandidates = state.tasks.filter((task) => task.id !== planningTask.id && task.sourceIdeaId === idea.id && task.kind === 'work'
+      && !task.supersededByPlanningTaskId);
+    const priorIds = new Set(priorCandidates.map((task) => task.id));
+    for (const task of priorCandidates) {
+      task.supersededByPlanningTaskId = planningTask.id; task.plannerQuarantineReason = reason;
+      if (task.state !== 'done') task.state = 'needs_input';
+      task.supervisorFeedback = reason; task.updatedAt = now;
+    }
+    for (const run of state.runs.filter((item) => priorIds.has(item.taskId)
+      && (ACTIVE_RUN_STATES.has(item.status) || item.dispatchUncertain === true))) {
+      run.status = 'dispatch_unknown'; run.dispatchUncertain = true; run.quarantineReason = reason;
+      run.error = reason + '. The external session must be confirmed stopped before scope ownership is released.';
+      run.finishedAt = null; run.updatedAt = now;
+    }
+    idea.state = 'planning'; idea.planningTaskId = planningTask.id; idea.generatedTaskIds = [];
+    idea.materialization = null; idea.updatedAt = now;
+    return { planningTask, idea, supersededTaskIds: [...priorIds] };
+  }, (value) => value.planningTask); }
+
+  async materializePlannerTasks(runId) { return this.#mutate('planner.materialized', (state) => {
+    const run = state.runs.find((item) => item.id === runId);
+    if (!run || run.kind !== 'planner' || run.status !== 'completed' || run.result?.status !== 'ready') {
+      throw new Error('Completed ready planner Run is required for materialization');
+    }
+    const planningTask = state.tasks.find((item) => item.id === run.taskId);
+    const idea = planningTask?.sourceIdeaId ? state.ideas.find((item) => item.id === planningTask.sourceIdeaId) : null;
+    const project = planningTask ? state.projects.find((item) => item.id === planningTask.projectId) : null;
+    if (!planningTask || !idea || !project || idea.projectId !== project.id || run.projectId !== project.id) {
+      throw new Error('Planner materialization is missing canonical Project/Idea/Task linkage');
+    }
+    const now = new Date().toISOString();
+    const candidates = state.tasks.filter((task) => task.sourceIdeaId === idea.id && task.kind === 'work' && !task.supersededByPlanningTaskId);
+    const response = (actions = []) => ({ projectId: project.id, ideaId: idea.id, runId: run.id, taskIds: candidates.map((task) => task.id), actions });
+    if (idea.state === 'needs_input' && idea.materialization?.runId === run.id && idea.materialization?.status === 'blocked'
+      && candidates.every((task) => task.state === 'needs_input')) return response();
+
+    const retainExternalOwnership = (tasks, message) => {
+      const taskIds = new Set(tasks.map((task) => task.id));
+      for (const candidateRun of state.runs.filter((item) => taskIds.has(item.taskId)
+        && (ACTIVE_RUN_STATES.has(item.status) || item.dispatchUncertain === true))) {
+        candidateRun.status = 'dispatch_unknown'; candidateRun.dispatchUncertain = true; candidateRun.quarantineReason = message;
+        candidateRun.error = message + '. The external session must be confirmed stopped before scope ownership is released.';
+        candidateRun.finishedAt = null; candidateRun.updatedAt = now;
+      }
+    };
+
+    const block = (reason) => {
+      const message = `Planner materialization blocked: ${reason}`;
+      planningTask.state = 'needs_input'; planningTask.supervisorFeedback = message; planningTask.updatedAt = now;
+      for (const task of candidates) {
+        task.state = 'needs_input'; task.supervisorFeedback = message; task.plannerQuarantineReason = message; task.updatedAt = now;
+      }
+      retainExternalOwnership(candidates, message);
+      idea.state = 'needs_input'; idea.summary = run.result.summary || idea.summary || null;
+      idea.questions = [...new Set([...(idea.questions || []), message])]; idea.risks = stringList(run.result.risks);
+      idea.materialization = { runId: run.id, status: 'blocked', message, updatedAt: now }; idea.updatedAt = now;
+      return response([{ type: 'planner.materialization_blocked', message }]);
+    };
+    if (planningTask.kind !== 'planning') return block('planner Run does not belong to a planning Task');
+    if (idea.planningTaskId && idea.planningTaskId !== planningTask.id) {
+      const staleCandidates = candidates.filter((task) => !task.sourcePlannerRunId || task.sourcePlannerRunId === run.id);
+      const message = 'Superseded planner Run left generated Tasks that were quarantined before the canonical replan continued.';
+      planningTask.state = 'needs_input'; planningTask.supervisorFeedback = message; planningTask.updatedAt = now;
+      for (const task of staleCandidates) {
+        task.state = 'needs_input'; task.supervisorFeedback = message; task.plannerQuarantineReason = message;
+        task.supersededByPlanningTaskId = idea.planningTaskId; task.updatedAt = now;
+      }
+      retainExternalOwnership(staleCandidates, message);
+      return response([{
+        type: staleCandidates.length ? 'planner.stale_candidates_quarantined' : 'planner.stale_run_ignored',
+        planningTaskId: planningTask.id,
+        canonicalPlanningTaskId: idea.planningTaskId,
+        taskIds: staleCandidates.map((task) => task.id),
+      }]);
+    }
+    if (idea.planningTaskId !== planningTask.id) return block('Idea is missing the canonical planning Task linkage');
+    if (idea.state === 'needs_input') return block('pre-existing needs_input plan contains generated Tasks that require quarantine');
+
+    let specs;
+    try {
+      specs = normalizedPlannerSpecs(run.result, project);
+    } catch (error) {
+      return block(error.message);
+    }
+    const linkedIds = Array.isArray(idea.generatedTaskIds) ? idea.generatedTaskIds : [];
+    const linkedPrefixMatches = linkedIds.length <= candidates.length
+      && linkedIds.every((id, index) => id === candidates[index]?.id);
+    if (!linkedPrefixMatches) return block('Idea generatedTaskIds do not match the exact generated Task prefix');
+
+    const finalized = ['ready', 'executing', 'completed'].includes(idea.state);
+    if (finalized) {
+      const exactFinalLink = candidates.length === specs.length && linkedIds.length === specs.length
+        && candidates.every((task, index) => task.id === linkedIds[index]);
+      if (!exactFinalLink || candidates.some((task) => task.state === 'planning')) {
+        return block('finalized Idea linkage is incomplete or contains quarantined Tasks');
+      }
+      return response();
+    }
+    if (candidates.length > specs.length) return block(`${candidates.length} candidate Tasks cannot map to ${specs.length} planner specs`);
+    if (!candidates.every((task, index) => plannerCandidateMatches(task, specs[index]))) {
+      return block('candidate Tasks are not an exact ordered prefix of the persisted planner result');
+    }
+    const candidateIds = new Set(candidates.map((task) => task.id));
+    const candidateRuns = state.runs.filter((item) => candidateIds.has(item.taskId));
+    if (candidateRuns.length || candidates.some((task) => !['planning', 'backlog'].includes(task.state) || Number(task.iteration || 0) > 0)) {
+      return block('a partial generated Task already has execution history or left planner quarantine');
+    }
+    if (idea.state !== 'planning') return block(`Idea is in unexpected state ${idea.state}`);
+
+    const actions = [];
+    for (let index = candidates.length; index < specs.length; index += 1) {
+      const spec = specs[index];
+      const generated = taskRecord({
+        projectId: project.id, sourceIdeaId: idea.id, sourcePlannerRunId: run.id, kind: 'work', title: spec.title,
+        description: spec.description, priority: spec.priority, state: 'planning', runner: spec.runner,
+        model: spec.model, agentRole: spec.agentRole, workScopes: spec.workScopes,
+        acceptanceCriteria: spec.acceptanceCriteria, verificationCommands: spec.verificationCommands, blockedBy: [],
+      }, project, null, now);
+      state.tasks.push(generated); candidates.push(generated);
+      actions.push({ type: 'planner.generated_task_created', taskId: generated.id, index });
+    }
+
+    for (const [index, task] of candidates.entries()) {
+      const spec = specs[index];
+      if (task.state !== 'planning') actions.push({ type: 'planner.task_quarantined', taskId: task.id });
+      task.state = 'planning';
+      const scopesChanged = JSON.stringify(normalizeWorkScopes(task.workScopes)) !== JSON.stringify(spec.workScopes);
+      if (scopesChanged) actions.push({ type: 'planner.scope_recovered', taskId: task.id, workScopes: spec.workScopes });
+      task.workScopes = spec.workScopes;
+      const blockedBy = spec.dependencyIndexes.map((dependencyIndex) => candidates[dependencyIndex].id);
+      if (!sameStrings(task.blockedBy, blockedBy)) actions.push({ type: 'planner.dependencies_recovered', taskId: task.id, blockedBy });
+      task.blockedBy = blockedBy; task.verificationCommands = spec.verificationCommands; task.updatedAt = now;
+      task.sourcePlannerRunId = run.id;
+    }
+
+    const generatedIds = candidates.map((task) => task.id);
+    if (JSON.stringify(linkedIds) !== JSON.stringify(generatedIds)) {
+      actions.push({ type: 'planner.generated_tasks_relinked', taskIds: generatedIds });
+    }
+    idea.state = project.autonomy.mode === 'autonomous' ? 'executing' : 'ready'; idea.summary = run.result.summary || null;
+    idea.questions = stringList(run.result.questions); idea.risks = stringList(run.result.risks); idea.generatedTaskIds = generatedIds;
+    idea.materialization = { runId: run.id, status: 'completed', taskIds: generatedIds, updatedAt: now }; idea.updatedAt = now;
+    planningTask.state = 'done'; planningTask.supervisorFeedback = null; planningTask.updatedAt = now;
+    for (const task of candidates) {
+      task.state = 'backlog'; task.supervisorFeedback = null; task.plannerQuarantineReason = null; task.updatedAt = now;
+    }
+    actions.push({ type: 'planner.plan_materialized', taskIds: generatedIds });
+    return response(actions);
+  }, (value) => value, (value) => value.actions.some((action) => action.type === 'planner.materialization_blocked')
+    ? 'planner.materialization_blocked' : 'planner.materialized'); }
 
   getExploration(id) { return structuredClone(this.state.explorations.find((item) => item.id === id) || null); }
   getExplorationRun(id) { return structuredClone(this.state.explorationRuns.find((item) => item.id === id) || null); }
@@ -283,16 +649,17 @@ export class StateStore {
 
   async assignTaskAgent(id, agentId, workScopes = null) { return this.#mutate('task.agent_assigned', (state) => {
     const task = state.tasks.find((item) => item.id === id); if (!task) throw new Error('Task not found');
-    if (!['backlog', 'needs_input'].includes(task.state)) throw new Error(`Task agent can only change before execution (state=${task.state})`);
+    assertTaskAssignmentMutable(state, task);
     const agent = resolveTaskAgent(state, task, agentId); const scopes = normalizeWorkScopes(Array.isArray(workScopes) && workScopes.length ? workScopes : agent.workScopes);
-    assertTaskAgentScopes(task, agent, scopes); task.agentId = agent.id; task.agentName = agent.name; task.agentInstructions = agent.instructions || null;
+    assertTaskAgentScopes(task, agent, scopes); assertAgentCanExecuteTask(task.kind, agent); task.agentId = agent.id; task.agentName = agent.name; task.agentInstructions = agent.instructions || null;
     task.agentRole = agent.role; task.model = agent.model || task.model; task.workScopes = scopes; task.updatedAt = new Date().toISOString(); return task;
   }); }
   async updateTask(id, patch) { return this.#mutate('task.updated', (state) => {
     const task = state.tasks.find((item) => item.id === id); if (!task) throw new Error('Task not found');
-    if ((patch.agentId !== undefined || patch.workScopes !== undefined) && !['backlog', 'needs_input'].includes(task.state)) throw new Error(`Task agent/workScopes can only change before execution (state=${task.state})`);
+    if (patch.agentId !== undefined || patch.workScopes !== undefined) assertTaskAssignmentMutable(state, task);
     const finalAgentId = patch.agentId !== undefined ? patch.agentId : task.agentId; const agent = resolveTaskAgent(state, task, finalAgentId);
     const finalScopes = patch.workScopes !== undefined ? normalizeWorkScopes(patch.workScopes) : normalizeWorkScopes(task.workScopes); if (agent) assertTaskAgentScopes(task, agent, finalScopes);
+    assertAgentCanExecuteTask(patch.kind !== undefined ? patch.kind : task.kind, agent);
     const normalizedPatch = { ...patch }; if (patch.verificationCommands !== undefined) normalizedPatch.verificationCommands = stringList(patch.verificationCommands);
     if (patch.workScopes !== undefined) normalizedPatch.workScopes = finalScopes;
     if (patch.agentId !== undefined) { normalizedPatch.agentId = agent?.id || null; normalizedPatch.agentName = agent?.name || null; normalizedPatch.agentInstructions = agent?.instructions || null;
@@ -300,14 +667,75 @@ export class StateStore {
       else { normalizedPatch.agentName = null; normalizedPatch.agentInstructions = null; } }
     Object.assign(task, normalizedPatch, { updatedAt: new Date().toISOString() }); return task;
   }); }
+  async claimTaskForWorker(id, { expectedTaskIdentity, expectedProjectIdentity, iteration }) { return this.#mutate('task.worker_claimed', (state) => {
+    const task = state.tasks.find((item) => item.id === id); if (!task) throw new Error('Task not found');
+    const project = state.projects.find((item) => item.id === task.projectId); if (!project) throw new Error('Project not found');
+    if (task.state !== 'backlog') throw new Error(`Task cannot be claimed from state ${task.state}`);
+    if (taskAdmissionIdentity(task) !== expectedTaskIdentity || projectAdmissionIdentity(project) !== expectedProjectIdentity) {
+      throw new Error('Project or Task changed after run admission; retry delegation');
+    }
+    assertProjectRunCapacity(state, project);
+    if (state.runs.some((run) => run.taskId === task.id && (ACTIVE_RUN_STATES.has(run.status) || run.dispatchUncertain === true))) {
+      throw new Error('Task already has an active or uncertain worker Run; refusing duplicate dispatch');
+    }
+    const agent = task.agentId ? state.agents.find((item) => item.id === task.agentId) : null;
+    if (task.agentId && (!agent || agent.enabled === false)) throw new Error('Assigned Task agent is missing or disabled at worker claim');
+    if (agent) { assertTaskAgentScopes(task, agent, normalizeWorkScopes(task.workScopes)); assertAgentCanExecuteTask(task.kind, agent); }
+    const scopes = taskWorkScopes(task, agent);
+    assertTaskRegistryOwnership(state, task, agent, scopes);
+    const conflict = state.runs.find((run) => {
+      if (run.projectId !== project.id || run.taskId === task.id || (run.kind || 'worker') !== 'worker'
+        || (!ACTIVE_RUN_STATES.has(run.status) && run.dispatchUncertain !== true)) return false;
+      const otherTask = state.tasks.find((item) => item.id === run.taskId);
+      if (!otherTask) return false;
+      const otherAgent = otherTask.agentId ? state.agents.find((item) => item.id === otherTask.agentId) : null;
+      return scopeSetsOverlap(scopes, taskWorkScopes(otherTask, otherAgent));
+    });
+    if (conflict) {
+      const otherTask = state.tasks.find((item) => item.id === conflict.taskId);
+      throw new Error(`Task work scope overlaps active task ${conflict.taskId} (${taskWorkScopes(otherTask, otherTask?.agentId ? state.agents.find((item) => item.id === otherTask.agentId) : null).join(', ')}); refusing delegation`);
+    }
+    task.state = 'in_progress'; task.iteration = Number(iteration); task.updatedAt = new Date().toISOString(); return task;
+  }); }
+  async claimTaskForSupervisor(id, { expectedTaskIdentity, expectedProjectIdentity }) { return this.#mutate('task.supervisor_claimed', (state) => {
+    const task = state.tasks.find((item) => item.id === id); if (!task) throw new Error('Task not found');
+    const project = state.projects.find((item) => item.id === task.projectId); if (!project) throw new Error('Project not found');
+    if (task.state !== 'awaiting_review') throw new Error(`Task cannot be claimed for review from state ${task.state}`);
+    if (taskAdmissionIdentity(task) !== expectedTaskIdentity || projectAdmissionIdentity(project) !== expectedProjectIdentity) {
+      throw new Error('Project or Task changed after supervisor admission; retry review');
+    }
+    assertProjectRunCapacity(state, project);
+    task.state = 'reviewing'; task.updatedAt = new Date().toISOString(); return task;
+  }); }
   async requeueTask(id) { return this.#mutate('task.requeued', (state) => { const task = state.tasks.find((item) => item.id === id); if (!task) throw new Error('Task not found');
-    if (task.state !== 'needs_input') throw new Error(`Only needs_input tasks can be requeued (state=${task.state})`); task.state = 'backlog'; task.updatedAt = new Date().toISOString(); return task; }); }
+    if (task.state !== 'needs_input') throw new Error(`Only needs_input tasks can be requeued (state=${task.state})`);
+    const sourceIdea = task.sourceIdeaId ? state.ideas.find((item) => item.id === task.sourceIdeaId) : null;
+    if (task.plannerQuarantineReason || sourceIdea?.materialization?.status === 'blocked') {
+      throw new Error('Planner-quarantined generated Tasks cannot be requeued until the Idea plan is repaired');
+    }
+    task.state = 'backlog'; task.updatedAt = new Date().toISOString(); return task; }); }
   async createRun(input) { return this.#mutate('run.created', (state) => { const now = new Date().toISOString(); const run = {
     id: randomUUID(), taskId: input.taskId, projectId: input.projectId, kind: input.kind || 'worker', parentRunId: input.parentRunId || null,
     runner: input.runner || 'opencode', model: input.model || null, status: input.status || 'preparing', sessionId: null, branch: input.branch || null,
+    baseHead: input.baseHead || null, scopeBaseHead: input.scopeBaseHead || input.baseHead || null, checkpointIntent: null, quarantineReason: null,
     worktreePath: input.worktreePath || null, iteration: Number(input.iteration || 1), retryAttempts: 0, result: null, evidence: null, assistantText: null,
+    dispatchUncertain: false, terminationConfirmedAt: null, legacyTerminationUnconfirmed: false,
     error: null, createdAt: now, updatedAt: now, startedAt: null, finishedAt: null }; state.runs.push(run); return run; }); }
   async updateRun(id, patch) { return this.#mutate('run.updated', (state) => { const run = state.runs.find((item) => item.id === id); if (!run) throw new Error('Run not found'); Object.assign(run, patch, { updatedAt: new Date().toISOString() }); return run; }); }
+  async settleActiveRun(id, { runPatch = {}, taskPatch = null, expectedRunStatuses = ['running', 'retrying'], expectedTaskStates = [] } = {}) {
+    return this.#mutate('run.settled', (state) => {
+      const run = state.runs.find((item) => item.id === id); if (!run) throw new Error('Run not found');
+      const task = run.taskId ? state.tasks.find((item) => item.id === run.taskId) : null;
+      const runAllowed = expectedRunStatuses.includes(run.status) && run.dispatchUncertain !== true && !run.quarantineReason;
+      const taskAllowed = !task || ((!expectedTaskStates.length || expectedTaskStates.includes(task.state))
+        && !task.plannerQuarantineReason && !task.supersededByPlanningTaskId);
+      if (!runAllowed || !taskAllowed) return { applied: false, run, task, reason: !runAllowed ? 'run_changed' : 'task_changed' };
+      const now = new Date().toISOString();
+      Object.assign(run, runPatch, { updatedAt: now });
+      if (task && taskPatch) Object.assign(task, taskPatch, { updatedAt: now });
+      return { applied: true, run, task, reason: null };
+    });
+  }
   async upsertModelProvider(input) { return this.#mutate('model-provider.updated', (state) => { const existing = state.modelProviders.find((item) => item.id === input.id); const now = new Date().toISOString();
     const value = { ...(existing || {}), ...input, lastModels: Array.isArray(input.lastModels) ? input.lastModels : (existing?.lastModels || []),
       lastError: input.lastError === undefined ? (existing?.lastError || null) : input.lastError, createdAt: existing?.createdAt || now, updatedAt: now };

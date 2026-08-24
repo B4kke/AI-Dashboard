@@ -43,10 +43,21 @@ Protocol adapters never own Dashboard domain authority.
 Task
   |
   v
-project policy + durable run-admission lock
+durable Project run-admission lock
+  +-> initial status/concurrency check
+  +-> initial specialist scope-overlap check for workers
   |
-  +-> concurrency check
-  +-> specialist scope-overlap check
+  v
+Project preflight while admission remains serialized
+  +-> active/needs_sync status
+  +-> clean repository + configured base
+  +-> verification + harness + concrete model
+  +-> GitHub origin/access + fast-forward sync when configured
+  |
+  v
+exact Project/Task/model/base admission
+  +-> dependency/policy validation
+  +-> atomic identity/capacity/duplicate-Run/registry/scope claim recheck
   |
   v
 isolated Git worktree / ai/* branch
@@ -90,15 +101,33 @@ Worker never approves/merges itself. Supervisor is a separate read-only Run. Con
 
 ## Agent Registry and ownership
 
-State schema v7 contains durable project specialists. An agent has stable identity, project, role, harness, optional model, instructions, capabilities, enabled state and concrete project-relative `workScopes`.
+State schema v8 contains durable project specialists plus external-session termination proof for coding Runs. The Agent Registry introduced in v7 gives an agent stable identity, project, role, harness, optional model, instructions, capabilities, enabled state and concrete project-relative `workScopes`.
 
-A Task may reference an `agentId`. Assignment snapshots agent name/role/instructions and uses scopes constrained to the agent's registered scopes.
+A Task may reference an `agentId`. Assignment snapshots agent name/role/instructions and uses scopes constrained to the agent's registered scopes. Assignment and Task `workScopes` may change only while there is no execution history; a positive iteration or any persisted Run freezes them even if the Task is later back in `backlog` or `needs_input`.
 
-Enabled mutating specialists may not own overlapping registered scopes. Parent/child prefixes overlap (`server` conflicts with `server/mcp`). Read-only roles such as supervisor/reviewer/research/planner/master do not claim mutation ownership.
+Enabled mutating specialists may not own overlapping registered scopes. Parent/child prefixes overlap (`server` conflicts with `server/mcp`). Read-only roles such as supervisor/reviewer/research/planner/master do not claim mutation ownership and cannot be assigned executable work Tasks.
 
-Static registry checks are not enough, so worker admission checks effective Task scopes against every other active worker Task in the Project while holding the same durable run-admission lock used for concurrency. `dispatch_unknown` and `dispatchUncertain` retain scope ownership until reconciled.
+An unassigned work Task still owns its explicit Task scopes for that Run. Missing/unknown scopes become `*` (whole Project), never conflict-free scope. If an enabled mutating specialist owns an overlapping registry scope, an unassigned Task is rejected at worker claim until it is assigned to that owner; assignment omission is not an ownership bypass.
+
+Static registry checks are not enough, so worker admission checks effective Task scopes against every other active worker Task in the Project while holding the same durable run-admission lock used for concurrency, then repeats the check inside the atomic StateStore claim. Only active/uncertain `worker` Runs own mutation scopes. Planner/supervisor Runs count toward concurrency but do not claim file ownership. `dispatch_unknown` and `dispatchUncertain` retain scope ownership until reconciled.
 
 Scope instructions are included in the worker prompt, but prompt compliance is defense-in-depth rather than the authority mechanism.
+
+## Project readiness and bound admission
+
+Worker, planner and supervisor entry points run the same Project preflight before creating an OpenCode session. It validates:
+
+- active Project status (or an explicit `needs_sync` repair attempt),
+- valid clean local Git repository on the configured base branch,
+- safely parseable, non-empty control-plane verification commands,
+- healthy OpenCode harness and an available explicit model or exactly one connected global default,
+- for GitHub Projects, repository syntax, local-origin identity, authenticated write access and a fast-forward-only synchronization whose local and remote base heads are identical.
+
+The report separates Project-scoped from Task-scoped blockers. A Project blocker transitions `active -> needs_sync` and blocks new autonomous entry; successful repair transitions `needs_sync -> active`. A Task-specific blocker moves that Task to `needs_input` without pausing unrelated valid work. The structured report is persisted on the Project and returned through the preflight/control HTTP APIs.
+
+Preflight captures readiness-relevant Project/Task identities, the concrete model and the proven base SHA. Persistence of the report revalidates those identities. The later StateStore worker/supervisor/planner claim revalidates current identity, state, current concurrency capacity, duplicate active/uncertain Runs and ownership in the same mutation that claims the work. A changed identity must retry preflight; a changed model or base must not silently dispatch.
+
+Fresh worktree creation requires the exact preflight base SHA. Reused worker workspaces must retain both a verified control-plane-owned current head and the original `scopeBaseHead`; if the newly proven Project base differs, the retry stops in `needs_input` for an explicit rebase/restart. Supervisor admission also requires the worker's published/original scope base to equal the newly proven Project base before reviewing the exact worker checkpoint.
 
 ## MCP topology — August 2026
 
@@ -190,6 +219,23 @@ Deterministic Run-scoped session identity supports read-recovery if session crea
 
 OpenCode SDK also exposes agent/provider/model/tool capability discovery, event streaming, permissions and MCP/LSP/formatter state. These capabilities enrich the harness adapter without moving control-plane authority into OpenCode.
 
+Dashboard preserves configured planner/worker/supervisor role names. The adapter discovers the live OpenCode agent catalog immediately before prompt dispatch and forwards a role only if that exact name exists; otherwise it omits the agent field and lets OpenCode select its default. Role semantics remain in the control-plane prompt, and no hardcoded alias rewrite changes the configured identity.
+
+## Planner materialization and recovery
+
+The planner's structured result is persisted on its completed Run before any generated work becomes executable. A single StateStore mutation then:
+
+1. proves the Run belongs to the Idea's current canonical planning Task,
+2. validates every Task spec, explicit scope, acceptance criterion and acyclic dependency reference,
+3. accepts only an exact ordered prefix of crash-surviving candidate Tasks,
+4. creates only the exact missing suffix in `planning`,
+5. rebuilds dependency IDs and the Idea's exact generated-Task linkage,
+6. marks the planning Task done and releases the complete generated set to `backlog`.
+
+Replaying a completed materialization is idempotent. Final linkage, dependency rebuild and backlog release commit atomically, so a crash cannot expose a half-linked new plan as schedulable work.
+
+Unknown/ambiguous dependencies, mismatched candidates, unexpected state or execution history fail closed: the Idea, planning Task and candidates move to `needs_input` with a durable quarantine reason. An active/uncertain candidate Run becomes quarantined `dispatch_unknown` and retains scope ownership until abort/idle evidence confirms the external session stopped. An explicit replan creates a new canonical planning Task, supersedes every old candidate and never releases the old set as part of the replacement plan.
+
 ## Direct-model Exploration and Research
 
 ```text
@@ -205,15 +251,19 @@ No worktree/branch/merge path is created. Interrupted queued/running direct-mode
 
 1. Worker gets isolated managed worktree/branch.
 2. Worker is instructed not to commit.
-3. Control plane owns checkpoint commit.
-4. Git supplies parent/head/tree/diff truth.
-5. Verification commands use argument arrays.
-6. Successful coding requires real diff plus verification evidence.
-7. GitHub publication validates local origin against configured repository.
-8. PR head/base, branch policy and CI must match the reviewed checkpoint.
-9. Base movement blocks stale continuation.
-10. Merge is expected-head guarded and resulting tree is verified.
-11. Cleanup occurs only after accepted merge state.
+3. Control plane prepares and persists a versioned checkpoint intent containing the trusted parent SHA, staged tree SHA and commit message.
+4. It creates/recovers the commit with Git `commit-tree` + guarded `update-ref`, then proves the exact intent tree/message and exactly one parent equal to the Run's trusted `baseHead`.
+5. Every control-plane Git command uses an absolute executable resolved outside the worktree, a sanitized executable search path, disabled replacement refs and ignored repository grafts; legacy `info/grafts` or executable/redirecting repository config fails closed.
+6. Git supplies parent/head/tree truth plus the cumulative diff from the original `scopeBaseHead` to the latest checkpoint; worker-created intermediate history cannot hide earlier changes.
+7. Changed paths come from NUL-delimited name-status fields, including separate rename/copy source and destination paths. Scope validation rejects non-canonical or ambiguous path identity.
+8. Scope is enforced against that cumulative diff before verification, and verification commands use argument arrays.
+9. Successful coding requires a real in-scope diff, exact checkpoint ownership and clean before/after verification identity. Hidden index flags, initialized-submodule drift/ignored inputs, ordinary ignored files and runtime-only empty directories cannot contribute to verification.
+10. GitHub publication validates local origin against the configured repository.
+11. PR head/base/tree, branch policy and CI must match the reviewed checkpoint and original scope base.
+12. Base movement blocks stale retry, review and merge continuation.
+13. Project identity/current-active status is CAS-confirmed immediately before push, PR creation and local/remote merge. A concurrent pause remains resumable and cannot be converted into worker failure/retry spend.
+14. Merge is expected-head guarded and the resulting tree is verified.
+15. Cleanup occurs only after accepted merge state.
 
 No force push, destructive reset or branch-protection bypass is part of recovery.
 
@@ -245,8 +295,9 @@ Browser refresh uses SSE. MCP clients receive MCP resource-update notifications.
 ## Security boundaries
 
 - Default bind is loopback.
-- Built-in MCP and MCP administration are disabled on non-loopback binds.
-- Node MCP handler validates localhost Host/Origin to reduce DNS-rebinding exposure.
+- The process refuses any explicit non-loopback bind before listening; `PORT` never widens the host.
+- The complete HTTP control surface rejects non-loopback Host/Origin before API, static or MCP handling.
+- Built-in MCP and MCP administration remain loopback-only.
 - Public/remote exposure is not safe until authentication, authorization, audit and kill switch exist.
 - Worker cannot approve/merge itself.
 - External MCP tool annotations do not grant authorization.
@@ -286,4 +337,6 @@ Claims must stay distinct:
 4. **real interoperability/dogfood** — real OpenCode/MCP host and real external systems execute the flow.
 5. **production-ready remote autonomy** — authentication, authorization, audit, kill switch and distributed side-effect fencing are proven.
 
-A green MCP loopback test proves levels 1-3 only; it is not evidence for all external MCP hosts or public exposure.
+A green local MCP loopback test can prove only levels 1-2. Exact-head GitHub Actions is separate level-3 evidence, and neither proves all external MCP hosts or public exposure.
+
+Current hardening changes have implementation and focused deterministic evidence. The exact final commit still requires fresh Linux + Windows GitHub Actions and a full real OpenCode + disposable GitHub/Actions PC beta; neither external gate is inferred from the local suite.

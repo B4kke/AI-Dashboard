@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseVerificationCommand, redactSecretPatterns, runVerificationCommands } from '../server/core/verification.mjs';
 
@@ -25,6 +26,26 @@ test('control-plane verification records real exit codes and output', async () =
     assert.match(result.commands[0].stdout, /verified/);
     assert.notEqual(result.commands[1].exitCode, 0);
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bare node verification cannot be hijacked by a worktree executable or PATH entry', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-verify-executable-'));
+  const marker = join(dir, 'hijacked');
+  const previousPath = process.env.PATH;
+  try {
+    await writeFile(join(dir, 'node'), `#!/bin/sh\ntouch "${marker}"\nexit 0\n`, 'utf8');
+    await chmod(join(dir, 'node'), 0o755);
+    await writeFile(join(dir, 'ok.mjs'), "console.log('trusted-node')\n", 'utf8');
+    process.env.PATH = `${dir}${delimiter}${previousPath || ''}`;
+    const result = await runVerificationCommands({ cwd: dir, commands: ['node ok.mjs'] });
+    assert.equal(result.ok, true);
+    assert.match(result.commands[0].stdout, /trusted-node/);
+    assert.equal(existsSync(marker), false);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
     await rm(dir, { recursive: true, force: true });
   }
 });

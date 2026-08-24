@@ -45,3 +45,11 @@ test('dashboard presents coding and research as visibly separate flows', async (
   assert.match(html, /Project → Research Run → provider\/model → persisted report/);
   assert.match(html, /Planner input only — never required before a Task/);
 });
+
+test('dashboard exposes Project lifecycle and structured readiness repair', async () => {
+  const app = await readFile(appUrl, 'utf8');
+  assert.match(app, /project\.lastPreflight/);
+  assert.match(app, /project\.status/);
+  assert.match(app, /Sync &amp; check/);
+  assert.match(app, /\/api\/projects\/\$\{encodeURIComponent\(button\.dataset\.project\)\}\/preflight/);
+});

@@ -26,7 +26,7 @@ test('requeueTask moves needs_input back to backlog and rejects other states', a
   }
 });
 
-test('reconcile fails runs fast when the worktree link is broken', async () => {
+test('reconcile quarantines a broken-worktree Run until runner termination is confirmed', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-brokenwt-'));
   try {
     const store = new StateStore(join(dir, 'state.json'));
@@ -37,14 +37,21 @@ test('reconcile fails runs fast when the worktree link is broken', async () => {
     const runId = store.snapshot().runs[0].id;
     await store.updateRun(runId, { sessionId: 'ses_x', worktreePath: join(dir, 'wt-without-git') });
 
-    const noop = new Proxy({}, { get: () => async () => { throw new Error('must not reach runner'); } });
-    const orchestrator = createOrchestrator({ store, opencode: noop, github: {} });
+    let abortCalls = 0;
+    const opencode = {
+      async abort() { abortCalls += 1; },
+      async sessionStatus() { return { ses_x: { type: 'busy' } }; },
+    };
+    const orchestrator = createOrchestrator({ store, opencode, github: {} });
     const result = await orchestrator.reconcileRun(runId);
 
-    assert.equal(result.status, 'broken_worktree');
+    assert.equal(result.status, 'termination_unconfirmed');
+    assert.equal(abortCalls, 1);
     const run = store.getRun(runId);
-    assert.equal(run.status, 'failed');
-    assert.match(run.error, /Worktree link is broken/);
+    assert.equal(run.status, 'dispatch_unknown');
+    assert.equal(run.dispatchUncertain, true);
+    assert.equal(run.finishedAt, null);
+    assert.match(run.error, /worktree link is broken/i);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

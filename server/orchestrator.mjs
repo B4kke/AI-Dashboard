@@ -1,12 +1,16 @@
 import { validateResultContract, extractResult, latestAssistantText } from './core/result-contract.mjs';
 import { buildPlannerPrompt, buildSupervisorPrompt, buildTaskPrompt } from './core/task-prompt.mjs';
 import { verifyBeforeMerge, verifyWorkerCheckpoint } from './core/evidence-gate.mjs';
+import { materializePlannerResult } from './core/planner-materialization.mjs';
 import { parseGitHubRemote, parseGitHubRepository } from './integrations/github.mjs';
 import { normalizeOpencodeAgent } from './integrations/opencode.mjs';
+import { projectAdmissionIdentity, taskAdmissionIdentity } from './core/admission-identity.mjs';
+import { inspectSessionMessages, inspectSessionStatusRecord } from './core/runner-session-status.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  commitWorktree,
+  commitPreparedCheckpoint,
+  prepareWorktreeCheckpoint,
   createTaskWorktree,
   deleteTaskBranch,
   gitRemoteUrl,
@@ -16,6 +20,9 @@ import {
   removeTaskWorktree,
   worktreeStatus,
 } from './git/worktrees.mjs';
+
+const ACTIVE_RUN_STATUSES = new Set(['preparing', 'running', 'retrying', 'dispatch_unknown']);
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'merged', 'failed', 'aborted']);
 
 function minutesSince(iso) {
   if (!iso) return 0;
@@ -30,10 +37,46 @@ function ciAcceptable(project, ci) {
   if (ci.state === 'success') return true;
   return project?.autonomy?.requireCi === false && ci.state === 'none';
 }
+function terminalRunPatch(patch = {}) {
+  const finishedAt = new Date().toISOString();
+  return { ...patch, finishedAt, terminationConfirmedAt: finishedAt };
+}
+function boundExecutionModel(configuredModel, expectedModel = null) {
+  const configured = String(configuredModel || '').trim() || null;
+  const expected = String(expectedModel || '').trim() || null;
+  if (configured && expected && configured !== expected) throw new Error(`Execution model changed after readiness (${expected} -> ${configured})`);
+  return configured || expected;
+}
+function inactiveProjectError(status, action = 'merge') {
+  const error = new Error(`Project is ${status || 'missing'}; irreversible ${action} requires an active Project`);
+  error.code = 'PROJECT_INACTIVE';
+  error.resumable = true;
+  return error;
+}
+function changedProjectError(action) {
+  const error = new Error(`Project changed; irreversible ${action} requires the current active Project identity`);
+  error.code = 'PROJECT_IDENTITY_CHANGED';
+  error.resumable = true;
+  return error;
+}
 function branchEvidenceMatches(project, worker, evidence) {
   return evidence?.headSha === worker?.checkpointHead
     && evidence?.headBranch === worker?.branch
-    && evidence?.baseBranch === (project?.baseBranch || 'main');
+    && evidence?.baseBranch === (project?.baseBranch || 'main')
+    && evidence?.baseSha === worker?.scopeBaseHead;
+}
+async function assertGitHubRemoteIdentity(worktreePath, expected) {
+  const [fetchUrl, pushUrl] = await Promise.all([
+    gitRemoteUrl({ worktreePath }),
+    gitRemoteUrl({ worktreePath, push: true }),
+  ]);
+  const fetchRemote = parseGitHubRemote(fetchUrl);
+  const pushRemote = parseGitHubRemote(pushUrl);
+  const expectedName = expected.fullName.toLowerCase();
+  if (fetchRemote?.fullName.toLowerCase() !== expectedName || pushRemote?.fullName.toLowerCase() !== expectedName) {
+    throw new Error(`origin fetch and push endpoints must both match configured GitHub repository ${expected.fullName}`);
+  }
+  return { fetch: fetchRemote.fullName, push: pushRemote.fullName, fetchUrl, pushUrl };
 }
 
 class InProcessLocks {
@@ -45,7 +88,30 @@ class InProcessLocks {
   }
 }
 
-export function createOrchestrator({ store, opencode, github, locks = new InProcessLocks() }) {
+export function createOrchestrator({ store, opencode, github, locks = new InProcessLocks(), pushBranch = pushTaskBranch }) {
+  function withTaskLocks(taskIds, operation) {
+    const ids = [...new Set(taskIds.filter(Boolean))].sort();
+    const acquire = (index) => index >= ids.length
+      ? operation()
+      : locks.withLock(`task:${ids[index]}`, () => acquire(index + 1));
+    return acquire(0);
+  }
+
+  function ideaWorkTaskIds(ideaId) {
+    return store.snapshot().tasks
+      .filter((task) => task.sourceIdeaId === ideaId && task.kind === 'work' && !task.supersededByPlanningTaskId)
+      .map((task) => task.id);
+  }
+
+  async function withPlannerMaterializationLocks(run, operation) {
+    const planningTask = store.getTask(run.taskId);
+    const ideaId = planningTask?.sourceIdeaId || null;
+    if (!ideaId) return operation();
+    return locks.withLock(`idea:${ideaId}`, () => (
+      withTaskLocks(ideaWorkTaskIds(ideaId), operation)
+    ));
+  }
+
   function latestRun(taskId, predicate = () => true) {
     return store.snapshot().runs
       .filter((run) => run.taskId === taskId && predicate(run))
@@ -57,8 +123,12 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       && run.status === 'completed'
       && run.worktreePath
       && run.branch
+      && run.baseHead
+      && run.scopeBaseHead
       && run.checkpointHead
       && run.evidence?.control?.diff?.changed === true
+      && run.evidence?.control?.ownership?.ok === true
+      && run.evidence?.control?.scope?.ok === true
       && run.evidence?.control?.verification?.ok === true);
   }
 
@@ -72,11 +142,22 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     catch (error) { return { configured: Boolean(github.token), authenticated: false, apiUrl: github.baseUrl, repository, error: error.message }; }
   }
 
-  async function createScopedRun({ task, project, kind, worktreePath, branch, parentRunId = null, iteration = 1, prompt }) {
+  async function createScopedRun({
+    task, project, kind, worktreePath, branch, parentRunId = null, iteration = 1, prompt,
+    expectedBaseHead = null, scopeBaseHead = null,
+  }) {
     if ((task.runner || 'opencode') !== 'opencode') throw new Error(`Runner ${task.runner} is not implemented yet`);
+    const baseline = await inspectRepository(worktreePath);
+    if (baseline.branch !== branch) throw new Error(`Run worktree branch changed before dispatch (expected ${branch}, got ${baseline.branch || 'detached HEAD'})`);
+    if (expectedBaseHead && baseline.head !== expectedBaseHead) {
+      throw new Error(`Run worktree HEAD moved outside control-plane ownership (expected ${expectedBaseHead}, got ${baseline.head})`);
+    }
+    if (await worktreeStatus(worktreePath)) throw new Error('Run worktree is not clean at dispatch; refusing to adopt untrusted edits');
+    const trustedBaseHead = expectedBaseHead || baseline.head;
     let run = await store.createRun({
       taskId: task.id, projectId: project.id, runner: task.runner, model: task.model || null,
-      kind, parentRunId, branch, worktreePath, iteration,
+      kind, parentRunId, branch, worktreePath, baseHead: trustedBaseHead,
+      scopeBaseHead: scopeBaseHead || trustedBaseHead, iteration,
     });
     try {
       const title = `${kind === 'supervisor' ? '[REVIEW]' : `[${task.priority}]`} ${task.title}`;
@@ -86,7 +167,16 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       await opencode.promptAsync({ directory: worktreePath, sessionId: session.id, prompt, agent: normalizeOpencodeAgent(task.agentRole), model: task.model || undefined });
       return store.getRun(run.id);
     } catch (error) {
-      await store.updateRun(run.id, { status: 'failed', error: error.message, finishedAt: new Date().toISOString() });
+      const current = store.getRun(run.id);
+      if (current?.sessionId) {
+        await store.updateRun(run.id, {
+          status: 'dispatch_unknown', dispatchUncertain: true,
+          error: `Run dispatch failed after session creation and may have been accepted: ${error.message}`,
+          finishedAt: null, terminationConfirmedAt: null,
+        });
+      } else {
+        await store.updateRun(run.id, terminalRunPatch({ status: 'failed', error: error.message }));
+      }
       throw error;
     }
   }
@@ -95,6 +185,15 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     if (!run?.worktreePath || !run?.branch || !project?.repoPath) return;
     await removeTaskWorktree({ repoPath: project.repoPath, worktreePath: run.worktreePath, force: true }).catch(() => {});
     await deleteTaskBranch({ repoPath: project.repoPath, branch: run.branch, force: true }).catch(() => {});
+  }
+
+  async function cleanupPlannerRun(runId) {
+    const run = typeof runId === 'string' ? store.getRun(runId) : runId;
+    if (!run || run.kind !== 'planner') return { cleaned: false, reason: 'not_planner' };
+    const project = store.getProject(run.projectId);
+    if (!project?.repoPath || !run.worktreePath || !run.branch) return { cleaned: true, reason: 'no_workspace' };
+    await discardRunWorkspace(run, project);
+    return { cleaned: true, runId: run.id };
   }
 
   async function completeIdeaIfReady(task) {
@@ -111,31 +210,65 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     await deleteTaskBranch({ repoPath: project.repoPath, branch: worker.branch, force: forceBranch }).catch(() => {});
   }
 
-  async function startIdeaPlanningUnlocked(ideaId) {
+  async function confirmCurrentActiveProject(projectId, expectedProjectIdentity, action) {
+    const confirmation = await store.compareAndSetProjectStatus(projectId, {
+      expectedProjectIdentity,
+      expectedStatus: 'active',
+      status: 'active',
+    });
+    const current = confirmation.project;
+    if (confirmation.matched !== true) {
+      if (current?.status === 'active') throw changedProjectError(action);
+      throw inactiveProjectError(current?.status, action);
+    }
+    return current;
+  }
+
+  async function withCurrentActiveProject(projectId, expectedProjectIdentity, action, operation) {
+    return locks.withLock(`project:${projectId}:${action}`, async () => (
+      operation(await confirmCurrentActiveProject(projectId, expectedProjectIdentity, action))
+    ));
+  }
+
+  async function withActiveProjectMerge(projectId, expectedProjectIdentity, operation) {
+    return withCurrentActiveProject(projectId, expectedProjectIdentity, 'merge', operation);
+  }
+
+  async function startIdeaPlanningUnlocked(ideaId, admission = {}) {
     const idea = store.getIdea(ideaId);
     if (!idea) throw new Error('Idea not found');
     if (!['inbox', 'needs_input'].includes(idea.state)) throw new Error(`Idea cannot be planned from state ${idea.state}`);
     const project = store.getProject(idea.projectId);
     if (!project?.repoPath) throw new Error('Project needs a local repoPath before AI planning');
-    const planningTask = await store.addTask({
-      projectId: project.id, sourceIdeaId: idea.id, kind: 'planning', title: `Plan idea: ${idea.title}`,
-      description: idea.description, priority: 'P1', runner: 'opencode',
-      model: project.modelPolicy?.planningModel || project.modelPolicy?.codingModel || null,
-      agentRole: project.autonomy.plannerRole, state: 'planning', verificationCommands: [],
-    });
-    await store.updateIdea(idea.id, { state: 'planning', planningTaskId: planningTask.id });
-    const workspace = await createTaskWorktree({ repoPath: project.repoPath, taskId: planningTask.id, title: planningTask.title, baseRef: project.baseBranch || 'HEAD' });
+    if (admission.expectedProjectIdentity && projectAdmissionIdentity(project) !== admission.expectedProjectIdentity) {
+      throw new Error('Project changed after planner admission; retry planning');
+    }
+    const planningTask = await withTaskLocks(ideaWorkTaskIds(idea.id), () => store.beginIdeaPlanning(idea.id, {
+      title: `Plan idea: ${idea.title}`, description: idea.description, priority: 'P1', runner: 'opencode',
+      model: boundExecutionModel(project.modelPolicy?.planningModel || project.modelPolicy?.codingModel || null, admission.expectedModel),
+      agentRole: project.autonomy.plannerRole,
+      expectedProjectIdentity: admission.expectedProjectIdentity || null,
+    }));
+    let workspace = null;
     try {
-      return await createScopedRun({ task: planningTask, project, kind: 'planner', worktreePath: workspace.worktreePath, branch: workspace.branch, iteration: 1, prompt: buildPlannerPrompt({ project, idea }) });
+      workspace = await createTaskWorktree({
+        repoPath: project.repoPath, taskId: planningTask.id, title: planningTask.title,
+        baseRef: project.baseBranch || 'HEAD', expectedBaseHead: admission.expectedBaseHead || null,
+      });
+      return await createScopedRun({
+        task: planningTask, project, kind: 'planner', worktreePath: workspace.worktreePath, branch: workspace.branch,
+        iteration: 1, expectedBaseHead: workspace.baseHead, prompt: buildPlannerPrompt({ project, idea }),
+      });
     } catch (error) {
       await store.updateTask(planningTask.id, { state: 'needs_input' });
       await store.updateIdea(idea.id, { state: 'needs_input' });
-      await discardRunWorkspace({ ...workspace }, project);
+      const retained = latestRun(planningTask.id, (candidate) => candidate.dispatchUncertain === true || Boolean(candidate.quarantineReason));
+      if (workspace && !retained) await discardRunWorkspace({ ...workspace }, project);
       throw error;
     }
   }
 
-  async function startWorkerUnlocked(taskId) {
+  async function startWorkerUnlocked(taskId, admission = {}) {
     let task = store.getTask(taskId);
     if (!task) throw new Error('Task not found');
     if (task.kind !== 'work') throw new Error('Only work tasks can be delegated to a worker');
@@ -143,7 +276,14 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     const project = store.getProject(task.projectId);
     if (!project?.repoPath) throw new Error('Project needs a local repoPath before delegation');
     const projectTasks = store.tasksForProject(project.id);
-    const blockers = task.blockedBy.map((id) => projectTasks.find((item) => item.id === id)).filter(Boolean);
+    const projectTasksById = new Map(projectTasks.map((item) => [item.id, item]));
+    const missingBlockers = task.blockedBy.filter((id) => !projectTasksById.has(id));
+    if (missingBlockers.length) {
+      const message = `Task dependency integrity failed; missing or cross-project blockedBy IDs: ${missingBlockers.join(', ')}`;
+      await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message });
+      throw new Error(message);
+    }
+    const blockers = task.blockedBy.map((id) => projectTasksById.get(id));
     if (blockers.some((item) => item.state !== 'done')) throw new Error('Task is blocked by unfinished dependencies');
     const nextIteration = Number(task.iteration || 0) + 1;
     if (nextIteration > project.autonomy.maxTaskIterations) {
@@ -152,76 +292,120 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     }
     const reusable = latestRun(task.id, (run) => Boolean(run.worktreePath && run.branch));
     let workspace = reusable ? { worktreePath: reusable.worktreePath, branch: reusable.branch } : null;
-    if (!workspace) workspace = await createTaskWorktree({ repoPath: project.repoPath, taskId: task.id, title: task.title, baseRef: project.baseBranch || 'HEAD' });
-    task = await store.updateTask(task.id, { state: 'in_progress', iteration: nextIteration });
+    let expectedBaseHead = null;
+    let scopeBaseHead = null;
+    if (reusable) {
+      const checkpointCommitted = reusable.evidence?.control?.checkpoint?.committed === true;
+      const checkpointOwned = reusable.evidence?.control?.ownership?.ok === true;
+      const checkpointScoped = reusable.evidence?.control?.scope?.ok === true;
+      if (!reusable.baseHead || (checkpointCommitted && (!checkpointOwned || !checkpointScoped))) {
+        const message = 'Reusable worker workspace has no verified control-plane-owned, in-scope HEAD; refusing to adopt untrusted checkpoint history on retry.';
+        await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message });
+        throw new Error(message);
+      }
+      expectedBaseHead = checkpointCommitted ? reusable.checkpointHead : reusable.baseHead;
+      scopeBaseHead = reusable.scopeBaseHead || reusable.baseHead;
+      if (admission.expectedBaseHead && scopeBaseHead !== admission.expectedBaseHead) {
+        const message = `Reusable worker baseline ${scopeBaseHead} no longer matches the proven Project base ${admission.expectedBaseHead}; explicit rebase/restart is required before retry.`;
+        await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message });
+        throw new Error(message);
+      }
+      const current = await inspectRepository(reusable.worktreePath);
+      if (!expectedBaseHead || current.branch !== reusable.branch || current.head !== expectedBaseHead) {
+        const message = `Reusable worker workspace moved outside control-plane ownership (expected ${reusable.branch}@${expectedBaseHead || 'unknown'}, got ${current.branch || 'detached'}@${current.head}).`;
+        await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message });
+        throw new Error(message);
+      }
+    }
+    const expectedTaskIdentity = admission.expectedTaskIdentity || taskAdmissionIdentity(task);
+    const expectedProjectIdentity = admission.expectedProjectIdentity || projectAdmissionIdentity(project);
+    const executionModel = boundExecutionModel(task.model, admission.expectedModel);
+    task = await store.claimTaskForWorker(task.id, { expectedTaskIdentity, expectedProjectIdentity, iteration: nextIteration });
+    const executionTask = { ...task, model: executionModel };
     try {
+      if (!workspace) {
+        workspace = await createTaskWorktree({
+          repoPath: project.repoPath, taskId: task.id, title: task.title,
+          baseRef: project.baseBranch || 'HEAD', expectedBaseHead: admission.expectedBaseHead || null,
+        });
+        expectedBaseHead = workspace.baseHead;
+        scopeBaseHead = workspace.baseHead;
+      }
       return await createScopedRun({
-        task, project, kind: 'worker', worktreePath: workspace.worktreePath, branch: workspace.branch,
+        task: executionTask, project, kind: 'worker', worktreePath: workspace.worktreePath, branch: workspace.branch,
         parentRunId: reusable?.id || null, iteration: nextIteration,
+        expectedBaseHead, scopeBaseHead,
         prompt: buildTaskPrompt({ project, task, feedback: task.supervisorFeedback, iteration: nextIteration }),
       });
     } catch (error) {
-      await store.updateTask(task.id, { state: 'backlog' });
+      const retained = latestRun(task.id, (candidate) => candidate.dispatchUncertain === true || Boolean(candidate.quarantineReason));
+      await store.updateTask(task.id, { state: retained ? 'needs_input' : 'backlog', supervisorFeedback: retained?.error || null });
       throw error;
     }
   }
 
-  async function startSupervisorUnlocked(taskId) {
-    const task = store.getTask(taskId);
+  async function startSupervisorUnlocked(taskId, admission = {}) {
+    let task = store.getTask(taskId);
     if (!task) throw new Error('Task not found');
     if (task.state !== 'awaiting_review') throw new Error(`Task cannot be reviewed from state ${task.state}`);
     const project = store.getProject(task.projectId);
     const worker = latestWorker(task.id);
     if (!worker) throw new Error('No machine-verified worker checkpoint is available for review');
-    const reviewTask = { ...task, runner: 'opencode', model: project.modelPolicy?.supervisorModel || task.model || null, agentRole: project.autonomy.supervisorRole };
-    await store.updateTask(task.id, { state: 'reviewing' });
+    const provenBaseHead = admission.expectedBaseHead || null;
+    const workerBaseHead = task.publication?.workerBaseSha || worker.scopeBaseHead || null;
+    if (provenBaseHead && (worker.scopeBaseHead !== provenBaseHead || workerBaseHead !== provenBaseHead)) {
+      const message = `Worker review baseline ${workerBaseHead || 'unknown'} no longer matches the proven Project base ${provenBaseHead}; rebase and rerun verification before review.`;
+      await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message });
+      throw new Error(message);
+    }
+    const reviewTask = {
+      ...task,
+      runner: 'opencode',
+      model: boundExecutionModel(project.modelPolicy?.supervisorModel || task.model || null, admission.expectedModel),
+      agentRole: project.autonomy.supervisorRole,
+    };
+    task = await store.claimTaskForSupervisor(task.id, {
+      expectedTaskIdentity: admission.expectedTaskIdentity || taskAdmissionIdentity(task),
+      expectedProjectIdentity: admission.expectedProjectIdentity || projectAdmissionIdentity(project),
+    });
     try {
       return await createScopedRun({
         task: reviewTask, project, kind: 'supervisor', worktreePath: worker.worktreePath, branch: worker.branch,
         parentRunId: worker.id, iteration: worker.iteration,
+        expectedBaseHead: worker.checkpointHead, scopeBaseHead: worker.scopeBaseHead || worker.baseHead,
         prompt: buildSupervisorPrompt({ project, task, workerResult: worker.result, iteration: worker.iteration, publication: task.publication, controlEvidence: worker.evidence?.control || null }),
       });
     } catch (error) {
-      await store.updateTask(task.id, { state: 'awaiting_review' });
+      const retained = latestRun(task.id, (candidate) => candidate.kind === 'supervisor'
+        && (candidate.dispatchUncertain === true || Boolean(candidate.quarantineReason)));
+      await store.updateTask(task.id, { state: retained ? 'needs_input' : 'awaiting_review', supervisorFeedback: retained?.error || null });
       throw error;
     }
   }
 
   async function applyPlannerResult(run, result, assistantText) {
-    const task = store.getTask(run.taskId);
-    const idea = task?.sourceIdeaId ? store.getIdea(task.sourceIdeaId) : null;
-    if (!task || !idea) throw new Error('Planning run is missing its idea/task linkage');
-    const project = store.getProject(task.projectId);
-    await store.updateRun(run.id, { status: 'completed', result, assistantText, finishedAt: new Date().toISOString() });
-    await store.updateTask(task.id, { state: result.status === 'ready' ? 'done' : 'needs_input' });
-    if (result.status !== 'ready') {
-      await store.updateIdea(idea.id, { state: 'needs_input', summary: result.summary || null, questions: result.questions || [], risks: result.risks || [] });
-      await discardRunWorkspace(run, project);
-      return;
-    }
-    const specs = result.tasks.slice(0, 50).filter((spec) => spec?.title?.trim());
-    const created = [];
-    for (const spec of specs) {
-      created.push(await store.addTask({
-        projectId: project.id, sourceIdeaId: idea.id, kind: 'work', title: spec.title,
-        description: spec.description || '', priority: spec.priority, runner: spec.runner || 'opencode',
-        model: spec.model || project.modelPolicy?.codingModel || null, agentRole: spec.agentRole || project.autonomy.workerRole,
-        acceptanceCriteria: spec.acceptanceCriteria, verificationCommands: project.verificationCommands, blockedBy: [],
-      }));
-    }
-    for (let index = 0; index < created.length; index += 1) {
-      const dependencies = Array.isArray(specs[index].dependsOn) ? specs[index].dependsOn : [];
-      const blockedBy = dependencies.map((dependency) => {
-        if (Number.isInteger(dependency) && created[dependency]) return created[dependency].id;
-        return created.find((candidate) => candidate.title === dependency)?.id || null;
-      }).filter(Boolean);
-      if (blockedBy.length) await store.updateTask(created[index].id, { blockedBy });
-    }
-    await store.updateIdea(idea.id, {
-      state: project.autonomy.mode === 'autonomous' ? 'executing' : 'ready', summary: result.summary || null,
-      questions: result.questions || [], risks: result.risks || [], generatedTaskIds: created.map((item) => item.id),
+    const outcome = await withPlannerMaterializationLocks(run, async () => {
+      const task = store.getTask(run.taskId);
+      const idea = task?.sourceIdeaId ? store.getIdea(task.sourceIdeaId) : null;
+      if (!task || !idea) throw new Error('Planning run is missing its idea/task linkage');
+      const project = store.getProject(task.projectId);
+      const settled = await store.settleActiveRun(run.id, {
+        runPatch: terminalRunPatch({ status: 'completed', result, assistantText }),
+        taskPatch: result.status !== 'ready' ? { state: 'needs_input' } : null,
+        expectedTaskStates: ['planning'],
+      });
+      if (!settled.applied) return { applied: false, project };
+      if (result.status !== 'ready') {
+        await store.updateIdea(idea.id, { state: 'needs_input', summary: result.summary || null, questions: result.questions || [], risks: result.risks || [] });
+      } else {
+        await materializePlannerResult(store, run.id);
+      }
+      return { applied: true, project };
     });
+    if (!outcome.applied) return false;
+    const { project } = outcome;
     await discardRunWorkspace(run, project);
+    return true;
   }
 
   async function applyWorkerResult(run, result, assistantText) {
@@ -229,29 +413,67 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     if (!task) throw new Error('Task not found');
     const project = store.getProject(task.projectId);
     if (result.status !== 'success') {
-      await store.updateRun(run.id, { status: 'completed', result, evidence: { agent: result.evidence || null, control: null }, assistantText, finishedAt: new Date().toISOString() });
       const message = result.status === 'no_change'
         ? `Worker explicitly reported no_change: ${result.summary}. Coding tasks never auto-complete without a verified repository change.`
         : (result.needsInput || result.summary || 'Worker could not complete the task.');
-      await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message });
-      return;
+      const settled = await store.settleActiveRun(run.id, {
+        runPatch: terminalRunPatch({ status: 'completed', result, evidence: { agent: result.evidence || null, control: null }, assistantText }),
+        taskPatch: { state: 'needs_input', supervisorFeedback: message },
+        expectedTaskStates: ['in_progress'],
+      });
+      return settled.applied;
     }
 
-    const checkpoint = await commitWorktree({ worktreePath: run.worktreePath, message: `ai(worker ${run.iteration}): ${task.title}` });
-    const gate = await verifyWorkerCheckpoint({ task, project, worktreePath: run.worktreePath, checkpoint });
-    await store.updateRun(run.id, {
-      status: 'completed', result, assistantText, checkpointHead: checkpoint.head,
-      evidence: { agent: result.evidence || null, control: gate.evidence },
-      error: gate.ok ? null : gate.reason, finishedAt: new Date().toISOString(),
+    let checkpoint;
+    try {
+      let intent = run.checkpointIntent || null;
+      if (!intent) {
+        intent = await prepareWorktreeCheckpoint({
+          worktreePath: run.worktreePath,
+          expectedHead: run.baseHead,
+          message: `ai(worker ${run.iteration}): ${task.title}`,
+        });
+        if (intent) await store.updateRun(run.id, { checkpointIntent: intent });
+      }
+      checkpoint = intent
+        ? await commitPreparedCheckpoint({ worktreePath: run.worktreePath, intent })
+        : { committed: false, recovered: false, head: run.baseHead, controlPlaneOwned: false };
+    } catch {
+      const message = 'Control-plane checkpoint ownership could not be proven; worker-created or drifted commit history is rejected.';
+      const settled = await store.settleActiveRun(run.id, {
+        runPatch: terminalRunPatch({
+          status: 'completed', result, assistantText, checkpointHead: null,
+          evidence: { agent: result.evidence || null, control: { checkpoint: null, diff: null, scope: null, ownership: { ok: false }, verification: null } },
+          error: message,
+        }),
+        taskPatch: { state: 'needs_input', supervisorFeedback: message },
+        expectedTaskStates: ['in_progress'],
+      });
+      return settled.applied;
+    }
+    const gate = await verifyWorkerCheckpoint({
+      task, project, worktreePath: run.worktreePath, checkpoint,
+      baseHead: run.baseHead, scopeBaseHead: run.scopeBaseHead, expectedBranch: run.branch,
     });
+    let taskPatch;
     if (!gate.ok) {
       const retryable = checkpoint.committed && gate.evidence?.verification?.total > 0
         && Number(task.iteration || 0) < project.autonomy.maxTaskIterations
         && project.autonomy.mode === 'autonomous';
-      await store.updateTask(task.id, { state: retryable ? 'backlog' : 'needs_input', supervisorFeedback: gate.reason });
-      return;
+      taskPatch = { state: retryable ? 'backlog' : 'needs_input', supervisorFeedback: gate.reason };
+    } else {
+      taskPatch = { state: project?.repository ? 'awaiting_publish' : 'awaiting_review', supervisorFeedback: null };
     }
-    await store.updateTask(task.id, { state: project?.repository ? 'awaiting_publish' : 'awaiting_review', supervisorFeedback: null });
+    const settled = await store.settleActiveRun(run.id, {
+      runPatch: terminalRunPatch({
+        status: 'completed', result, assistantText, checkpointHead: checkpoint.head,
+        evidence: { agent: result.evidence || null, control: gate.evidence },
+        error: gate.ok ? null : gate.reason,
+      }),
+      taskPatch,
+      expectedTaskStates: ['in_progress'],
+    });
+    return settled.applied;
   }
 
   function pullRequestBody(task, worker) {
@@ -266,21 +488,49 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     if (task.state !== 'awaiting_publish') throw new Error(`Task cannot publish from state ${task.state}`);
     const project = store.getProject(task.projectId);
     if (!project?.repository) throw new Error('Project has no GitHub repository binding');
+    if (project.status !== 'active') throw inactiveProjectError(project.status, 'publish');
+    const expectedProjectIdentity = projectAdmissionIdentity(project);
     const expected = parseGitHubRepository(project.repository);
     const worker = latestWorker(task.id);
     if (!worker) throw new Error('No machine-verified worker checkpoint is available to publish');
     try {
-      const remote = parseGitHubRemote(await gitRemoteUrl({ worktreePath: worker.worktreePath }));
-      if (!remote || remote.fullName.toLowerCase() !== expected.fullName.toLowerCase()) throw new Error(`origin does not match configured GitHub repository ${expected.fullName}`);
-      const pushed = await pushTaskBranch({ worktreePath: worker.worktreePath, branch: worker.branch });
+      const remoteIdentity = await assertGitHubRemoteIdentity(worker.worktreePath, expected);
+      const pushed = await withCurrentActiveProject(project.id, expectedProjectIdentity, 'publish', () => (
+        pushBranch({
+          worktreePath: worker.worktreePath,
+          branch: worker.branch,
+          remoteUrl: remoteIdentity.pushUrl,
+          expectedHead: worker.checkpointHead,
+          beforePush: async () => {
+            await assertGitHubRemoteIdentity(worker.worktreePath, expected);
+            return confirmCurrentActiveProject(project.id, expectedProjectIdentity, 'publish');
+          },
+        })
+      ));
       if (pushed.head !== worker.checkpointHead) throw new Error('Pushed branch HEAD does not match worker checkpoint');
+      const pushedAt = new Date().toISOString();
+      await store.updateTask(task.id, {
+        publication: {
+          ...(store.getTask(task.id)?.publication || {}),
+          provider: 'github', repository: expected.fullName,
+          headSha: worker.checkpointHead, headBranch: worker.branch, baseBranch: project.baseBranch || 'main',
+          pushedAt, lastError: null, lastCheckedAt: pushedAt,
+        },
+        supervisorFeedback: null,
+      });
       let pull = await github.findOpenPullRequest({ repository: expected.fullName, headBranch: worker.branch, baseBranch: project.baseBranch || 'main' });
-      if (!pull) pull = await github.createPullRequest({ repository: expected.fullName, title: `[AI] ${task.title}`, headBranch: worker.branch, baseBranch: project.baseBranch || 'main', body: pullRequestBody(task, worker), draft: false });
+      if (!pull) {
+        pull = await withCurrentActiveProject(project.id, expectedProjectIdentity, 'publish', () => github.createPullRequest({
+          repository: expected.fullName, title: `[AI] ${task.title}`, headBranch: worker.branch,
+          baseBranch: project.baseBranch || 'main', body: pullRequestBody(task, worker), draft: false,
+        }));
+      }
       if (!pull?.number) throw new Error('GitHub did not return a pull request number');
       const evidence = await github.pullRequestEvidence({ repository: expected.fullName, number: pull.number });
       if (!branchEvidenceMatches(project, worker, evidence)) throw new Error('GitHub PR branch/head identity does not match the verified worker checkpoint');
       const now = new Date().toISOString();
       const publication = {
+        ...(store.getTask(task.id)?.publication || {}),
         provider: 'github', repository: expected.fullName, prNumber: pull.number, prUrl: evidence.url || pull.html_url || null,
         headSha: worker.checkpointHead, headBranch: worker.branch, baseBranch: project.baseBranch || 'main', state: evidence.state || 'open',
         ci: evidence.ci, publishedAt: now, lastCheckedAt: now,
@@ -289,9 +539,20 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       await store.updateTask(task.id, { state: 'awaiting_ci', publication, supervisorFeedback: publication.lastError });
       return publication;
     } catch (error) {
+      const currentTask = store.getTask(task.id);
+      if (error?.resumable === true && ['PROJECT_INACTIVE', 'PROJECT_IDENTITY_CHANGED'].includes(error.code)) {
+        if (currentTask?.state === 'awaiting_publish') {
+          await store.updateTask(task.id, {
+            state: 'awaiting_publish',
+            publication: { ...(currentTask.publication || {}), provider: 'github', repository: expected.fullName, lastError: error.message, lastCheckedAt: new Date().toISOString() },
+            supervisorFeedback: `GitHub publish paused: ${error.message}`,
+          });
+        }
+        throw error;
+      }
       await store.updateTask(task.id, {
         state: 'needs_input',
-        publication: { ...(task.publication || {}), provider: 'github', repository: expected.fullName, lastError: error.message, lastCheckedAt: new Date().toISOString() },
+        publication: { ...(currentTask?.publication || {}), provider: 'github', repository: expected.fullName, lastError: error.message, lastCheckedAt: new Date().toISOString() },
         supervisorFeedback: `GitHub publish failed: ${error.message}`,
       });
       throw error;
@@ -363,60 +624,126 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     const project = store.getProject(run.projectId);
     if (!task || !project) throw new Error('Supervisor run lost project/task linkage');
     const worker = run.parentRunId ? store.getRun(run.parentRunId) : null;
+    const settle = (runPatch, taskPatch) => store.settleActiveRun(run.id, {
+      runPatch,
+      taskPatch,
+      expectedTaskStates: ['reviewing'],
+    });
+    const [status, repository] = await Promise.all([worktreeStatus(run.worktreePath), inspectRepository(run.worktreePath)]);
+    if (!worker?.checkpointHead || status || repository.head !== worker.checkpointHead) {
+      const message = 'Supervisor review changed the worktree or HEAD; its verdict is rejected by the integrity gate';
+      return (await settle(
+        terminalRunPatch({ status: 'failed', result, assistantText, error: message }),
+        { state: 'needs_input', supervisorFeedback: message },
+      )).applied;
+    }
     if (result.verdict === 'approve') {
-      const [status, repository] = await Promise.all([worktreeStatus(run.worktreePath), inspectRepository(run.worktreePath)]);
-      if (status || (worker?.checkpointHead && repository.head !== worker.checkpointHead)) {
-        const message = 'Supervisor review changed the worktree or HEAD; approval rejected by integrity gate';
-        await store.updateRun(run.id, { status: 'failed', result, assistantText, error: message, finishedAt: new Date().toISOString() });
-        await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message });
-        return;
+      const [baseRepository, dirtyBase] = await Promise.all([inspectRepository(project.repoPath), worktreeStatus(project.repoPath)]);
+      if (baseRepository.branch !== (project.baseBranch || 'main') || baseRepository.head !== worker.scopeBaseHead || dirtyBase) {
+        const message = 'Project base moved or became dirty during supervisor review; approval does not match the reviewed baseline';
+        return (await settle(
+          terminalRunPatch({ status: 'failed', result, assistantText, error: message }),
+          { state: 'needs_input', supervisorFeedback: message },
+        )).applied;
       }
       if (project.repository) {
         if (!task.publication?.prNumber) throw new Error('GitHub-backed task has no PR evidence at supervisor approval');
         const evidence = await github.pullRequestEvidence({ repository: project.repository, number: task.publication.prNumber });
         if (!branchEvidenceMatches(project, worker, evidence) || evidence.state !== 'open' || !ciAcceptable(project, evidence.ci)) {
           const message = 'PR identity or CI evidence changed/unavailable during supervisor review; approval rejected';
-          await store.updateRun(run.id, { status: 'failed', result, assistantText, error: message, finishedAt: new Date().toISOString() });
-          await store.updateTask(task.id, { state: 'awaiting_ci', supervisorFeedback: message, publication: { ...task.publication, ...evidence, lastCheckedAt: new Date().toISOString() } });
-          return;
+          return (await settle(
+            terminalRunPatch({ status: 'failed', result, assistantText, error: message }),
+            { state: 'awaiting_ci', supervisorFeedback: message, publication: { ...task.publication, ...evidence, lastCheckedAt: new Date().toISOString() } },
+          )).applied;
         }
         await store.updateTask(task.id, { publication: { ...task.publication, ...evidence, lastCheckedAt: new Date().toISOString() } });
       }
-      const finalGate = await verifyBeforeMerge({ task, project, worktreePath: worker.worktreePath, expectedHead: worker.checkpointHead, inspectRepository });
+      const finalGate = await verifyBeforeMerge({ task, project, worktreePath: worker.worktreePath, expectedHead: worker.checkpointHead, expectedBranch: worker.branch, inspectRepository });
       if (!finalGate.ok) {
         const exhausted = Number(task.iteration || 0) >= project.autonomy.maxTaskIterations;
-        await store.updateRun(run.id, { status: 'completed', result, assistantText, evidence: { supervisor: result, finalVerification: finalGate.evidence }, error: finalGate.reason, finishedAt: new Date().toISOString() });
-        await store.updateTask(task.id, { state: exhausted ? 'needs_input' : 'backlog', supervisorFeedback: finalGate.reason });
-        return;
+        return (await settle(
+          terminalRunPatch({ status: 'completed', result, assistantText, workerHead: worker.checkpointHead, evidence: { supervisor: result, finalVerification: finalGate.evidence }, error: finalGate.reason }),
+          { state: exhausted ? 'needs_input' : 'backlog', supervisorFeedback: finalGate.reason },
+        )).applied;
       }
-      await store.updateRun(run.id, { status: 'completed', result, assistantText, evidence: { supervisor: result, finalVerification: finalGate.evidence }, finishedAt: new Date().toISOString() });
-      await store.updateTask(task.id, { state: 'ready_to_merge', supervisorFeedback: null });
-      return;
+      return (await settle(
+        terminalRunPatch({ status: 'completed', result, assistantText, workerHead: worker.checkpointHead, evidence: { supervisor: result, finalVerification: finalGate.evidence } }),
+        { state: 'ready_to_merge', supervisorFeedback: null },
+      )).applied;
     }
-    await store.updateRun(run.id, { status: 'completed', result, assistantText, evidence: { supervisor: result }, finishedAt: new Date().toISOString() });
     if (result.verdict === 'changes_requested') {
       const feedback = result.requiredChanges.join('\n- ') || result.summary;
       const exhausted = Number(task.iteration || 0) >= project.autonomy.maxTaskIterations;
-      await store.updateTask(task.id, { state: exhausted ? 'needs_input' : 'backlog', supervisorFeedback: feedback || 'Supervisor requested another iteration.' });
-      return;
+      return (await settle(
+        terminalRunPatch({ status: 'completed', result, assistantText, evidence: { supervisor: result } }),
+        { state: exhausted ? 'needs_input' : 'backlog', supervisorFeedback: feedback || 'Supervisor requested another iteration.' },
+      )).applied;
     }
-    await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: result.summary || 'Supervisor blocked autonomous progress.' });
+    return (await settle(
+      terminalRunPatch({ status: 'completed', result, assistantText, evidence: { supervisor: result } }),
+      { state: 'needs_input', supervisorFeedback: result.summary || 'Supervisor blocked autonomous progress.' },
+    )).applied;
   }
 
   async function failRun(run, message) {
     const task = store.getTask(run.taskId);
     const project = store.getProject(run.projectId);
-    await store.updateRun(run.id, { status: 'failed', error: message, finishedAt: new Date().toISOString() });
-    if (!task || !project) return;
+    let taskPatch = null;
+    let expectedTaskStates = [];
+    if (task && project) {
+      if (run.kind === 'planner') {
+        taskPatch = { state: 'needs_input' };
+        expectedTaskStates = ['planning'];
+      } else if (run.kind === 'supervisor') {
+        taskPatch = { state: 'awaiting_review', supervisorFeedback: message };
+        expectedTaskStates = ['reviewing'];
+      } else {
+        const canRetry = project.autonomy.mode === 'autonomous' && Number(task.iteration || 0) < project.autonomy.maxTaskIterations;
+        taskPatch = { state: canRetry ? 'backlog' : 'needs_input', supervisorFeedback: message };
+        expectedTaskStates = ['in_progress'];
+      }
+    }
+    const settled = await store.settleActiveRun(run.id, {
+      runPatch: terminalRunPatch({ status: 'failed', error: message }),
+      taskPatch,
+      expectedRunStatuses: ['preparing', 'running', 'retrying'],
+      expectedTaskStates,
+    });
+    if (!settled.applied || !task || !project) return settled.applied;
     if (run.kind === 'planner') {
-      await store.updateTask(task.id, { state: 'needs_input' });
       if (task.sourceIdeaId) await store.updateIdea(task.sourceIdeaId, { state: 'needs_input' });
       await discardRunWorkspace(run, project);
-    } else if (run.kind === 'supervisor') {
-      await store.updateTask(task.id, { state: 'awaiting_review', supervisorFeedback: message });
-    } else {
-      const canRetry = project.autonomy.mode === 'autonomous' && Number(task.iteration || 0) < project.autonomy.maxTaskIterations;
-      await store.updateTask(task.id, { state: canRetry ? 'backlog' : 'needs_input', supervisorFeedback: message });
+    }
+    return true;
+  }
+
+  async function quarantineUnconfirmedTermination(run, message) {
+    await store.updateRun(run.id, {
+      status: 'dispatch_unknown', dispatchUncertain: true, quarantineReason: message,
+      error: `${message} External session termination could not be confirmed.`, finishedAt: null,
+    });
+    const task = store.getTask(run.taskId);
+    if (task) await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message });
+    if (run.kind === 'planner' && task?.sourceIdeaId) await store.updateIdea(task.sourceIdeaId, { state: 'needs_input' });
+    return { status: 'termination_unconfirmed', runId: run.id };
+  }
+
+  async function abortAndConfirmStopped(run) {
+    if (!run.sessionId || !run.worktreePath) return false;
+    await opencode.abort({ directory: run.worktreePath, sessionId: run.sessionId }).catch(() => {});
+    try {
+      const statuses = await opencode.sessionStatus(run.worktreePath);
+      const evidence = inspectSessionStatusRecord(statuses, run.sessionId);
+      return evidence.valid && (!evidence.present || evidence.status.type === 'idle');
+    } catch { return false; }
+  }
+
+  async function markAbortedWorkNeedsInput(run, message) {
+    const task = run.taskId ? store.getTask(run.taskId) : null;
+    if (!task || task.state === 'done') return;
+    await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: message });
+    if (run.kind === 'planner' && task.sourceIdeaId) {
+      await store.updateIdea(task.sourceIdeaId, { state: 'needs_input' }).catch(() => {});
     }
   }
 
@@ -424,15 +751,18 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     const run = typeof runId === 'string' ? store.getRun(runId) : store.getRun(runId.id);
     if (!run || !['running', 'retrying'].includes(run.status)) return { status: run?.status || 'missing' };
     if (run.worktreePath && !existsSync(join(run.worktreePath, '.git'))) {
-      await failRun(run, `Worktree link is broken (no .git at ${run.worktreePath}); failing fast instead of occupying the concurrency budget.`);
+      const message = 'Run worktree link is broken; external session termination must be confirmed before ownership can be released.';
+      if (!await abortAndConfirmStopped(run)) return quarantineUnconfirmedTermination(run, message);
+      await failRun(run, message);
       return { status: 'broken_worktree' };
     }
     const project = store.getProject(run.projectId);
     const task = store.getTask(run.taskId);
     if (!project || !task) return failRun(run, 'Project/task disappeared while run was active');
     if (minutesSince(run.startedAt) > project.autonomy.maxRunMinutes) {
-      if (run.sessionId && run.worktreePath) await opencode.abort({ directory: run.worktreePath, sessionId: run.sessionId }).catch(() => {});
-      await failRun(run, `Run exceeded maxRunMinutes (${project.autonomy.maxRunMinutes})`);
+      const message = `Run exceeded maxRunMinutes (${project.autonomy.maxRunMinutes})`;
+      if (!await abortAndConfirmStopped(run)) return quarantineUnconfirmedTermination(run, message);
+      await failRun(run, message);
       return { status: 'timed_out' };
     }
     let statuses;
@@ -446,31 +776,55 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       await store.updateRun(run.id, { error: `Runner unavailable during reconciliation: ${error.message}` });
       return { status: 'runner_unavailable', error: error.message };
     }
-    const status = statuses?.[run.sessionId] || { type: 'idle' };
-    const { text, result } = extractResult(messages);
-    if (result) {
-      const validation = validateResultContract(result, run.kind, { acceptanceCriteria: task.acceptanceCriteria || [] });
-      if (!validation.ok) {
-        const message = `Invalid ${run.kind} result contract: ${validation.errors.join('; ')}`;
-        await failRun(run, message);
-        return { status: 'invalid_result_contract', errors: validation.errors };
-      }
-      if (run.kind === 'planner') await applyPlannerResult(run, result, text);
-      else if (run.kind === 'supervisor') await applySupervisorResult(run, result, text);
-      else await applyWorkerResult(run, result, text);
-      return { status: 'completed', contract: true };
+    const statusEvidence = inspectSessionStatusRecord(statuses, run.sessionId);
+    if (!statusEvidence.valid) {
+      const message = 'Runner returned malformed session-status evidence; retaining Run ownership.';
+      await store.updateRun(run.id, { error: message });
+      return { status: 'runner_status_invalid', error: message };
     }
+    const messageEvidence = inspectSessionMessages(messages);
+    if (!messageEvidence.valid) {
+      const message = 'Runner returned malformed session-message evidence; retaining Run ownership.';
+      await store.updateRun(run.id, { error: message });
+      return { status: 'runner_messages_invalid', error: message };
+    }
+    messages = messageEvidence.messages;
+    const status = statusEvidence.present ? statusEvidence.status : { type: 'idle' };
     if (status.type === 'retry') {
       const attempts = Math.max(Number(run.retryAttempts || 0), Number(status.attempt || 0));
       if (attempts > project.autonomy.maxRetryAttempts) {
-        await opencode.abort({ directory: run.worktreePath, sessionId: run.sessionId }).catch(() => {});
-        await failRun(run, `OpenCode exceeded retry budget (${project.autonomy.maxRetryAttempts})`);
+        const message = `OpenCode exceeded retry budget (${project.autonomy.maxRetryAttempts})`;
+        if (!await abortAndConfirmStopped(run)) return quarantineUnconfirmedTermination(run, message);
+        await failRun(run, message);
         return { status: 'retry_budget_exhausted' };
       }
       await store.updateRun(run.id, { status: 'retrying', retryAttempts: attempts, error: status.message || null });
       return { status: 'retrying', attempts };
     }
     if (status.type === 'busy') return { status: 'running' };
+    if (status.type !== 'idle') {
+      const message = `Runner returned unknown active-state evidence (${String(status.type || 'missing')}); retaining Run ownership until an explicit idle/missing status is observed.`;
+      await store.updateRun(run.id, { error: message });
+      return { status: 'runner_status_unknown', error: message };
+    }
+    const { text, result } = extractResult(messages);
+    if (result) {
+      const validation = validateResultContract(result, run.kind, { acceptanceCriteria: task.acceptanceCriteria || [] });
+      if (!validation.ok) {
+        const message = `Invalid ${run.kind} result contract: ${validation.errors.join('; ')}`;
+        const applied = await failRun(run, message);
+        return applied
+          ? { status: 'invalid_result_contract', errors: validation.errors }
+          : { status: store.getRun(run.id)?.status || 'missing', contractApplied: false };
+      }
+      let applied;
+      if (run.kind === 'planner') applied = await applyPlannerResult(run, result, text);
+      else if (run.kind === 'supervisor') applied = await applySupervisorResult(run, result, text);
+      else applied = await applyWorkerResult(run, result, text);
+      return applied
+        ? { status: 'completed', contract: true }
+        : { status: store.getRun(run.id)?.status || 'missing', contract: true, contractApplied: false };
+    }
     const assistantText = latestAssistantText(messages);
     if (assistantText && minutesSince(run.startedAt) > 0.25) {
       await failRun(run, 'Agent became idle without a valid versioned AI_DASHBOARD_RESULT contract');
@@ -485,10 +839,21 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     if (task.state !== 'ready_to_merge') throw new Error('Task is not supervisor-approved for merge');
     const project = store.getProject(task.projectId);
     if (!project?.repoPath) throw new Error('Project needs a local repoPath');
-    const supervisor = latestRun(task.id, (run) => run.kind === 'supervisor' && run.status === 'completed' && run.result?.verdict === 'approve');
+    if (project.status !== 'active') throw inactiveProjectError(project.status);
     const worker = latestWorker(task.id);
+    const supervisor = worker ? latestRun(task.id, (run) => (
+      run.kind === 'supervisor'
+      && run.status === 'completed'
+      && run.result?.verdict === 'approve'
+      && run.parentRunId === worker.id
+      && run.workerHead === worker.checkpointHead
+      && run.evidence?.finalVerification?.verification?.ok === true
+      && run.evidence?.finalVerification?.head === worker.checkpointHead
+    )) : null;
     if (!supervisor || !worker) throw new Error('Verified worker/supervisor evidence is missing');
-    const finalGate = await verifyBeforeMerge({ task, project, worktreePath: worker.worktreePath, expectedHead: worker.checkpointHead, inspectRepository });
+    const reviewedTree = worker.evidence?.control?.ownership?.actualTree || null;
+    if (!/^[0-9a-f]{40,64}$/i.test(reviewedTree)) throw new Error('Verified worker checkpoint tree evidence is missing');
+    const finalGate = await verifyBeforeMerge({ task, project, worktreePath: worker.worktreePath, expectedHead: worker.checkpointHead, expectedBranch: worker.branch, inspectRepository });
     if (!finalGate.ok) {
       await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: finalGate.reason });
       throw new Error(finalGate.reason);
@@ -498,38 +863,91 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       if (evidence.state !== 'open' || evidence.draft) throw new Error('GitHub PR is not open and ready for merge');
       if (!branchEvidenceMatches(project, worker, evidence)) throw new Error('GitHub PR identity moved after supervisor approval');
       if (!ciAcceptable(project, evidence.ci)) throw new Error(`GitHub CI is ${evidence.ci?.state || 'unknown'}; refusing merge`);
-      const merged = await github.mergePullRequest({ repository: project.repository, number: task.publication.prNumber, expectedHeadSha: worker.checkpointHead, method: project.autonomy.mergeMethod, commitTitle: task.title });
-      if (merged?.merged !== true) throw new Error(merged?.message || 'GitHub refused the pull request merge');
-      await store.updateTask(task.id, { state: 'done', publication: { ...task.publication, ...evidence, state: 'merged', mergeSha: merged.sha || null, mergedAt: new Date().toISOString(), lastCheckedAt: new Date().toISOString() } });
-      await store.updateRun(supervisor.id, { status: 'merged', mergeHead: merged.sha || null, workerHead: worker.checkpointHead, evidence: { ...(supervisor.evidence || {}), mergeVerification: finalGate.evidence } });
-      if (project.autonomy.deleteRemoteBranch) await github.deleteBranch({ repository: project.repository, branch: worker.branch }).catch(() => {});
-      await cleanupTaskWorkspace({ project, worker, forceBranch: true });
-      await completeIdeaIfReady(store.getTask(task.id));
-      return { task: store.getTask(task.id), provider: 'github', merge: merged, checkpointHead: worker.checkpointHead };
+      return withActiveProjectMerge(project.id, projectAdmissionIdentity(project), async (currentProject) => {
+        const merged = await github.mergePullRequest({ repository: currentProject.repository, number: task.publication.prNumber, expectedHeadSha: worker.checkpointHead, method: currentProject.autonomy.mergeMethod, commitTitle: task.title });
+        if (merged?.merged !== true) throw new Error(merged?.message || 'GitHub refused the pull request merge');
+        await store.updateTask(task.id, { state: 'done', publication: { ...task.publication, ...evidence, state: 'merged', merged: true, mergeSha: merged.sha || null, mergedAt: new Date().toISOString(), lastCheckedAt: new Date().toISOString() } });
+        await store.updateRun(supervisor.id, { status: 'merged', mergeHead: merged.sha || null, workerHead: worker.checkpointHead, evidence: { ...(supervisor.evidence || {}), mergeVerification: finalGate.evidence } });
+        if (currentProject.autonomy.deleteRemoteBranch) await github.deleteBranch({ repository: currentProject.repository, branch: worker.branch }).catch(() => {});
+        await cleanupTaskWorkspace({ project: currentProject, worker, forceBranch: true });
+        await completeIdeaIfReady(store.getTask(task.id));
+        return { task: store.getTask(task.id), provider: 'github', merge: merged, checkpointHead: worker.checkpointHead };
+      });
     }
-    const merge = await mergeTaskBranch({ repoPath: project.repoPath, branch: worker.branch, baseBranch: project.baseBranch || 'main' });
-    await store.updateTask(task.id, { state: 'done' });
-    await store.updateRun(supervisor.id, { status: 'merged', mergeHead: merge.head, workerHead: worker.checkpointHead, evidence: { ...(supervisor.evidence || {}), mergeVerification: finalGate.evidence } });
-    await cleanupTaskWorkspace({ project, worker, forceBranch: false });
-    await completeIdeaIfReady(store.getTask(task.id));
-    return { task: store.getTask(task.id), provider: 'local', merge, checkpointHead: worker.checkpointHead };
+    return withActiveProjectMerge(project.id, projectAdmissionIdentity(project), async (currentProject) => {
+      let merge;
+      try {
+        merge = await mergeTaskBranch({
+          repoPath: currentProject.repoPath,
+          branch: worker.branch,
+          baseBranch: currentProject.baseBranch || 'main',
+          expectedHead: worker.checkpointHead,
+          expectedTree: reviewedTree,
+          beforeMerge: () => confirmCurrentActiveProject(project.id, projectAdmissionIdentity(project), 'merge'),
+        });
+      } catch (error) {
+        if (error?.code === 'LOCAL_MERGE_INTEGRITY') {
+          await store.compareAndSetProjectStatus(project.id, {
+            expectedProjectIdentity: projectAdmissionIdentity(project),
+            expectedStatus: 'active',
+            status: 'blocked',
+          });
+          await store.updateTask(task.id, { state: 'needs_input', supervisorFeedback: error.message });
+        }
+        throw error;
+      }
+      await store.updateTask(task.id, { state: 'done' });
+      await store.updateRun(supervisor.id, { status: 'merged', mergeHead: merge.head, workerHead: worker.checkpointHead, evidence: { ...(supervisor.evidence || {}), mergeVerification: finalGate.evidence } });
+      await cleanupTaskWorkspace({ project: currentProject, worker, forceBranch: false });
+      await completeIdeaIfReady(store.getTask(task.id));
+      return { task: store.getTask(task.id), provider: 'local', merge, checkpointHead: worker.checkpointHead };
+    });
   }
 
   async function recover() {
     const state = store.snapshot();
     const actions = [];
+    for (const run of state.runs.filter((item) => item.legacyTerminationUnconfirmed === true)) {
+      let statusEvidence = { valid: false, present: false, status: null };
+      if (run.sessionId && run.worktreePath) {
+        const statuses = await opencode.sessionStatus(run.worktreePath).catch(() => null);
+        statusEvidence = inspectSessionStatusRecord(statuses, run.sessionId);
+      }
+      if (statusEvidence.valid && (!statusEvidence.present || statusEvidence.status.type === 'idle')) {
+        await store.updateRun(run.id, {
+          dispatchUncertain: false, quarantineReason: null, legacyTerminationUnconfirmed: false,
+          terminationConfirmedAt: new Date().toISOString(),
+        });
+        actions.push({ type: 'run.legacy_termination_confirmed', runId: run.id });
+      } else {
+        await store.updateRun(run.id, {
+          dispatchUncertain: true,
+          error: statusEvidence.valid
+            ? 'Legacy terminal Run still has an active/unknown external session; ownership remains quarantined.'
+            : 'Legacy terminal Run termination cannot be confirmed because runner status evidence is unavailable or malformed.',
+        });
+        actions.push({ type: 'run.legacy_termination_pending', runId: run.id });
+      }
+    }
     for (const run of state.runs.filter((item) => ['preparing', 'running', 'retrying'].includes(item.status))) {
-      if (!run.sessionId || !run.worktreePath) {
-        await failRun(run, 'Recovered an incomplete active run without a session/worktree');
-        actions.push({ type: 'run.failed_incomplete', runId: run.id });
+      if (run.status === 'preparing' && !run.sessionId && !run.dispatchPhase) {
+        await failRun(run, 'Recovered a Run before external session creation began; retry explicitly if needed.');
+        actions.push({ type: 'run.pre_dispatch_interrupted', runId: run.id });
+      } else if (!run.sessionId || !run.worktreePath) {
+        await quarantineUnconfirmedTermination(run, 'Recovered active Run is missing runner session/worktree evidence.');
+        actions.push({ type: 'run.recovery_quarantined', runId: run.id });
       } else if (run.status === 'preparing') {
         await store.updateRun(run.id, { status: 'running', error: 'Recovered after process restart; reconciling existing runner session.' });
         actions.push({ type: 'run.recovered', runId: run.id });
       } else {
         const statuses = await opencode.sessionStatus(run.worktreePath).catch(() => null);
-        if (statuses !== null && !Object.prototype.hasOwnProperty.call(statuses, run.sessionId)) {
-          await failRun(run, 'Recovered run failed fast: runner session no longer exists on a healthy runner after restart.');
-          actions.push({ type: 'run.failed_zombie_session', runId: run.id });
+        const statusEvidence = inspectSessionStatusRecord(statuses, run.sessionId);
+        if (statusEvidence.valid && !statusEvidence.present) {
+          await store.updateRun(run.id, { error: 'Recovered Run is absent from the active-status map; normal reconciliation must inspect its persisted session messages before deciding the outcome.' });
+          actions.push({ type: 'run.recovered_idle_status', runId: run.id });
+        } else if (!statusEvidence.valid) {
+          await store.updateRun(run.id, { error: 'Runner returned unavailable or malformed session-status evidence during restart recovery; retaining Run ownership.' });
+          actions.push({ type: 'run.recovery_status_unavailable', runId: run.id });
         }
       }
     }
@@ -556,22 +974,48 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     opencodeOverview,
     githubOverview,
     recover,
-    startIdeaPlanning: (id) => lockIdea(id, () => startIdeaPlanningUnlocked(id)),
-    startWorker: (id) => lockTask(id, () => startWorkerUnlocked(id)),
-    startSupervisor: (id) => lockTask(id, () => startSupervisorUnlocked(id)),
+    startIdeaPlanning: (id, admission) => lockIdea(id, () => startIdeaPlanningUnlocked(id, admission)),
+    startWorker: (id, admission) => lockTask(id, () => startWorkerUnlocked(id, admission)),
+    startSupervisor: (id, admission) => lockTask(id, () => startSupervisorUnlocked(id, admission)),
     publishTask: (id) => lockTask(id, () => publishTaskUnlocked(id)),
     reconcilePublishedTask: (id) => lockTask(id, () => reconcilePublishedTaskUnlocked(id)),
     reconcileRun: (run) => lockTask(typeof run === 'string' ? store.getRun(run)?.taskId || run : run.taskId, () => reconcileRunUnlocked(run)),
     mergeApprovedTask: (id) => lockTask(id, () => mergeApprovedTaskUnlocked(id)),
     latestWorker,
+    cleanupPlannerRun,
     async abortRun(id) {
       const run = store.getRun(id);
       if (!run) throw new Error('Run not found');
       return lockTask(run.taskId, async () => {
         const current = store.getRun(id);
-        if (current.sessionId && current.worktreePath) await opencode.abort({ directory: current.worktreePath, sessionId: current.sessionId }).catch(() => {});
-        await store.updateRun(id, { status: 'aborted', finishedAt: new Date().toISOString() });
-        if (current.taskId) await store.updateTask(current.taskId, { state: 'needs_input', supervisorFeedback: 'Run aborted by user/control plane.' });
+        if (TERMINAL_RUN_STATUSES.has(current.status)) {
+          if (current.dispatchUncertain === true || current.quarantineReason) {
+            if (!await abortAndConfirmStopped(current)) {
+              if (current.status === 'aborted') await markAbortedWorkNeedsInput(current, current.quarantineReason || 'Run abort remains unconfirmed.');
+              return store.getRun(id);
+            }
+            await store.updateRun(id, {
+              dispatchUncertain: false, quarantineReason: null, legacyTerminationUnconfirmed: false,
+              terminationConfirmedAt: current.terminationConfirmedAt || new Date().toISOString(),
+            });
+          } else if (current.status !== 'aborted') {
+            throw new Error(`Run cannot be aborted from terminal status ${current.status}`);
+          }
+          if (current.status === 'aborted') await markAbortedWorkNeedsInput(current, current.error || 'Run aborted by user/control plane.');
+          return store.getRun(id);
+        }
+        if (!ACTIVE_RUN_STATUSES.has(current.status)) throw new Error(`Run cannot be aborted from terminal status ${current.status}`);
+        const message = 'Run aborted by user/control plane.';
+        if (!await abortAndConfirmStopped(current)) {
+          await quarantineUnconfirmedTermination(current, message);
+          return store.getRun(id);
+        }
+        const finishedAt = new Date().toISOString();
+        await store.updateRun(id, {
+          status: 'aborted', dispatchUncertain: false, quarantineReason: null, legacyTerminationUnconfirmed: false,
+          terminationConfirmedAt: finishedAt, error: message, finishedAt,
+        });
+        await markAbortedWorkNeedsInput(current, message);
         return store.getRun(id);
       });
     },

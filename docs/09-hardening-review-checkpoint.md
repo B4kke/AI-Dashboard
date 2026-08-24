@@ -6,18 +6,35 @@ PR: #2
 
 This document is the durable checkpoint for the current adversarial review. It intentionally distinguishes observed gaps, implementation work, deterministic verification and external dogfood. A checked item may only be marked complete when the repository state and fresh evidence support it.
 
+Current evidence boundary: the working tree contains the implementation and focused deterministic tests described below. It is not yet a clean final commit with fresh Linux + Windows GitHub Actions, and the full current-stack real OpenCode + disposable GitHub/Actions PC beta has not yet been performed. Those two external gates remain open regardless of local test results.
+
 ## Binding implementation order
 
-1. Fail closed when Task `workScopes` are missing or unknown. Unknown scope must behave conservatively (project-wide ownership / serialized mutating admission), not as conflict-free parallel work.
-2. Extend the planner result contract so generated Tasks carry explicit `workScopes`, and persist those scopes through planner result -> Task creation.
-3. Enforce Task scope against the actual committed checkpoint diff. A worker that changes files outside its effective scope must be rejected before supervisor review.
-4. Ensure explicit Task `workScopes` reach the worker prompt even when no specialist `agentId` is assigned.
-5. Add Project readiness/preflight: repository validity, base branch, clean/syncable base, verification commands, harness/model availability and GitHub configuration as applicable. Autonomous admission must not silently proceed from an unready Project.
-6. Add safe Task repair/editing for `backlog` and `needs_input`, including acceptance criteria, verification commands, dependencies, model/role and workScopes.
-7. Add a first-class dashboard flow for `needs_input`: record operator response separately from authority, and resume only through an explicit normal requeue transition.
-8. Add Project settings/editing so readiness failures can be repaired without editing raw state.
-9. Add regression tests for unknown scopes, planner scope round-trip, unassigned Task scope prompt context and diff-vs-scope rejection.
-10. Extend the real PC beta harness/checklist with the new scope/readiness/recovery scenarios, then repeat the full current-head OpenCode + disposable GitHub Actions campaign. External dogfood remains a separate evidence level and must never be inferred from deterministic CI.
+1. **Implemented + focused deterministic coverage:** missing/unknown Task `workScopes` are whole-Project ownership, not conflict-free parallel work.
+2. **Implemented + focused deterministic coverage:** planner results require explicit `workScopes`; atomic materialization persists them through generated Task creation/recovery.
+3. **Implemented + focused deterministic coverage:** Task scope is enforced against the cumulative original-scope-base -> checkpoint diff before verification/review.
+4. **Implemented + focused deterministic coverage:** explicit Task `workScopes` reach the worker prompt even without a specialist `agentId`.
+5. **Implemented + focused deterministic coverage:** Project readiness/preflight validates status, repository/base cleanliness and synchronization, verification, harness/concrete model and GitHub identity/access as applicable; admission binds exact identities/model/base.
+6. **Open:** a complete safe Task repair/editing surface for `backlog`/`needs_input` (criteria, verification, dependencies, model/role and scopes) is not yet implemented through the public control UI/API.
+7. **Partially implemented:** native MCP `task_resolve_input` correctly separates `record_only` from explicit `resume`; the first-class ordinary dashboard operator flow remains open.
+8. **Partially implemented:** Project PATCH and structured preflight/repair state exist, but a complete Project settings editing flow in the dashboard remains open.
+9. **Implemented + focused deterministic coverage:** regression tests cover unknown scopes, planner round-trip/recovery, unassigned prompt scope, registry ownership and cumulative diff-vs-scope rejection.
+10. **Harness/checklist hardened + deterministic coverage; external execution open:** beta now requires a clean exact commit, stable Project/Task IDs, full resume contracts, canonical evidence and fail-closed duplicate rejection. The full exact-final-commit OpenCode + disposable GitHub Actions campaign still must be run and preserved.
+
+## Implemented hardening truth
+
+- Worker/planner/supervisor preflight persists structured readiness. Project-scoped failure pauses `active -> needs_sync`; Task-scoped failure blocks only that Task in `needs_input`; a proven repair can return the Project to `active`.
+- Internal admission binds readiness-relevant Project/Task identities, one concrete selected/default model and the exact synchronized/inspected base SHA. StateStore atomically rechecks current capacity, duplicate active/uncertain Runs, assignment, registry ownership and worker overlap when it claims work. Fresh worktrees, retry baselines and review baselines must match the proven base.
+- Only active/uncertain worker Runs own mutation scopes. Planner/supervisor Runs remain read-only scope-wise while consuming concurrency. Read-only Agent roles cannot execute work Tasks. An unassigned Task retains authoritative scope and cannot bypass an enabled specialist's overlapping registry ownership.
+- Task agent assignment and `workScopes` may change only before **all** execution history. Any Run or positive iteration freezes them even if state later becomes `backlog` or `needs_input`. Agent execution identity likewise cannot drift around an unfinished assigned Task after history exists.
+- Checkpointing persists versioned parent/tree/message intent, creates/recovers an exact `commit-tree` commit, and accepts only one parent equal to trusted `baseHead` with the exact intent tree. Scope evidence is cumulative from original `scopeBaseHead`, so intermediate worker commits cannot hide changes.
+- Control-plane Git uses trusted absolute executables outside the worktree, disables replacement refs, rejects legacy graft/executable config and parses exact NUL-delimited change paths (including rename/copy pairs). Hidden index flags and recursive submodule drift/ignored state fail closed. Scope identity is NFKC/case-conservative and ambiguous filenames fail closed.
+- Verification rejects ignored files and runtime-only empty directories, so commands cannot pass using filesystem inputs absent from the reviewed checkpoint.
+- Result contracts are applied only after structurally valid message evidence and an idle/missing owned harness session. Busy/retry/unknown sessions and unconfirmed timeout/abort retain Run/scope ownership; schema v8 persists explicit termination proof and quarantines legacy terminal Runs until proof is recovered.
+- Project identity and current-active status are CAS-confirmed at irreversible push, PR-create and merge boundaries. Pauses remain resumable; a proven push is retained without creating a PR or charging worker retry budget.
+- Planner materialization is one idempotent StateStore commit: validate canonical plan/candidates/dependencies, create only an exact missing suffix in `planning`, rebuild dependency IDs and Idea linkage, then release the whole plan to `backlog`. Ambiguity, invalid dependencies or execution history quarantines candidates/Idea in `needs_input`; replan supersedes old candidates, and uncertain external workers retain ownership until stopped.
+- The production process refuses non-loopback binds, `PORT` does not widen the host, and the whole HTTP control surface rejects non-loopback Host/Origin before routing.
+- Dashboard preserves configured OpenCode role names, forwards only exact live-catalog matches and otherwise omits the role. Obsolete hardcoded normalization to `build`/`plan`/`general` is not current behavior.
 
 ## Project-level autonomy / M3 foundation
 
@@ -29,8 +46,8 @@ This document is the durable checkpoint for the current adversarial review. It i
 
 ## Documentation truth sync
 
-16. Update README/product plan/architecture/roadmap/MCP docs/PC beta checklist when implementation truth changes. Remove stale claims, including old descriptions that GitHub integration is merely the "next layer" and obsolete OpenCode agent-normalization behavior.
-17. Keep PR #2 draft until the current exact head has fresh Linux + Windows CI and the real current-stack PC beta has been performed. Do not merge from deterministic tests alone.
+16. **Updated in this hardening change:** README/architecture/roadmap/MCP/checkpoint/PC-beta docs describe the implemented boundaries and remove obsolete OpenCode agent-normalization behavior. Recheck them again if the final integrated code changes.
+17. **Open external gate:** keep PR #2 draft until one clean exact final commit has fresh Linux + Windows GitHub Actions and the real current-stack full PC beta has been performed with preserved evidence. Do not merge from deterministic tests alone.
 
 ## Review invariants
 

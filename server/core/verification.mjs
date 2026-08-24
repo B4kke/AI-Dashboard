@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveTrustedExecutable, trustedExecutionEnvironment } from './trusted-executable.mjs';
 
 const execFileAsync = promisify(execFile);
 const FORBIDDEN = /[\u0000-\u001f\u007f|&;<>`$(){}]/;
@@ -64,13 +65,18 @@ export async function runVerificationCommands({ cwd, commands = [], timeoutMs = 
     const startedAt = new Date().toISOString();
     const safeDisplay = bounded(parsed.display, 2_000);
     try {
-      const { stdout, stderr } = await execFileAsync(parsed.command, parsed.args, {
+      const executable = resolveTrustedExecutable(parsed.command, { cwd });
+      const { stdout, stderr } = await execFileAsync(executable, parsed.args, {
         cwd,
         encoding: 'utf8',
         windowsHide: true,
         timeout: timeoutMs,
         maxBuffer: 4 * 1024 * 1024,
-        env: { ...process.env, CI: process.env.CI || '1', GIT_TERMINAL_PROMPT: '0' },
+        env: {
+          ...trustedExecutionEnvironment(process.env, { cwd }),
+          CI: process.env.CI || '1',
+          GIT_TERMINAL_PROMPT: '0',
+        },
       });
       results.push({ command: safeDisplay, status: 'passed', exitCode: 0, stdout: bounded(stdout), stderr: bounded(stderr), startedAt, finishedAt: new Date().toISOString() });
     } catch (error) {

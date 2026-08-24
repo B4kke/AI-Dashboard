@@ -12,6 +12,8 @@ function exactSessionTitle(run, humanTitle) {
   return `[AI-DASHBOARD:${run.id}] ${humanTitle}`;
 }
 
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'merged', 'failed', 'aborted']);
+
 export function createRecoverableOpenCode({ client, store }) {
   return new Proxy(client, {
     get(target, property) {
@@ -96,12 +98,14 @@ export function createRecoverableOpenCode({ client, store }) {
 }
 
 async function markPrePromptFailure(store, run, message) {
+  const finishedAt = new Date().toISOString();
   await store.updateRun(run.id, {
     status: 'failed',
     dispatchPhase: 'pre_prompt_interrupted',
     dispatchUncertain: false,
     error: message,
-    finishedAt: new Date().toISOString(),
+    finishedAt,
+    terminationConfirmedAt: finishedAt,
   });
   const task = run.taskId ? store.getTask(run.taskId) : null;
   if (!task) return;
@@ -120,14 +124,20 @@ export function decorateOpenCodeDispatchRecovery({ orchestrator, store, opencode
     const actions = [];
     const before = store.snapshot();
 
-    for (const run of before.runs.filter((item) => ['prompting', 'prompt_ack_unknown'].includes(item.dispatchPhase))) {
+    for (const run of before.runs.filter((item) => (
+      ['prompting', 'prompt_ack_unknown'].includes(item.dispatchPhase)
+      && !TERMINAL_RUN_STATUSES.has(item.status)
+    ))) {
       if (run.status !== 'dispatch_unknown' || run.dispatchUncertain !== true || run.finishedAt) {
         await store.updateRun(run.id, { status: 'dispatch_unknown', dispatchUncertain: true, finishedAt: null });
       }
       actions.push({ type: 'run.dispatch_uncertain_recovered', runId: run.id, taskId: run.taskId });
     }
 
-    for (const run of before.runs.filter((item) => ['creating_session', 'session_created'].includes(item.dispatchPhase))) {
+    for (const run of before.runs.filter((item) => (
+      ['creating_session', 'session_created'].includes(item.dispatchPhase)
+      && !TERMINAL_RUN_STATUSES.has(item.status)
+    ))) {
       // If promptAsync had started, the phase would already be `prompting`. Therefore these phases prove
       // that no task prompt was intentionally dispatched by this control-plane process before the crash.
       let sessionId = run.sessionId || null;

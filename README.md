@@ -4,7 +4,7 @@ Self-hosted control center for AI-assisted and progressively autonomous project 
 
 AI Dashboard connects existing projects/repositories, direct Tasks, optional Ideas/Explorations, specialist agents, AI coding harnesses, model providers, MCP capabilities, read-only Research Runs, isolated Git worktrees and GitHub/CI evidence behind one fail-closed control plane.
 
-> Status: pre-alpha / PC-beta candidate with an early MCP + Agent Registry slice. Deterministic Linux/Windows tests exist; real OpenCode/MCP interoperability and the complete current-stack PC beta remain separate verification gates.
+> Status: pre-alpha / PC-beta candidate with an early MCP + Agent Registry slice. The current hardening boundaries have deterministic tests, but fresh Linux + Windows GitHub Actions on the exact final commit and the complete current-stack OpenCode/GitHub PC beta are still open verification gates.
 
 ## Product model
 
@@ -29,6 +29,8 @@ Exploration -> direct-model analysis/report -> explicit idempotent Project promo
 ```
 
 Exploration/Research context is never implementation evidence.
+
+Planner output is also fail-closed. Generated work Tasks stay in the non-executable `planning` quarantine while one StateStore transaction validates the complete persisted plan, reconstructs only an exact missing suffix after a crash, resolves dependency IDs, links the Idea and releases the complete set to `backlog`. Invalid/ambiguous partial state moves the Idea and candidates to `needs_input`; a replan supersedes and quarantines the old candidates instead of reusing them as new work.
 
 ## Harness != Provider != Model != MCP
 
@@ -103,11 +105,15 @@ See `docs/07-mcp-agent-architecture.md` and `docs/08-mcp-input-required.md`.
 
 ## Agent Registry and non-overlapping specialists
 
-State schema v7 contains durable project agents. A specialist can define name, role, harness, model, instructions, capabilities, explicit project-relative `workScopes` and enabled state.
+State schema v8 contains durable project agents and explicit external-session termination proof. The Agent Registry introduced in v7 lets a specialist define name, role, harness, model, instructions, capabilities, explicit project-relative `workScopes` and enabled state.
 
-Parent/child scopes overlap: `server` conflicts with `server/mcp`. Two enabled mutating specialists cannot own overlapping registered scopes. A Task assigned to a specialist must remain inside that specialist's scopes and snapshots identity/instructions/model.
+Parent/child scopes overlap: `server` conflicts with `server/mcp`. Two enabled mutating specialists cannot own overlapping registered scopes. Read-only roles (`supervisor`, `reviewer`, `research`, `planner`, `master`) do not own mutation scopes and cannot be assigned an executable work Task. A Task assigned to a mutating specialist must remain inside that specialist's scopes and snapshots identity/instructions/model.
 
-Most importantly, overlap is **also enforced at runtime** under the same durable Project run-admission lock as concurrency. A second worker is rejected if its effective scope overlaps another active worker. `dispatch_unknown` and `dispatchUncertain` retain ownership until reconciled, so a lost OpenCode acknowledgement cannot free the same code area prematurely.
+An unassigned work Task still has authoritative Task scopes. Missing/unknown scopes conservatively mean whole-Project ownership, and an unassigned Task cannot claim a path already owned by an enabled mutating specialist; it must first be assigned to the owner. Agent assignment and Task scopes may change only while the Task has no execution history: any Run or positive iteration freezes them even if the Task later returns to `backlog` or `needs_input`.
+
+Scope identity is conservative across platforms: prefixes are NFKC-normalized and compared case-insensitively, while absolute, traversal, glob-like and cross-platform ambiguous segments are rejected. Git changed-path evidence uses exact NUL-delimited path fields; non-canonical, control-character or whitespace-ambiguous paths fail scope validation instead of being reparsed or normalized into an allowed prefix.
+
+Most importantly, overlap is **also enforced at runtime** under the same durable Project run-admission lock as concurrency and again in the atomic worker claim. Only active/uncertain worker Runs own mutation scopes; planner and supervisor Runs still consume concurrency but do not claim files. A second worker is rejected if its effective scope overlaps another active worker. `dispatch_unknown` and `dispatchUncertain` retain ownership until reconciled, so a lost OpenCode acknowledgement cannot free the same code area prematurely.
 
 Assigned specialist name/instructions/scopes reach the actual worker prompt. Correct work that crosses ownership must stop as `needs_input` rather than steal sibling scope.
 
@@ -121,12 +127,24 @@ It cannot fabricate evidence, approve its own coding work, interpret unavailable
 
 Persistent Master chat/persona/memory and a full automatic fleet scheduler are not implemented yet; the MCP/Agent foundation is.
 
+## Project readiness and admission identity
+
+Worker, planner and supervisor starts enter a fail-closed Project preflight before a harness session is created. The check covers active Project status, a valid clean local Git repository on the configured base branch, safely parseable control-plane verification commands, OpenCode health plus an available explicit or single unambiguous default model and, for GitHub Projects, configured repository/origin identity, write access and fast-forward synchronization to the remote base.
+
+Project-scoped blockers pause an active Project as `needs_sync`; Task-scoped blockers such as an unavailable Task model move only that Task to `needs_input`. A successful repair can return `needs_sync` to `active`. Structured preflight evidence is persisted and exposed through `POST /api/projects/:id/preflight`.
+
+Preflight snapshots readiness-relevant Project/Task identities, the exact proven base commit and the concrete selected/default model. The StateStore claim atomically rejects identity, state, capacity, duplicate-Run, assignment or scope drift after the check, and dispatch binds the proven model rather than resolving a different default later. Fresh worktree creation rejects any different base SHA. A retry may reuse a worktree only when its control-plane-owned baseline still equals the newly proven Project base; otherwise it stops for explicit resynchronization.
+
+Publication and merge re-confirm the same Project identity and current `active` status at their irreversible boundaries. A pause before push, PR creation or merge stops that side effect. If a pause lands after a proven push but before PR creation, the Task remains `awaiting_publish` with its push evidence so it can resume without treating the pause as an implementation failure.
+
 ## Coding autonomy pipeline
 
 ```text
 Task
+ -> durable Project run-admission lock + initial concurrency/scope check
+ -> Project readiness + exact-base proof
  -> dependency + policy admission
- -> durable concurrency + scope check
+ -> atomic identity/capacity/duplicate-Run/ownership claim
  -> isolated worktree/ai-* branch
  -> OpenCode worker
  -> versioned result claim
@@ -141,6 +159,8 @@ Task
 
 Worker claims do not establish success. Verification/evidence comes from the control plane and external machine state.
 
+The checkpoint boundary is recoverable and Git-native: before committing, the control plane persists a versioned intent containing the trusted parent SHA, staged tree SHA and message. It creates or recovers the commit with `commit-tree`, then requires exactly one parent equal to the Run's trusted starting head and an exact tree match. Scope is checked over the cumulative diff from the original `scopeBaseHead` to the latest checkpoint, so a worker-created intermediate commit cannot hide an earlier out-of-scope change. Control-plane Git ignores replacement refs, rejects legacy `info/grafts` metadata and parses changed paths from NUL-delimited output so local Git metadata or special filenames cannot rewrite evidence lineage/scope.
+
 ## Official SDK boundaries
 
 ### OpenCode
@@ -150,6 +170,8 @@ Pinned `@opencode-ai/sdk@1.18.21` provides session/status/message/diff/abort/pro
 Dashboard retains deterministic Run/session recovery, worktrees, prompts/role semantics, result validation, evidence and irreversible policy.
 
 The pinned SDK did not expose the documented structured-output `format` request shape when inspected. The versioned `AI_DASHBOARD_RESULT` marker contract remains authoritative until the published SDK exposes that capability and regression tests prove it.
+
+Configured Dashboard role names are preserved. Before each prompt the adapter discovers the live OpenCode agent catalog and forwards the role only when that exact agent exists; unsupported names are omitted so OpenCode uses its own default. The control plane no longer rewrites roles to hardcoded `build`/`plan`/`general` aliases.
 
 ### GitHub
 
@@ -169,7 +191,11 @@ Exploration research is currently model analysis only; live source-aware retriev
 
 SQLite/WAL is the default control-plane store; JSON is legacy import only. Persisted state includes a monotonic revision and transition journal. Durable operation leases protect critical operations. State becomes visible through SSE/MCP notifications only after persistence commits.
 
+Planner materialization is one StateStore mutation/commit: candidate validation, exact-suffix recovery, dependency rebuilding, Idea linkage and final backlog release cannot become separately visible. Replaying the same completed plan is idempotent.
+
 OpenCode dispatch has explicit crash windows and deterministic Run-scoped session identity. A possibly accepted prompt acknowledgement is reconciled rather than blindly replayed. Interrupted direct-model requests are also not silently replayed.
+
+A worker result contract is applied only after the owned OpenCode session is proven `idle` or missing. `busy`, retrying or unknown status retains Run/scope ownership; timeout, retry exhaustion and manual abort likewise remain quarantined until the external session is explicitly confirmed stopped.
 
 Current leases are suitable for the single-control-plane beta target; they are not full distributed fencing tokens for multi-instance production autonomy.
 
@@ -183,8 +209,9 @@ Unknown GitHub/CI state is not success. Base movement and reviewed tree/head dri
 
 Current safe assumption is **local/private loopback**:
 
-- Dashboard MCP/admin are disabled on non-loopback binds,
-- Node MCP handling validates localhost Host/Origin,
+- the main process refuses a non-loopback bind before startup; setting `PORT` changes only the port,
+- the complete HTTP control surface validates loopback Host/Origin before API, static or MCP handling,
+- Dashboard MCP/admin remain loopback-only,
 - no claim of authenticated public MCP yet,
 - secrets never belong in state/URLs/prompts/UI/elicitation forms,
 - external MCP output/input requests are untrusted,
@@ -267,7 +294,12 @@ MCP server endpoints:
 - durable specialist Agent Registry,
 - Task assignment/workScopes,
 - static + runtime anti-overlap,
+- fail-closed Project preflight, `needs_sync` repair state and exact-base admission,
+- atomic Project/Task identity, concurrency, duplicate-Run and scope revalidation at claim,
 - specialist identity/instructions in worker prompt,
+- persisted exact-one-parent checkpoint intent + cumulative diff/scope evidence,
+- atomic/idempotent planner materialization and replan quarantine,
+- process-level loopback bind refusal + control-surface Host/Origin validation,
 - isolated worktrees/checkpoints/evidence,
 - CI/branch-policy/supervisor/expected-head merge loop,
 - restart/idempotency guards,
@@ -285,6 +317,8 @@ Keep claims separate:
 
 Do not promote a level-2/3 MCP test into a claim that every real MCP host has been verified.
 
+For the current hardening work, level 1 and focused deterministic coverage exist. Fresh level-3 Linux + Windows GitHub Actions on the exact final commit and level-4 full PC beta evidence have not yet been produced and remain required.
+
 ## Canonical docs
 
 - `AGENTS.md` — binding agent/Master/safety rules
@@ -294,5 +328,6 @@ Do not promote a level-2/3 MCP test into a claim that every real MCP host has be
 - `docs/06-sdk-integrations.md` — SDK/protocol boundaries
 - `docs/07-mcp-agent-architecture.md` — MCP + Agent Registry model
 - `docs/08-mcp-input-required.md` — MCP 2026 operator-input contract
+- `docs/09-hardening-review-checkpoint.md` — adversarial hardening status and open evidence gates
 
 Canonical tracking issue: https://github.com/B4kke/AI-Dashboard/issues/1

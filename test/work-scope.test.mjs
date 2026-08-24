@@ -7,13 +7,20 @@ import { StateStore } from '../server/core/state-store.mjs';
 import { activeScopeConflicts, decorateRunAdmission } from '../server/core/run-admission-guard.mjs';
 import { normalizeWorkScopes, scopeSetsOverlap, scopesOverlap } from '../server/core/work-scope.mjs';
 
-test('work scopes normalize project-relative prefixes and reject traversal/globs', () => {
-  assert.deepEqual(normalizeWorkScopes(['./server/mcp/', 'server/mcp', 'public']), ['public', 'server/mcp']);
+test('work scopes normalize case-insensitive project-relative prefixes and reject absolute/traversal/glob forms', () => {
+  assert.deepEqual(normalizeWorkScopes(['./Server/MCP/', 'server/mcp', 'public']), ['public', 'server/mcp']);
   assert.equal(scopesOverlap('server', 'server/mcp'), true);
+  assert.equal(scopesOverlap('Server', 'server/mcp'), true);
   assert.equal(scopesOverlap('server/mcp', 'server/core'), false);
   assert.equal(scopeSetsOverlap(['apps/web'], ['apps/web/src']), true);
   assert.throws(() => normalizeWorkScopes(['../outside']), /Invalid work scope/);
   assert.throws(() => normalizeWorkScopes(['server/*']), /concrete project-relative path prefix/);
+  assert.throws(() => normalizeWorkScopes(['/server']), /project-relative/);
+  assert.throws(() => normalizeWorkScopes(['C:\\repo\\server']), /project-relative/);
+  assert.throws(() => normalizeWorkScopes(['\\\\server\\share']), /project-relative/);
+  assert.throws(() => normalizeWorkScopes(['．．/outside']), /Invalid work scope/);
+  assert.throws(() => normalizeWorkScopes(['／server']), /project-relative/);
+  assert.throws(() => normalizeWorkScopes(['server／＊']), /concrete project-relative path prefix/);
 });
 
 test('specialist agents and task assignments are durable and constrained to agent scope', async () => {
@@ -25,7 +32,7 @@ test('specialist agents and task assignments are durable and constrained to agen
     const task = await store.addTask({ projectId: project.id, title: 'Implement MCP', agentId: agent.id, workScopes: ['server/mcp/client'], acceptanceCriteria: ['works'] });
     await assert.rejects(() => store.addTask({ projectId: project.id, title: 'Escape scope', agentId: agent.id, workScopes: ['public'] }), /inside the assigned agent workScopes/);
     const reloaded = new StateStore(file); await reloaded.load();
-    assert.equal(reloaded.snapshot().schemaVersion, 7); assert.equal(reloaded.getAgent(agent.id).name, 'MCP specialist');
+    assert.equal(reloaded.snapshot().schemaVersion, 8); assert.equal(reloaded.getAgent(agent.id).name, 'MCP specialist');
     assert.deepEqual(reloaded.getTask(task.id).workScopes, ['server/mcp/client']);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
@@ -37,6 +44,7 @@ test('run admission blocks overlapping specialists atomically but allows disjoin
     const project = await store.addProject({ name: 'Parallel', autonomy: { maxConcurrentRuns: 4 } });
     await store.addAgent({ projectId: project.id, name: 'Core', workScopes: ['server/core'] });
     await assert.rejects(() => store.addAgent({ projectId: project.id, name: 'Overlapping core', workScopes: ['server/core/guards'] }), /overlap enabled specialist/);
+    await assert.rejects(() => store.addAgent({ projectId: project.id, name: 'Case alias', workScopes: ['Server/Core'] }), /overlap enabled specialist/);
     const first = await store.addTask({ projectId: project.id, title: 'Server work', workScopes: ['server'] });
     const overlap = await store.addTask({ projectId: project.id, title: 'MCP work', workScopes: ['server/mcp'] });
     const disjoint = await store.addTask({ projectId: project.id, title: 'UI work', workScopes: ['public'] });

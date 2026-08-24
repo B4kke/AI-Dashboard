@@ -70,6 +70,7 @@ export function decorateMergeRetry({ orchestrator, store }) {
       }
       return result;
     } catch (error) {
+      if (error?.code === 'PROJECT_INACTIVE') throw error;
       const current = store.getTask(taskId) || task;
       const policy = mergePolicy(project);
       const attempts = Number(current.publication?.mergeAttempts || 0) + 1;

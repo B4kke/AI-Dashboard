@@ -36,7 +36,7 @@ On `accept`, the operator response is persisted into the Task's control-plane fe
 
 `record_only` records the answer and keeps the Task in `needs_input`.
 
-`resume` records the answer and calls the existing `StateStore.requeueTask` transition. Only that explicit operator choice moves the Task back to `backlog`.
+`resume` records the answer and calls the existing `StateStore.requeueTask` transition. Only that explicit operator choice can move an ordinary Task back to `backlog`. The transition may still refuse the resume without changing Task state: planner-quarantined generated Tasks and Tasks belonging to a blocked/uncertain Idea materialization require explicit Idea-plan repair or replanning first.
 
 An accepted answer never marks work complete, approves a review, bypasses CI, publishes or merges.
 
@@ -50,7 +50,7 @@ This is fail-closed: absence of an affirmative operator response cannot be inter
 
 The Master AI is allowed to ask for missing context; it is not allowed to infer irreversible authority from conversational text. Separating `response` from `action` prevents an answer such as "use MCP" from being silently interpreted as "resume autonomous execution now".
 
-The operator explicitly chooses whether the answer is context only or whether the Task may be made ready for normal admission again.
+The operator explicitly chooses whether the answer is context only or whether an ordinary Task may be made ready for normal admission again. A resume request is not a repair primitive for planner quarantine or uncertain materialization; those states stay fail-closed until the Idea plan is repaired or explicitly replanned.
 
 After `resume`, all ordinary gates still apply:
 

@@ -60,6 +60,29 @@ test('non-transient GitHub merge conflict blocks immediately instead of retrying
   }
 });
 
+test('Project pause blocks merge without consuming retry budget or changing the approved Task', async () => {
+  const f = await fixture();
+  try {
+    const guarded = decorateMergeRetry({
+      store: f.store,
+      orchestrator: {
+        async mergeApprovedTask() {
+          const error = new Error('Project is blocked; irreversible merge requires an active Project');
+          error.code = 'PROJECT_INACTIVE';
+          throw error;
+        },
+      },
+    });
+    await assert.rejects(() => guarded.mergeApprovedTask(f.task.id), /Project is blocked/);
+    const task = f.store.getTask(f.task.id);
+    assert.equal(task.state, 'ready_to_merge');
+    assert.equal(task.publication.mergeAttempts, undefined);
+    assert.equal(task.supervisorFeedback, null);
+  } finally {
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
 test('transient merge retries stop when the durable retry budget is exhausted', async () => {
   const f = await fixture({ maxMergeAttempts: 2, mergeRetrySeconds: 5 });
   let calls = 0;

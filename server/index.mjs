@@ -20,16 +20,14 @@ import { createOrchestrator } from './orchestrator.mjs';
 import { createHttpServer } from './http-server.mjs';
 import { createDashboardMcp } from './mcp/dashboard-server.mjs';
 import { McpClientManager } from './mcp/client-manager.mjs';
-import { isLoopbackHost } from './mcp/profiles.mjs';
+import { dashboardBindConfiguration } from './core/server-bind.mjs';
 
 const VERSION = '0.0.6';
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PUBLIC = resolve(ROOT, 'public');
-const host = process.env.AI_DASHBOARD_HOST || (process.env.RENDER || process.env.PORT ? '0.0.0.0' : '127.0.0.1');
-const port = Number(process.env.PORT || process.env.AI_DASHBOARD_PORT || 7331);
+const { host, port, privateMode } = dashboardBindConfiguration(process.env);
 const legacyDataFile = resolve(process.env.AI_DASHBOARD_DATA || resolve(ROOT, 'data', 'state.json'));
 const dbFile = resolve(process.env.AI_DASHBOARD_DB || resolve(ROOT, 'data', 'control.sqlite'));
-const privateMode = isLoopbackHost(host);
 
 const events = new EventHub();
 let mcp = null;

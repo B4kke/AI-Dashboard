@@ -13,6 +13,24 @@ function json(response, status, value) {
   response.writeHead(status, { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   response.end(`${JSON.stringify(value)}\n`);
 }
+function loopbackAuthority(value) {
+  try {
+    const hostname = new URL('http://' + String(value || '').trim()).hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname === '[::1]' || hostname === '::1') return true;
+    const parts = hostname.split('.');
+    return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255) && Number(parts[0]) === 127;
+  } catch {
+    return false;
+  }
+}
+
+function trustedPrivateRequest(request, privateMode) {
+  if (!privateMode || !loopbackAuthority(request.headers.host)) return false;
+  const origin = request.headers.origin;
+  if (!origin) return true;
+  try { return loopbackAuthority(new URL(String(origin)).host); } catch { return false; }
+}
+
 async function body(request) {
   const chunks = []; let total = 0;
   for await (const chunk of request) { total += chunk.length; if (total > 1_000_000) throw new Error('Request body too large'); chunks.push(chunk); }
@@ -85,6 +103,15 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
     if (request.method === 'POST' && url.pathname === '/api/ideas') return json(response, 201, await store.addIdea(await body(request)));
     const projectPatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
     if (request.method === 'PATCH' && projectPatch) return json(response, 200, await store.updateProject(decodeURIComponent(projectPatch[1]), await body(request)));
+    const projectPreflight = url.pathname.match(/^\/api\/projects\/([^/]+)\/preflight$/);
+    if (request.method === 'POST' && projectPreflight) {
+      const input = await body(request);
+      const readiness = await orchestrator.projectReadiness(decodeURIComponent(projectPreflight[1]), {
+        taskId: input.taskId || null,
+        kind: input.kind || 'worker',
+      });
+      return json(response, 200, readiness);
+    }
 
     const ideaAnalyze = url.pathname.match(/^\/api\/ideas\/([^/]+)\/analyze$/);
     if (request.method === 'POST' && ideaAnalyze) return json(response, 202, await orchestrator.startIdeaPlanning(decodeURIComponent(ideaAnalyze[1])));
@@ -128,6 +155,9 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
 
   return createServer(async (request, response) => {
     try {
+      if (!trustedPrivateRequest(request, privateMode)) {
+        return json(response, 403, { error: 'AI Dashboard control surface is available only through a loopback Host/Origin in private mode' });
+      }
       const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
       if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
         if (!mcp) return json(response, 403, { error: 'MCP is disabled unless AI Dashboard is bound to loopback/private mode' });
@@ -138,9 +168,12 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
     } catch (error) {
       const message = String(error?.message || error || 'Request failed');
       const status = /not found/i.test(message) ? 404
-        : /already in progress|cannot .* from state|already promoted|integrity review|cannot be promoted while|already has an active|overlaps active task/i.test(message) ? 409
+        : /already in progress|cannot .* from state|already promoted|integrity review|cannot be promoted while|already has an active|overlaps active task|preflight failed/i.test(message) ? 409
         : /required|valid .*id|choose .*model|invalid|request body too large|JSON|allowlist|workScope/i.test(message) ? 400 : 500;
-      json(response, status, { error: message });
+      const payload = error?.readiness
+        ? { error: message, code: 'PROJECT_NOT_READY', readiness: error.readiness }
+        : { error: message };
+      json(response, status, payload);
     }
   });
 }

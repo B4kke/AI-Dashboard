@@ -7,7 +7,7 @@ async function api(path, options) {
   const response = await fetch(path, options);
   let value;
   try { value = await response.json(); } catch { value = {}; }
-  if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`);
+  if (!response.ok) { const error = new Error(value.error || `HTTP ${response.status}`); error.payload = value; throw error; }
   return value;
 }
 
@@ -90,7 +90,10 @@ function renderProjects() {
     const verify = project.verificationCommands?.length ? `${project.verificationCommands.length} verification command(s)` : 'NO verification commands';
     const ci = project.repository ? (project.autonomy?.requireCi !== false ? 'CI required' : 'CI optional') : 'local-only';
     const origin = project.sourceExplorationId ? ' · promoted exploration brief' : '';
-    return `<div class="row-card"><div><div class="title">${escapeHtml(project.name)}</div><div class="meta">${escapeHtml(project.repository || project.repoPath || 'workspace not bound')} · base ${escapeHtml(project.baseBranch || 'main')}${origin}<br>${escapeHtml(verify)} · ${escapeHtml(ci)}${models ? `<br>${escapeHtml(models)}` : ''}</div></div><span class="tag">${escapeHtml(project.autonomy?.mode || 'manual')}</span></div>`;
+    const readiness = project.lastPreflight || null;
+    const readinessLabel = !readiness ? 'readiness not checked' : readiness.ok ? 'ready' : `${readiness.blockers?.length || 0} readiness blocker(s)`;
+    const readinessDetails = readiness ? `<details class="research-report"><summary>${escapeHtml(readinessLabel)} · ${escapeHtml(readiness.checkedAt || 'unknown time')}</summary>${(readiness.checks || []).map((item) => `<div class="meta"><span class="tag">${escapeHtml(item.status)}</span> ${escapeHtml(item.id)} · ${escapeHtml(item.summary)}</div>`).join('')}</details>` : '';
+    return `<div class="research-card"><div class="research-head"><div><div class="title">${escapeHtml(project.name)}</div><div class="meta">${escapeHtml(project.repository || project.repoPath || 'workspace not bound')} · base ${escapeHtml(project.baseBranch || 'main')}${origin}<br>${escapeHtml(verify)} · ${escapeHtml(ci)}${models ? `<br>${escapeHtml(models)}` : ''}<br>${escapeHtml(readinessLabel)}</div></div><div class="row-actions"><span class="tag">${escapeHtml(project.status || 'active')}</span><span class="tag">${escapeHtml(project.autonomy?.mode || 'manual')}</span><button class="project-preflight" data-project="${escapeHtml(project.id)}">Sync &amp; check</button></div></div>${readinessDetails}</div>`;
   }).join('') : empty('No projects yet. Register a workspace or promote an Exploration.');
 }
 
@@ -112,7 +115,8 @@ function renderTasks() {
 function renderRuns() {
   $('run-list').innerHTML = state.runs.length ? state.runs.slice().reverse().map((run) => {
     const evidence = run.evidence?.control ? ` · diff ${run.evidence.control.diff?.fileCount ?? '?'} files · verify ${run.evidence.control.verification?.passed ?? 0}/${run.evidence.control.verification?.total ?? 0}` : '';
-    return `<div class="row-card"><div><div class="title">${escapeHtml(run.kind || 'worker')} · ${escapeHtml(run.runner)}</div><div class="meta">${escapeHtml(modelLabel(run.model))} · ${escapeHtml(run.branch || run.sessionId || run.taskId || 'run')}${evidence}${run.error ? `<br>${escapeHtml(run.error)}` : ''}</div></div><div class="row-actions"><span class="tag">${escapeHtml(run.status)}</span>${['running','retrying','dispatch_unknown'].includes(run.status) ? `<button class="abort" data-run="${run.id}">Abort</button>` : ''}</div></div>`;
+    const canAbort = ['running','retrying','dispatch_unknown'].includes(run.status) || run.dispatchUncertain === true || Boolean(run.quarantineReason);
+    return `<div class="row-card"><div><div class="title">${escapeHtml(run.kind || 'worker')} · ${escapeHtml(run.runner)}</div><div class="meta">${escapeHtml(modelLabel(run.model))} · ${escapeHtml(run.branch || run.sessionId || run.taskId || 'run')}${evidence}${run.error ? `<br>${escapeHtml(run.error)}` : ''}</div></div><div class="row-actions"><span class="tag">${escapeHtml(run.status)}</span>${canAbort ? `<button class="abort" data-run="${run.id}">Abort</button>` : ''}</div></div>`;
   }).join('') : empty('No coding-agent runs yet.');
 }
 
@@ -223,6 +227,18 @@ $('exploration-list').addEventListener('click', async (event) => {
   } catch (error) { appendEvent(`exploration action failed  ${error.message}`); alert(error.message); await refresh(); }
 });
 
+$('project-list').addEventListener('click', async (event) => {
+  const button = event.target.closest('button.project-preflight'); if (!button) return;
+  button.disabled = true;
+  try {
+    const report = await api(`/api/projects/${encodeURIComponent(button.dataset.project)}/preflight`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'worker' }),
+    });
+    appendEvent(`project preflight  ${button.dataset.project}  ${report.ok ? 'ready' : `${report.blockers?.length || 0} blocker(s)`}`);
+    await refresh();
+  } catch (error) { appendEvent(`project preflight failed  ${error.message}`); alert(error.message); await refresh(); }
+});
+
 $('idea-list').addEventListener('click', async (event) => { const button = event.target.closest('button.analyze-idea'); if (!button) return; button.disabled = true; try { await api(`/api/ideas/${encodeURIComponent(button.dataset.idea)}/analyze`, { method: 'POST' }); await refresh(); } catch (error) { appendEvent(`idea planning failed  ${error.message}`); alert(error.message); await refresh(); } });
 
 $('task-list').addEventListener('click', async (event) => {
@@ -274,7 +290,7 @@ $('research-form').addEventListener('submit', async (event) => { event.preventDe
 $('provider-form').addEventListener('submit', async (event) => { event.preventDefault(); const form = event.currentTarget; const data = Object.fromEntries(new FormData(form)); await api('/api/model-providers', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }); $('provider-dialog').close(); form.reset(); await refresh(); });
 
 const stream = new EventSource('/api/events');
-for (const type of ['exploration.created','exploration.updated','exploration-run.created','exploration-run.updated','exploration.promoted','exploration.promotion_replayed','project.created','project.updated','idea.created','idea.updated','task.created','task.updated','run.created','run.updated','research.created','research.updated','model-provider.created','model-provider.updated','integration.updated']) {
+for (const type of ['exploration.created','exploration.updated','exploration-run.created','exploration-run.updated','exploration.promoted','exploration.promotion_replayed','project.created','project.updated','project.preflight','idea.created','idea.updated','task.created','task.updated','run.created','run.updated','research.created','research.updated','model-provider.created','model-provider.updated','integration.updated']) {
   stream.addEventListener(type, (event) => { const value = JSON.parse(event.data); appendEvent(`${type}  ${JSON.stringify(value.payload)}`); refresh(); });
 }
 stream.onerror = () => appendEvent('event stream reconnecting');
