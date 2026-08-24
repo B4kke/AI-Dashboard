@@ -40,6 +40,7 @@ export const MCP_PROFILES = Object.freeze({
       'task_assign_agent',
       'task_delegate',
       'task_requeue',
+      'task_resolve_input',
       'research_start',
       'idea_create',
       'idea_plan',
