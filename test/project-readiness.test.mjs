@@ -392,7 +392,7 @@ test('failed GitHub repository readiness pauses the Project as needs_sync', asyn
     assert.equal(starts, 0);
     assert.equal(store.getProject(storedProject.id).status, 'needs_sync');
   } finally {
-    await rm(fixture.dir, { recursive: true, force: true });
+    await rm(fixture.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
