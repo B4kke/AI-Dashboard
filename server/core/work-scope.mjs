@@ -36,7 +36,12 @@ export function scopeSetsOverlap(left = [], right = []) {
 export function taskWorkScopes(task, agent = null) {
   const taskScopes = normalizeWorkScopes(task?.workScopes || []);
   if (taskScopes.length) return taskScopes;
-  return normalizeWorkScopes(agent?.workScopes || []);
+  const agentScopes = normalizeWorkScopes(agent?.workScopes || []);
+  if (agentScopes.length) return agentScopes;
+  // Unknown mutating scope is project-wide ownership. This is intentionally
+  // conservative: an unscoped Task must serialize instead of being treated as
+  // conflict-free parallel work.
+  return ['*'];
 }
 
 export function scopeSubset(scopes = [], allowedScopes = []) {
