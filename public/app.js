@@ -4,6 +4,7 @@ import {
   humanizeProjectState,
   projectNextAction,
   projectSummary,
+  taskDependencyStatus,
 } from './presentation.js';
 
 const $ = (id) => document.getElementById(id);
@@ -220,11 +221,14 @@ function renderWorkspace() {
   else if (route.tab === 'evidence') content.innerHTML = renderEvidenceTab(project, tasks);
   else if (route.tab === 'research') content.innerHTML = renderResearchTab(project);
   else if (route.tab === 'settings') content.innerHTML = renderSettingsTab(project);
-  else content.innerHTML = renderOverviewTab(project, tasks, runs);
+  else content.innerHTML = renderOverviewTab(project, tasks, runs, agents);
 }
 
-function taskActionButton(task) {
-  if (task.state === 'backlog') return `<button class="primary compact" data-action="delegate" data-task="${task.id}">Start worker</button>`;
+function taskActionButton(task, tasks = null) {
+  if (task.state === 'backlog') {
+    const dependency = tasks ? taskDependencyStatus(task, tasks) : { ready: true };
+    return dependency.ready ? `<button class="primary compact" data-action="delegate" data-task="${task.id}">Start worker</button>` : '';
+  }
   if (task.state === 'awaiting_publish') return `<button class="primary compact" data-action="publish" data-task="${task.id}">Create pull request</button>`;
   if (task.state === 'awaiting_ci') return `<button class="compact" data-action="refresh-ci" data-task="${task.id}">Check CI again</button>`;
   if (task.state === 'awaiting_review') return `<button class="primary compact" data-action="review" data-task="${task.id}">Send to review</button>`;
@@ -233,30 +237,35 @@ function taskActionButton(task) {
   return '';
 }
 
-function taskRow(task, { showProject = false } = {}) {
+function taskRow(task, { showProject = false, tasks = null } = {}) {
   const publication = task.publication || {};
   const prUrl = safeHttpUrl(publication.prUrl);
   const pr = publication.prNumber ? (prUrl ? `<a href="${escapeHtml(prUrl)}" target="_blank" rel="noreferrer">PR #${publication.prNumber}</a>` : `PR #${publication.prNumber}`) : '';
   const ci = publication.ci?.state && publication.ci.state !== 'none'
     ? `<span class="tag" style="${publication.ci.state === 'failure' ? 'color:var(--danger);' : publication.ci.state === 'success' ? 'color:var(--ok);' : ''}">CI ${escapeHtml(publication.ci.state)}</span>` : '';
   const feedback = task.supervisorFeedback ? `<div class="small warning-text" style="margin-top:4px;">${escapeHtml(task.supervisorFeedback)}</div>` : '';
+  const dependency = task.state === 'backlog' && tasks ? taskDependencyStatus(task, tasks) : null;
+  const dependencyTag = dependency?.missing?.length
+    ? `<span class="tag" style="color:var(--danger);">dependency needs repair</span>`
+    : dependency && !dependency.ready ? '<span class="tag">waiting on dependency</span>' : '';
   return `<div class="row-card">
     <div style="min-width:0;">
       <div class="title">${escapeHtml(task.title)} ${task.priority !== 'P2' ? `<span class="tag">${escapeHtml(task.priority)}</span>` : ''}</div>
       <div class="meta">${showProject ? `${escapeHtml(projectName(task.projectId))} · ` : ''}${escapeHtml(humanizeTaskState(task.state))}${task.agentName ? ` · ${escapeHtml(task.agentName)}` : ''} ${pr ? `· ${pr}` : ''}</div>
       ${feedback}
     </div>
-    <div class="row-actions">${ci}<button class="subtle compact" data-action="open-evidence" data-task="${task.id}">Evidence</button>${taskActionButton(task)}</div>
+    <div class="row-actions">${dependencyTag}${ci}<button class="subtle compact" data-action="open-evidence" data-task="${task.id}">Evidence</button>${taskActionButton(task, tasks)}</div>
   </div>`;
 }
 
-function renderOverviewTab(project, tasks, runs) {
+function renderOverviewTab(project, tasks, runs, agents) {
   const nextAction = projectNextAction({ project, tasks, runs });
   const workTasks = tasks.filter((task) => task.kind !== 'planning');
   const open = workTasks.filter((task) => task.state !== 'done');
   const needsInput = open.filter((task) => task.state === 'needs_input');
   const inFlight = open.filter((task) => ['in_progress', 'awaiting_publish', 'awaiting_ci', 'awaiting_review', 'reviewing', 'ready_to_merge'].includes(task.state));
-  const ready = open.filter((task) => task.state === 'backlog');
+  const ready = open.filter((task) => task.state === 'backlog' && taskDependencyStatus(task, workTasks).ready);
+  const waitingDependencies = open.filter((task) => task.state === 'backlog' && !taskDependencyStatus(task, workTasks).ready);
   const primaryButton = (() => {
     if (nextAction.taskId && nextAction.kind === 'needs_input') return `<button class="primary" data-action="respond" data-task="${nextAction.taskId}">Respond now</button>`;
     if (project.status === 'needs_sync') return `<button class="primary" data-action="preflight" data-project="${project.id}">Sync &amp; re-check</button>`;
@@ -290,9 +299,10 @@ function renderOverviewTab(project, tasks, runs) {
     </div>
 
     ${project.status === 'needs_sync' ? `<div class="attention-banner"><span>Project paused: synchronization or readiness problem.</span><button class="compact" data-action="preflight" data-project="${project.id}">Sync &amp; re-check</button></div>` : ''}
-    ${needsInput.length ? `<h3 class="task-group-title">Blocked on you (${needsInput.length})</h3><div class="stack">${needsInput.map((task) => taskRow(task)).join('')}</div>` : ''}
-    ${inFlight.length ? `<h3 class="task-group-title">In flight</h3><div class="stack">${inFlight.map((task) => taskRow(task)).join('')}</div>` : ''}
-    ${ready.length ? `<h3 class="task-group-title">Ready for work</h3><div class="stack">${ready.slice(0, 5).map((task) => taskRow(task)).join('')}</div>` : ''}
+    ${needsInput.length ? `<h3 class="task-group-title">Blocked on you (${needsInput.length})</h3><div class="stack">${needsInput.map((task) => taskRow(task, { tasks: workTasks })).join('')}</div>` : ''}
+    ${inFlight.length ? `<h3 class="task-group-title">In flight</h3><div class="stack">${inFlight.map((task) => taskRow(task, { tasks: workTasks })).join('')}</div>` : ''}
+    ${ready.length ? `<h3 class="task-group-title">Ready for work</h3><div class="stack">${ready.slice(0, 5).map((task) => taskRow(task, { tasks: workTasks })).join('')}</div>` : ''}
+    ${waitingDependencies.length ? `<h3 class="task-group-title">Waiting on dependencies</h3><div class="stack">${waitingDependencies.slice(0, 5).map((task) => taskRow(task, { tasks: workTasks })).join('')}</div>` : ''}
     ${!workTasks.length ? emptyBox('No tasks yet', 'Describe a concrete unit of work. The control plane will handle worktree, evidence, review and merge.', `<button class="primary" data-action="new-task" data-project="${project.id}">Create Task</button>`) : ''}
     ${activity ? `<h3 class="task-group-title" style="margin-top:24px;">Recent activity</h3><div class="timeline">${activity}</div>` : ''}`;
 }
@@ -300,19 +310,22 @@ function renderOverviewTab(project, tasks, runs) {
 function renderTasksTab(project, tasks) {
   const work = tasks.filter((task) => task.kind !== 'planning');
   const planning = tasks.filter((task) => task.kind === 'planning' && task.state !== 'done');
+  const ready = work.filter((task) => task.state === 'backlog' && taskDependencyStatus(task, work).ready);
+  const waitingDependencies = work.filter((task) => task.state === 'backlog' && !taskDependencyStatus(task, work).ready);
   const groups = [
     ['Needs your input', work.filter((t) => t.state === 'needs_input')],
     ['Worker working', work.filter((t) => ['in_progress'].includes(t.state))],
     ['Waiting for CI / review / merge', work.filter((t) => ['awaiting_publish', 'awaiting_ci', 'awaiting_review', 'reviewing', 'ready_to_merge'].includes(t.state))],
-    ['Ready', work.filter((t) => t.state === 'backlog')],
+    ['Ready', ready],
+    ['Waiting on dependencies', waitingDependencies],
     ['Done', work.filter((t) => t.state === 'done').slice(-12)],
   ];
   return `
     <div class="section-heading"><div><h2>Tasks</h2><p class="section-copy">Every Task follows the same verified path: worker → evidence → PR/CI → independent review → merge.</p></div>
     <div class="row-actions"><button data-action="new-idea" data-project="${project.id}" class="secondary-action compact">Plan with AI</button><button class="primary compact" data-action="new-task" data-project="${project.id}">+ Task</button></div></div>
-    ${groups.map(([title, items]) => items.length ? `<h3 class="task-group-title">${title} (${items.length})</h3><div class="stack">${items.reverse().map((task) => taskRow(task)).join('')}</div>` : '').join('')}
+    ${groups.map(([title, items]) => items.length ? `<h3 class="task-group-title">${title} (${items.length})</h3><div class="stack">${[...items].reverse().map((task) => taskRow(task, { tasks: work })).join('')}</div>` : '').join('')}
     ${!work.length ? emptyBox('No tasks yet', 'Create the first Task directly — an Idea is optional.', `<button class="primary" data-action="new-task" data-project="${project.id}">Create Task</button>`) : ''}
-    ${planning.length ? `<h3 class="task-group-title">Planner</h3><div class="stack">${planning.map((task) => taskRow(task)).join('')}</div>` : ''}`;
+    ${planning.length ? `<h3 class="task-group-title">Planner</h3><div class="stack">${planning.map((task) => taskRow(task, { tasks: work })).join('')}</div>` : ''}`;
 }
 
 function renderAgentsTab(runs, agents) {
@@ -532,7 +545,7 @@ function renderDiscoveryPanels() {
        <div class="row-actions"><button class="primary compact" data-action="add-discovery-root">Add root &amp; scan</button></div>`;
 
   const localItems = (data.items || []).filter((item) => item.kind === 'local');
-  const localRows = localItems.map((item, index) => {
+  const localRows = localItems.map((item) => {
     const key = `local:${item.repo.path}`;
     const repo = item.repo;
     const match = repo.github ? `<span class="pill ok" title="origin matches GitHub">GitHub ✓</span>` : '<span class="tag">no GitHub match</span>';
@@ -611,7 +624,6 @@ function renderStructuredEvidence(payload) {
   const control = worker?.evidence?.control || {};
   const verification = control.verification || {};
   const diff = control.diff || {};
-  const publication = payload.publication || {};
   const sections = [];
 
   sections.push(['Code', kv([

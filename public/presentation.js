@@ -58,6 +58,18 @@ function latestTaskPublication(task) {
   return task?.publication || null;
 }
 
+// Dependency readiness is derived from the same canonical Task IDs/states that
+// control-plane admission uses. Unknown/cross-Project IDs are never presented
+// as runnable work; unfinished dependencies are normal waiting state.
+export function taskDependencyStatus(task, tasks = []) {
+  const blockedBy = Array.isArray(task?.blockedBy) ? [...new Set(task.blockedBy.filter(Boolean))] : [];
+  if (!blockedBy.length) return { ready: true, missing: [], pending: [] };
+  const byId = new Map(tasks.map((candidate) => [candidate.id, candidate]));
+  const missing = blockedBy.filter((id) => !byId.has(id));
+  const pending = blockedBy.filter((id) => byId.has(id) && byId.get(id).state !== 'done');
+  return { ready: missing.length === 0 && pending.length === 0, missing, pending };
+}
+
 // Single deterministic resolver for "what is happening / what happens next".
 // Priority follows the attention hierarchy in docs/11 §5: operator blockers,
 // then active work, then next ready actions, then healthy/idle state.
@@ -76,6 +88,16 @@ export function projectNextAction({ project, tasks = [], runs = [] } = {}) {
     .sort((a, b) => (a.priority || 'P3').localeCompare(b.priority || 'P3') || String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
   if (needsInput.length) {
     return { kind: 'needs_input', severity: ATTENTION, attention: true, taskId: needsInput[0].id, label: `Needs your input: ${needsInput[0].title}`, count: needsInput.length };
+  }
+
+  const invalidDependency = workTasks.find((task) => task.state === 'backlog' && taskDependencyStatus(task, workTasks).missing.length);
+  if (invalidDependency) {
+    const dependency = taskDependencyStatus(invalidDependency, workTasks).missing[0];
+    return {
+      kind: 'dependency_invalid', severity: ATTENTION, attention: true, taskId: invalidDependency.id,
+      label: `Task dependency needs repair: ${invalidDependency.title}`,
+      detail: `Dependency ${dependency} is not a Task in this Project.`,
+    };
   }
 
   const uncertain = runs.find((run) => run.dispatchUncertain === true);
@@ -119,7 +141,8 @@ export function projectNextAction({ project, tasks = [], runs = [] } = {}) {
   const awaitingReview = workTasks.find((task) => task.state === 'awaiting_review');
   if (awaitingReview) return { kind: 'awaiting_review', severity: NEXT, attention: false, taskId: awaitingReview.id, label: 'Ready for independent review', action: 'review' };
 
-  const readyBacklog = workTasks.filter((task) => task.state === 'backlog');
+  const backlog = workTasks.filter((task) => task.state === 'backlog');
+  const readyBacklog = backlog.filter((task) => taskDependencyStatus(task, workTasks).ready);
   const runnable = readyBacklog.length;
   if (runnable) {
     const highest = [...readyBacklog].sort((a, b) => (a.priority || 'P3').localeCompare(b.priority || 'P3'))[0];
@@ -128,6 +151,12 @@ export function projectNextAction({ project, tasks = [], runs = [] } = {}) {
       severity: NEXT, attention: false,
       taskId: highest.id,
       label: runnable > 1 ? `${runnable} tasks ready` : `Next: ${highest.title}`,
+    };
+  }
+  if (backlog.length) {
+    return {
+      kind: 'dependencies_pending', severity: IDLE, attention: false,
+      label: backlog.length > 1 ? `${backlog.length} tasks waiting on dependencies` : `Waiting on dependencies: ${backlog[0].title}`,
     };
   }
   if (!workTasks.length && !runs.length) return { kind: 'empty', severity: IDLE, attention: false, label: 'No work yet — create a Task' };
@@ -157,7 +186,8 @@ export function projectSummary({ project, tasks = [], runs = [], agents = [] } =
     currentTaskTitle: (() => {
       const inFlight = workTasks.find((task) => ['in_progress', 'awaiting_ci', 'awaiting_review', 'reviewing', 'ready_to_merge', 'awaiting_publish'].includes(task.state));
       if (inFlight) return inFlight.title;
-      const next = open.filter((task) => task.state === 'backlog').sort((a, b) => (a.priority || 'P3').localeCompare(b.priority || 'P3'))[0];
+      const next = open.filter((task) => task.state === 'backlog' && taskDependencyStatus(task, workTasks).ready)
+        .sort((a, b) => (a.priority || 'P3').localeCompare(b.priority || 'P3'))[0];
       return next?.title || null;
     })(),
   };

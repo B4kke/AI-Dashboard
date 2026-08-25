@@ -13,6 +13,11 @@ const execFileAsync = promisify(execFile);
 // destination inside a configured Workspace Root. The repository URL is
 // reconstructed from a strictly parsed owner/repository identity, and Git is
 // always executed as an argument array without any shell interpolation.
+//
+// Recovery is deliberately conservative: an existing destination is reusable
+// only when it is a complete Git repository whose origin and HEAD can be
+// independently proven. Partial/mismatched directories are never deleted or
+// overwritten automatically.
 
 function cloneGitEnvironment(cwd) {
   const env = trustedExecutionEnvironment(process.env, { cwd });
@@ -60,6 +65,41 @@ export async function assertClonedOriginMatches(destinationPath, expectedFullNam
   return origin;
 }
 
+async function assertCloneHasCommit(destinationPath) {
+  const executable = resolveTrustedExecutable('git', { cwd: destinationPath });
+  try {
+    await execFileAsync(executable, ['-C', destinationPath, 'rev-parse', '--verify', 'HEAD^{commit}'], {
+      cwd: destinationPath,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024,
+      env: cloneGitEnvironment(destinationPath),
+    });
+  } catch {
+    throw new Error(`Existing clone destination has no verifiable HEAD commit: ${destinationPath}`);
+  }
+}
+
+export async function inspectExistingClone(destinationPath, expectedFullName) {
+  try {
+    const stats = await lstat(destinationPath);
+    if (!stats.isDirectory()) {
+      throw new Error(`Existing clone destination is not a directory: ${destinationPath}`);
+    }
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { exists: false, reusable: false, repoPath: destinationPath };
+    throw error;
+  }
+  try {
+    await assertClonedOriginMatches(destinationPath, expectedFullName);
+    await assertCloneHasCommit(destinationPath);
+    return { exists: true, reusable: true, repoPath: destinationPath };
+  } catch (error) {
+    throw new Error(`Clone destination already exists but cannot be safely resumed: ${error.message}`);
+  }
+}
+
 export async function cloneGitHubRepository({
   repository,
   rootPath,
@@ -70,7 +110,11 @@ export async function cloneGitHubRepository({
   const expected = parseGitHubRepository(repository);
   const root = await resolveWorkspaceRoot(rootPath, { platform });
   const destination = cloneDestinationFor(root, expected.fullName, { platform });
-  await assertCloneDestinationAvailable(destination);
+  const existing = await inspectExistingClone(destination, expected.fullName);
+  if (existing.reusable) {
+    return { repoPath: canonicalWorktreePath(destination, { platform }), fullName: expected.fullName, reused: true };
+  }
+
   const invocation = buildCloneArguments(expected.fullName, destination);
   const executable = resolveTrustedExecutable(invocation.executable, { cwd: root });
   await execFileAsync(executable, invocation.args, {
@@ -81,7 +125,9 @@ export async function cloneGitHubRepository({
     maxBuffer: 8 * 1024 * 1024,
     env: cloneGitEnvironment(root),
   });
-  // Fail closed unless the cloned origin proves the expected repository identity.
+  // Fail closed unless the cloned origin and a real HEAD commit prove that the
+  // network side effect completed as the requested repository.
   await assertClonedOriginMatches(destination, expected.fullName);
-  return { repoPath: canonicalWorktreePath(destination, { platform }), fullName: expected.fullName };
+  await assertCloneHasCommit(destination);
+  return { repoPath: canonicalWorktreePath(destination, { platform }), fullName: expected.fullName, reused: false };
 }

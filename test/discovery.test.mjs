@@ -11,6 +11,7 @@ import {
   assertClonedOriginMatches,
   buildCloneArguments,
   cloneDestinationFor,
+  cloneGitHubRepository,
 } from '../server/discovery/clone-service.mjs';
 import {
   combineDiscovery,
@@ -19,9 +20,10 @@ import {
   listRepositoriesInRoot,
   scanWorkspaceRoot,
 } from '../server/discovery/discovery.mjs';
+import { createDiscoveryService } from '../server/discovery/service.mjs';
 import { parseGitHubRemote, parseGitHubRepository } from '../server/integrations/github.mjs';
 import { assertSafeRepositoryDirectoryName, resolveWorkspaceRoot, workspacePathKey } from '../server/core/workspace-paths.mjs';
-import { humanizeProjectState, humanizeTaskState, projectNextAction, projectSummary } from '../public/presentation.js';
+import { humanizeProjectState, humanizeTaskState, projectNextAction, projectSummary, taskDependencyStatus } from '../public/presentation.js';
 const exec = promisify(execFile);
 const GIT_USER = ['-c', 'user.name=AI Dashboard Test', '-c', 'user.email=test@example.invalid'];
 
@@ -68,14 +70,16 @@ test('workspace roots persist durably and are idempotent to re-add', async () =>
     await first.load();
     const added = await first.addWorkspaceRoot(dir);
     assert.equal(added.created, true);
-    const replay = await first.addWorkspaceRoot(dir.toUpperCase());
-    if (process.platform === 'win32') assert.equal(replay.created, false);
+    const replayInput = process.platform === 'win32' ? dir.toUpperCase() : dir;
+    const replay = await first.addWorkspaceRoot(replayInput);
+    assert.equal(replay.created, false);
 
     const second = new StateStore(file);
     await second.load();
     assert.equal(second.snapshot().settings.workspaceRoots.length, 1);
-    await second.removeWorkspaceRoot(dir);
-    await assert.rejects(second.removeWorkspaceRoot(dir), /not found/);
+    const canonicalStoredRoot = second.snapshot().settings.workspaceRoots[0];
+    await second.removeWorkspaceRoot(canonicalStoredRoot);
+    await assert.rejects(second.removeWorkspaceRoot(canonicalStoredRoot), /not found/);
     assert.equal((await new StateStore(file).load()).settings.workspaceRoots.length, 0);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
@@ -135,7 +139,7 @@ test('dirty repositories are discovered read-only without mutating the working t
     assert.equal(meta.dirty, true);
     assert.equal(meta.github?.fullName, 'B4kke/dirty-repo');
     const after = await stat(join(repo, 'README.md'));
-    assert.equal(after.mtimeMs, before.mtimeMs, 'discovery must not touch repository files');
+    assert.equal(after.mtimeMs, before.mtimeMs, 'working tree must remain dirty after discovery');
 
     const statusAfter = await exec('git', ['-C', repo, 'status', '--porcelain']);
     assert.match(statusAfter.stdout, / M README\.md/, 'working tree must remain dirty after discovery');
@@ -155,6 +159,21 @@ test('repositories with no remote stay importable local-only projects', async ()
     const result = await store.importDiscoveredProject({ name: 'Local only', repoPath: repo });
     assert.equal(result.created, true);
     assert.equal(result.project.repository, null);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('discovered local import refuses an unproven GitHub binding', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ai-dashboard-import-binding-'));
+  const store = new StateStore(null);
+  try {
+    const repo = join(root, 'local-only');
+    await createGitRepo(repo, {});
+    const discovery = createDiscoveryService({ store, github: null });
+    await assert.rejects(
+      discovery.importLocalRepository({ repoPath: repo, repository: 'B4kke/not-the-origin' }),
+      /no GitHub origin|unproven binding/i,
+    );
+    assert.equal(store.snapshot().projects.length, 0);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -280,6 +299,24 @@ test('cloned origin identity is revalidated against the requested repository', a
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('Clone & Import safely reuses only a complete matching clone after an interrupted import', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ai-dashboard-clone-recovery-'));
+  try {
+    const destination = join(root, 'AI-Dashboard');
+    await createGitRepo(destination, { remote: 'https://github.com/B4kke/AI-Dashboard.git' });
+    const recovered = await cloneGitHubRepository({ repository: 'B4kke/AI-Dashboard', rootPath: root });
+    assert.equal(recovered.reused, true);
+    assert.equal(workspacePathKey(recovered.repoPath), workspacePathKey(destination));
+
+    await exec('git', ['-C', destination, 'remote', 'set-url', 'origin', 'https://github.com/other/repo.git']);
+    await assert.rejects(
+      cloneGitHubRepository({ repository: 'B4kke/AI-Dashboard', rootPath: root }),
+      /cannot be safely resumed|does not match requested repository/i,
+    );
+    assert.equal((await stat(destination)).isDirectory(), true, 'mismatched existing clone is preserved for operator inspection');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('human-readable state mapping translates every canonical Task state', () => {
   assert.equal(humanizeTaskState('backlog'), 'Ready for work');
   assert.equal(humanizeTaskState('in_progress'), 'Worker working');
@@ -353,6 +390,23 @@ test('projectNextAction follows the attention hierarchy deterministically', () =
   assert.match(singleReady.label, /Next: Only task/);
 
   assert.equal(projectNextAction(base).kind, 'empty');
+});
+
+test('presentation readiness follows canonical Task dependencies', () => {
+  const dependency = { id: 'dep', kind: 'work', state: 'in_progress', title: 'Foundation', priority: 'P1' };
+  const blocked = { id: 'blocked', kind: 'work', state: 'backlog', title: 'Dependent feature', priority: 'P0', blockedBy: ['dep'] };
+  assert.equal(taskDependencyStatus(blocked, [dependency, blocked]).ready, false);
+  const waiting = projectNextAction({ project: project('p'), tasks: [dependency, blocked], runs: [] });
+  assert.notEqual(waiting.taskId, 'blocked', 'unfinished dependency must not be advertised as runnable');
+
+  const doneDependency = { ...dependency, state: 'done' };
+  const ready = projectNextAction({ project: project('p'), tasks: [doneDependency, blocked], runs: [] });
+  assert.equal(ready.taskId, 'blocked');
+
+  const invalid = { ...blocked, blockedBy: ['missing-task'] };
+  const invalidAction = projectNextAction({ project: project('p'), tasks: [invalid], runs: [] });
+  assert.equal(invalidAction.kind, 'dependency_invalid');
+  assert.equal(invalidAction.attention, true);
 });
 
 test('projectSummary builds card data from canonical state without technical identifiers', () => {

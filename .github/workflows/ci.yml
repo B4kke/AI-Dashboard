@@ -35,6 +35,57 @@ jobs:
       - name: Tests
         run: npm test
 
+      - name: Rendered UI smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/ui-smoke
+          npm start > .tmp/ui-smoke/server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+
+          node --input-type=module <<'NODE'
+          let lastError = null;
+          for (let attempt = 0; attempt < 80; attempt += 1) {
+            try {
+              const response = await fetch('http://127.0.0.1:7331/api/health');
+              if (response.ok) process.exit(0);
+              lastError = new Error(`health HTTP ${response.status}`);
+            } catch (error) { lastError = error; }
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+          throw lastError || new Error('Dashboard did not become healthy');
+          NODE
+
+          PROJECT_ID="$(node --input-type=module <<'NODE'
+          const response = await fetch('http://127.0.0.1:7331/api/projects', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name: 'Rendered UI Smoke', description: 'Deterministic Project workspace rendering fixture' }),
+          });
+          if (!response.ok) throw new Error(`Project fixture creation failed: HTTP ${response.status} ${await response.text()}`);
+          const project = await response.json();
+          if (!project?.id) throw new Error('Project fixture response is missing id');
+          console.log(project.id);
+          NODE
+          )"
+
+          for SIZE in 1440x1000 768x1000 390x844; do
+            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" 'http://127.0.0.1:7331/#/projects' "home-${SIZE}" '.project-card'
+            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/overview" "project-${SIZE}" '.overview-now'
+          done
+
+      - name: Upload UI smoke screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-smoke-${{ github.sha }}
+          path: |
+            .tmp/ui-smoke/*.png
+            .tmp/ui-smoke/server.log
+          if-no-files-found: warn
+          retention-days: 7
+
   windows-portability:
     name: Windows portability
     runs-on: windows-latest

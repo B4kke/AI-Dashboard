@@ -1,43 +1,61 @@
 // Deterministic rendered-page screenshots via Chrome DevTools Protocol.
-// Usage: node scripts/screenshot.mjs <outDir> <width>x<height> <url> [<name>]
+// Usage: node scripts/screenshot.mjs <outDir> <width>x<height> <url> [<name>] [<expectedSelector>]
+//
+// This is an acceptance smoke gate, not just a screenshot helper: timeout,
+// uncaught runtime errors, console errors or horizontal page overflow fail the
+// process after a diagnostic screenshot has been written.
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile, readdir } from 'node:fs/promises';
+import { access, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const PORT = 9223;
+const CANDIDATES = process.platform === 'win32'
+  ? ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe']
+  : process.platform === 'darwin'
+    ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
+    : ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'];
 
-const [outDir, size, url, nameArg] = process.argv.slice(2);
-if (!outDir || !size || !url) throw new Error('usage: screenshot.mjs <outDir> <WxH> <url> [name]');
+async function resolveChrome() {
+  const requested = process.env.CHROME_PATH?.trim();
+  const candidates = requested ? [requested, ...CANDIDATES] : CANDIDATES;
+  for (const candidate of candidates) {
+    try { await access(candidate); return candidate; } catch { /* continue */ }
+  }
+  throw new Error(`Chrome/Chromium executable not found; checked: ${candidates.join(', ')}`);
+}
+
+const [outDir, size, url, nameArg, expectedSelector = '.project-card, .overview-now, .empty, .integration-list'] = process.argv.slice(2);
+if (!outDir || !size || !url) throw new Error('usage: screenshot.mjs <outDir> <WxH> <url> [name] [expectedSelector]');
 const [width, height] = size.split('x').map(Number);
+if (!Number.isInteger(width) || !Number.isInteger(height) || width < 240 || height < 240) throw new Error(`Invalid viewport size: ${size}`);
 
-const profile = join(tmpdir(), `ai-dashboard-shot-profile-${width}`);
+const CHROME = await resolveChrome();
+const PORT = 9200 + (process.pid % 500);
+const profile = join(tmpdir(), `ai-dashboard-shot-profile-${process.pid}-${width}`);
 const chrome = spawn(CHROME, [
-  '--headless=new', '--disable-gpu', '--no-first-run', '--hide-scrollbars',
+  '--headless=new', '--disable-gpu', '--no-first-run', '--hide-scrollbars', '--disable-dev-shm-usage',
   `--user-data-dir=${profile}`, `--remote-debugging-port=${PORT}`,
   `--window-size=${width},${height}`, 'about:blank',
 ], { stdio: 'ignore' });
 
+const sleep = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+
 async function waitForEndpoint() {
-  for (let i = 0; i < 60; i += 1) {
+  for (let i = 0; i < 80; i += 1) {
     try {
       const response = await fetch(`http://127.0.0.1:${PORT}/json/version`);
       if (response.ok) return;
     } catch { /* retry */ }
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+    await sleep(250);
   }
   throw new Error('Chrome DevTools endpoint did not open');
 }
-await waitForEndpoint();
 
 async function newTab(targetUrl) {
   const response = await fetch(`http://127.0.0.1:${PORT}/json/new?${encodeURIComponent(targetUrl)}`, { method: 'PUT' });
-  const target = await response.json();
-  return target;
+  if (!response.ok) throw new Error(`Chrome could not create tab (${response.status})`);
+  return response.json();
 }
-
-const sleep = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 
 class Cdp {
   constructor(webSocketUrl) { this.webSocketUrl = webSocketUrl; this.nextId = 1; this.pending = new Map(); this.handlers = new Set(); }
@@ -68,40 +86,71 @@ class Cdp {
   }
 }
 
-const target = await newTab(url);
-const client = new Cdp(target.webSocketDebuggerUrl);
-await client.connect();
-await client.send('Page.enable');
-await client.send('Emulation.setDeviceMetricsOverride', {
-  width, height, deviceScaleFactor: 1, mobile: width < 500,
-});
-await client.send('Page.navigate', { url });
-await sleep(400);
+let client = null;
+let failure = null;
+const runtimeErrors = [];
+try {
+  await waitForEndpoint();
+  const target = await newTab(url);
+  client = new Cdp(target.webSocketDebuggerUrl);
+  await client.connect();
+  client.handlers.add((message) => {
+    if (message.method === 'Runtime.exceptionThrown') {
+      const detail = message.params?.exceptionDetails;
+      runtimeErrors.push(detail?.exception?.description || detail?.text || 'uncaught runtime exception');
+    }
+    if (message.method === 'Runtime.consoleAPICalled' && message.params?.type === 'error') {
+      const text = (message.params.args || []).map((arg) => arg.value ?? arg.description ?? '').join(' ');
+      runtimeErrors.push(`console.error: ${text}`);
+    }
+  });
+  await client.send('Page.enable');
+  await client.send('Runtime.enable');
+  await client.send('Emulation.setDeviceMetricsOverride', {
+    width, height, deviceScaleFactor: 1, mobile: width < 500,
+  });
+  await client.send('Page.navigate', { url });
+  await sleep(250);
 
-// Wait until the app has actually rendered data, not merely loaded the shell.
-async function waitForRender() {
-  for (let i = 0; i < 60; i += 1) {
+  let rendered = false;
+  let overflow = null;
+  for (let i = 0; i < 80; i += 1) {
     const probe = await client.send('Runtime.evaluate', { expression: `(() => {
-      const ready = document.querySelector('.project-card, .row-card, .repo-row, .evidence-group, .empty, .integration-list');
+      const ready = document.querySelector(${JSON.stringify(expectedSelector)});
       const connected = document.getElementById('system-label')?.textContent || '';
-      return JSON.stringify({ ready: Boolean(ready), connected });
+      const root = document.documentElement;
+      return JSON.stringify({
+        ready: Boolean(ready), connected,
+        scrollWidth: root.scrollWidth, clientWidth: root.clientWidth,
+        overflow: root.scrollWidth > root.clientWidth + 1,
+      });
     })()`, returnByValue: true });
     const value = JSON.parse(probe.result.value);
-    if (value.ready && value.connected === 'control plane online') return true;
-    await sleep(300);
+    overflow = value;
+    if (value.ready && value.connected === 'control plane online') { rendered = true; break; }
+    if (runtimeErrors.length) break;
+    await sleep(250);
   }
-  return false;
-}
-const rendered = await waitForRender();
-await sleep(500);
+  await sleep(250);
 
-const shot = await client.send('Page.captureScreenshot', { format: 'png' });
-await mkdir(outDir, { recursive: true });
-const files = await readdir(outDir).catch(() => []);
-const base = nameArg || `shot-${width}-${files.length + 1}`;
-const file = join(outDir, `${base}.png`);
-await writeFile(file, Buffer.from(shot.data, 'base64'));
-console.log(`${rendered ? 'RENDERED' : 'TIMEOUT-RENDER'} ${file}`);
-client.socket.close();
-chrome.kill();
-process.exit(0);
+  if (!rendered) failure = `Timed out waiting for rendered selector ${expectedSelector}`;
+  else if (runtimeErrors.length) failure = `Browser runtime error: ${runtimeErrors.join(' | ')}`;
+  else if (overflow?.overflow) failure = `Horizontal page overflow: scrollWidth=${overflow.scrollWidth}, clientWidth=${overflow.clientWidth}`;
+
+  const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+  await mkdir(outDir, { recursive: true });
+  const base = nameArg || `shot-${width}`;
+  const file = join(outDir, `${base}.png`);
+  await writeFile(file, Buffer.from(shot.data, 'base64'));
+  console.log(`${failure ? 'FAILED-RENDER' : 'RENDERED'} ${file}`);
+} catch (error) {
+  failure = failure || error.message;
+} finally {
+  try { client?.socket?.close(); } catch { /* ignore */ }
+  try { chrome.kill(); } catch { /* ignore */ }
+}
+
+if (failure) {
+  console.error(failure);
+  process.exit(1);
+}

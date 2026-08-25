@@ -5,6 +5,7 @@ import test from 'node:test';
 const indexUrl = new URL('../public/index.html', import.meta.url);
 const appUrl = new URL('../public/app.js', import.meta.url);
 const presentationUrl = new URL('../public/presentation.js', import.meta.url);
+const screenshotUrl = new URL('../scripts/screenshot.mjs', import.meta.url);
 
 function idsInHtml(html) {
   return [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
@@ -50,6 +51,14 @@ test('dashboard homepage is project-first with discovery as the primary action',
   assert.ok(html.indexOf('Add / discover projects') < html.indexOf('id="exploration-list"'), 'discovery stays the primary global action');
 });
 
+test('dashboard Project Overview receives its Agent context and dependency-aware Task context', async () => {
+  const app = await readFile(appUrl, 'utf8');
+  assert.match(app, /renderOverviewTab\(project, tasks, runs, agents\)/, 'Overview must receive the Project Agent list instead of reading an undeclared identifier');
+  assert.match(app, /function renderOverviewTab\(project, tasks, runs, agents\)/);
+  assert.match(app, /taskDependencyStatus\(task, workTasks\)/, 'Overview must distinguish runnable backlog from dependency-blocked backlog');
+  assert.match(app, /Waiting on dependencies/);
+});
+
 test('dashboard presents coding and research as visibly separate flows', async () => {
   const html = await readFile(indexUrl, 'utf8');
 
@@ -81,4 +90,13 @@ test('presentation layer never leaks internal state names into primary UI copy',
   assert.match(presentation, /'Worker working'/);
   assert.match(presentation, /'Ready to merge'/);
   assert.match(presentation, /Needs synchronization/);
+});
+
+test('rendered screenshot smoke fails closed on runtime errors, timeout and horizontal overflow', async () => {
+  const screenshot = await readFile(screenshotUrl, 'utf8');
+  assert.match(screenshot, /Runtime\.exceptionThrown/);
+  assert.match(screenshot, /consoleAPICalled/);
+  assert.match(screenshot, /Horizontal page overflow/);
+  assert.match(screenshot, /process\.exit\(1\)/);
+  assert.doesNotMatch(screenshot, /TIMEOUT-RENDER.*process\.exit\(0\)/s);
 });
