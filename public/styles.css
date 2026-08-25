@@ -67,10 +67,10 @@ a { color: var(--info); }
   background: rgba(10, 13, 18, 0.94);
   display: flex; flex-direction: column; gap: var(--sp-4);
 }
-.brand { display: flex; align-items: center; gap: var(--sp-3); font-weight: 700; font-size: 15px; }
+.brand { display: flex; align-items: center; gap: var(--sp-3); font-weight: 700; font-size: 15px; white-space: nowrap; }
 .brand-mark {
   display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px;
-  background: linear-gradient(135deg, var(--accent), var(--info)); color: #07110d; font-size: 13px; font-weight: 800;
+  background: linear-gradient(135deg, var(--accent), var(--info)); color: #07110d; font-size: 13px; font-weight: 800; flex: 0 0 auto;
 }
 .sidebar nav { display: flex; flex-direction: column; gap: 3px; }
 .nav-label { margin: var(--sp-4) var(--sp-3) var(--sp-1); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-faint); font-weight: 800; }
@@ -80,7 +80,7 @@ a { color: var(--info); }
   min-height: 44px; border-radius: var(--radius-small); border: 1px solid transparent; font-size: 14.5px;
 }
 .sidebar nav a:hover, .sidebar nav a.active { background: #151a23; color: var(--text); border-color: #1d2430; }
-.sidebar-foot { margin-top: auto; padding: var(--sp-3); font-size: var(--font-secondary); color: var(--text-muted); display: flex; align-items: center; gap: var(--sp-2); }
+.sidebar-foot { margin-top: auto; padding: var(--sp-3); font-size: var(--font-secondary); color: var(--text-muted); display: flex; align-items: center; gap: var(--sp-2); white-space: nowrap; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: #566070; flex: 0 0 auto; }
 .dot.ok { background: var(--ok); box-shadow: 0 0 12px rgba(139, 233, 194, 0.45); }
 .dot.bad { background: var(--danger); }
@@ -89,14 +89,27 @@ main { margin-left: 220px; padding: var(--sp-6) 38px 72px; max-width: 1560px; }
 .page { display: none; }
 .page.active-page { display: block; }
 
-/* mobile shell: stacked top bar, wrapped nav (no horizontal scroll) */
+/* tablet/phone shell: one compact sticky top bar, never a second tall page */
 @media (max-width: 1024px) {
   body { display: flex; flex-direction: column; }
-  .sidebar { position: static; width: auto; inset: auto; flex-direction: column; padding: var(--sp-4); border-right: 0; border-bottom: 1px solid var(--line-soft); }
-  .sidebar-foot { margin-top: 0; }
+  .sidebar {
+    position: sticky; top: 0; inset: auto; width: 100%;
+    flex-direction: row; align-items: center; gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-4); border-right: 0; border-bottom: 1px solid var(--line-soft);
+    backdrop-filter: blur(12px);
+  }
+  .sidebar nav { flex: 1 1 auto; flex-direction: row; align-items: center; gap: var(--sp-1); min-width: 0; }
+  .nav-label { display: none; }
+  .sidebar nav a { min-height: 40px; padding: var(--sp-2) var(--sp-3); font-size: 13.5px; white-space: nowrap; }
+  .sidebar-foot { margin: 0 0 0 auto; padding: var(--sp-2); }
   main { margin-left: 0; padding: var(--sp-5) var(--sp-4) 64px; }
 }
 @media (max-width: 560px) {
+  .sidebar { gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); }
+  .brand > span:last-child { display: none; }
+  .sidebar nav { justify-content: flex-start; }
+  .sidebar nav a { padding: var(--sp-2) 9px; font-size: 13px; }
+  .sidebar-foot { display: none; }
   main { padding: var(--sp-4) var(--sp-3) 64px; }
   h1 { font-size: 25px; }
   header.page-header { flex-direction: column; align-items: stretch; }
@@ -183,6 +196,8 @@ button.compact { min-height: 34px; padding: var(--sp-1) var(--sp-3); font-size: 
 }
 .empty strong { color: var(--text); display: block; margin-bottom: var(--sp-1); font-size: 15px; }
 .empty .empty-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-4); flex-wrap: wrap; }
+/* The Overview next-action surface owns the primary no-work action. */
+.stat-inline + .empty .empty-actions { display: none; }
 
 .row-card {
   display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3);
@@ -333,4 +348,5 @@ details.subsection > summary small { display: block; color: var(--text-faint); f
   .stat-inline { gap: var(--sp-4); }
   .timeline-when { flex-basis: 92px; }
   .row-actions button { flex: 1 1 auto; }
+  .tab-nav { margin-bottom: var(--sp-4); }
 }

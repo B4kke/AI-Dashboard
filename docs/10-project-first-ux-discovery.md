@@ -1,9 +1,41 @@
 # AI Dashboard — Project-First UX & Repository Discovery Plan
 
-**Status:** Proposed implementation slice  
+**Status:** Implemented beta-candidate slice; remaining breadth explicitly tracked below  
 **Date:** 2026-08-25  
 **Scope:** Project-first dashboard, local/GitHub project discovery, one-click import, simplified project onboarding  
 **Priority:** High — usability layer on top of the existing control plane
+
+---
+
+## 0. Current implementation status
+
+Implemented on the foundation branch:
+
+- Project cards as the Dashboard visual root,
+- dedicated Project workspace with Overview / Tasks / Agents / GitHub / Evidence / Research / Settings,
+- durable privileged Workspace Roots,
+- depth-one local Git discovery with static manifest/README inspection only,
+- no repository-script execution during discovery,
+- deterministic local ↔ GitHub matching from normalized origin identity,
+- ambiguity blocking rather than folder-name guessing,
+- idempotent local Project import with no Task/Run/execution authority,
+- discovered local import accepts only a GitHub identity proved by that repository's origin,
+- GitHub repository listing and Clone & Import into a validated Workspace Root,
+- clone retry/read-repair only when an existing destination proves the exact requested origin plus a real HEAD commit; partial/mismatched destinations are preserved and blocked rather than overwritten,
+- human-readable state presentation and a dependency-aware `projectNextAction`,
+- structured evidence with raw JSON relegated to Advanced,
+- contextual dialogs/toasts instead of native alert/prompt/confirm in normal flows,
+- responsive Project-first layout,
+- fail-closed rendered Chrome acceptance smoke at 1440 / 768 / 390 for Dashboard and Project Overview; timeout, runtime/console errors and horizontal page overflow fail CI.
+
+Intentionally partial rather than over-abstracted:
+
+- global defaults currently cover role models plus autonomy mode/CI requirement; coding-harness, verification-policy and concurrency defaults remain planned,
+- discovery depth remains one direct directory below configured roots,
+- startup discovery is informational/read-only and never imports or executes automatically,
+- full real OpenCode + GitHub PC dogfood remains a separate external gate even when deterministic/Actions checks are green.
+
+The remainder of this document is the binding UX/discovery contract and acceptance model. Items already implemented stay documented because they define regression expectations.
 
 ---
 
@@ -136,6 +168,7 @@ Show:
 - Ready
 - Active
 - Needs input
+- Waiting for dependencies
 - Waiting for CI/review
 - Done
 
@@ -425,6 +458,8 @@ Matching should be deterministic and conservative.
 
 Ambiguous or unsupported remotes must not be guessed.
 
+A local repository with no GitHub origin remains local-only during discovered import. An operator-supplied unrelated GitHub identity must not be accepted as if discovery had proven the match.
+
 ---
 
 ## 11. Phase 9 — One-click import
@@ -457,13 +492,15 @@ Import should create a Project using discovered metadata and global defaults.
 
 The user should not need to choose coding/planning/supervisor/research models during normal import.
 
+Import creates managed state only; it must not create Tasks/Runs or start execution.
+
 ---
 
 ## 12. Phase 10 — Global Project defaults
 
 Move common configuration out of the Project creation form.
 
-Add global defaults for:
+Target global defaults:
 
 - Coding harness
 - Coding model
@@ -475,11 +512,24 @@ Add global defaults for:
 - Default verification policy
 - Default concurrency policy
 
-Projects inherit these values unless explicitly overridden.
+Implemented in the current slice:
 
-Project Settings should expose overrides.
+- Coding model
+- Planner model
+- Supervisor model
+- Research model
+- Default autonomy mode
+- CI requirement
 
-This reduces normal Project import to one or very few actions.
+Still planned:
+
+- Coding harness default beyond the current OpenCode-first assumption
+- Default verification policy
+- Default concurrency policy
+
+Do not introduce those abstractions ahead of current reliability/evidence gates merely to make this phase look complete.
+
+Projects inherit implemented defaults unless explicitly overridden. Project Settings exposes overrides.
 
 ---
 
@@ -552,12 +602,15 @@ After cloning:
 
 1. Verify destination path
 2. Verify repository identity
-3. Inspect local Git metadata
-4. Match normalized origin
-5. Build Project proposal
-6. Import Project
+3. Verify a real HEAD commit exists
+4. Inspect local Git metadata
+5. Match normalized origin
+6. Build Project proposal
+7. Import Project
 
-The goal is one operator action.
+If a prior clone completed but Project import/restart interrupted the flow, retry may reuse the destination only after proving the exact origin and real HEAD. An incomplete or mismatched existing destination is blocked and preserved for inspection; the Dashboard never deletes/overwrites it to force progress.
+
+The goal is one operator action without weakening idempotence/recovery.
 
 ---
 
@@ -601,12 +654,14 @@ Possible results:
 - Ready for supervisor
 - Ready to merge
 - 3 Tasks ready
+- Waiting on dependencies
+- Task dependency needs repair
 - Project needs synchronization
 - No open work
 
 This becomes one of the most prominent fields on each Project card.
 
-The resolver must derive from canonical Project/Task/Run/GitHub state rather than invent new state.
+The resolver must derive from canonical Project/Task/Run/GitHub state rather than invent new state. A `backlog` Task is not presented as runnable while one of its canonical `blockedBy` dependencies is unfinished; an unknown dependency ID is a repair-required inconsistency rather than “ready work”.
 
 ---
 
@@ -736,6 +791,8 @@ Avoid filling mobile cards with:
 
 Advanced information remains available when requested.
 
+Primary global navigation must remain compact enough that opening the app on a phone does not spend most of the first viewport on application chrome.
+
 ---
 
 ## 21. Required tests
@@ -768,6 +825,7 @@ Minimum deterministic coverage:
 - Duplicate Project detection
 - Ambiguous remotes are not guessed
 - Local-only repositories still import correctly
+- Unproven local → GitHub binding is rejected
 
 ### Import
 
@@ -781,10 +839,11 @@ Minimum deterministic coverage:
 ### Clone
 
 - Safe destination generation
-- Existing destination collision blocks
+- Existing incomplete/mismatched destination blocks without deletion
+- Complete matching existing clone can be safely resumed
 - Path traversal rejected
 - Clone uses argument arrays
-- Origin identity revalidated after clone
+- Origin identity and HEAD are revalidated after clone
 - Import occurs only after successful verification
 
 ### Presentation
@@ -792,8 +851,18 @@ Minimum deterministic coverage:
 - Human-readable Task state mappings
 - `projectNextAction` returns correct priority status
 - Blockers outrank normal ready work
+- Dependency-blocked backlog is not presented as runnable
+- Unknown dependency IDs are shown as repair-required
 - Active worker state shown correctly
 - CI/review/merge state correctly represented
+
+### Rendered UI
+
+- Dashboard Project card renders at desktop/tablet/phone widths
+- Project Overview renders at desktop/tablet/phone widths
+- Uncaught runtime or console errors fail the smoke gate
+- Missing expected render state fails the smoke gate
+- Required horizontal page overflow fails the smoke gate
 
 ### Regression
 
@@ -806,7 +875,7 @@ Minimum deterministic coverage:
 
 ## 22. Implementation order
 
-Recommended implementation sequence:
+Implemented sequence:
 
 1. Add/confirm `Project.description`
 2. Add human-readable state mapper
@@ -819,15 +888,18 @@ Recommended implementation sequence:
 9. Add GitHub repository discovery
 10. Implement remote normalization and local/GitHub matching
 11. Implement one-click Project import
-12. Add global Project defaults
-13. Add Clone & Import flow
-14. Add startup discovery / new-repository notification
+12. Add the currently supported global Project defaults
+13. Add recoverable Clone & Import flow
+14. Add startup informational discovery / new-repository notification
 15. Replace raw evidence as primary UI
 16. Add contextual error/repair UI
 17. Add deterministic tests
-18. Verify Linux + Windows CI
+18. Add fail-closed rendered-browser smoke and Linux/Windows Actions gates
 19. Run mobile UX pass
-20. Repeat real OpenCode + GitHub dogfood on the resulting exact head
+
+Still external/final:
+
+20. Repeat real OpenCode + GitHub dogfood on the exact final head.
 
 ---
 
@@ -853,7 +925,7 @@ The goal is to make the existing control plane simple to use.
 
 ## 24. Definition of done
 
-This slice is complete when a new user can:
+This slice is product-complete when a new user can:
 
 1. Start AI Dashboard.
 2. Choose a local Project Root.
@@ -861,14 +933,17 @@ This slice is complete when a new user can:
 4. See GitHub repositories when GitHub is connected.
 5. See local/GitHub repositories correctly matched.
 6. Import an existing local repository with one simple action.
-7. Clone and import a GitHub-only repository into the configured root.
+7. Clone and import a GitHub-only repository into the configured root, including safe retry after an interrupted post-clone import.
 8. Return to the homepage and see one clear card per Project.
 9. Understand what every Project is doing without knowing internal state-machine terms.
 10. Open a Project and see current Task, worker, PR, CI, supervisor and evidence status.
-11. Receive a clear next action when work is blocked.
+11. Receive a clear next action when work is blocked or dependency-gated.
 12. Do all of the above without discovery itself executing repository code or starting autonomous work.
+13. Pass deterministic tests, exact-head Linux/Windows Actions and rendered 1440/768/390 acceptance without browser runtime errors or required horizontal overflow.
 
 The existing fail-closed execution pipeline remains authoritative throughout.
+
+The slice's implementation can be complete before the **project-wide PC beta gate** is complete: real OpenCode/MCP + disposable GitHub/Actions dogfood is still required by `docs/04-roadmap.md` and `docs/05-pc-beta-checklist.md` before the wider beta claim advances.
 
 ---
 

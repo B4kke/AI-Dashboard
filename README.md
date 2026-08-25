@@ -4,7 +4,7 @@ Self-hosted control center for AI-assisted and progressively autonomous project 
 
 AI Dashboard connects existing projects/repositories, direct Tasks, optional Ideas/Explorations, specialist agents, AI coding harnesses, model providers, MCP capabilities, read-only Research Runs, isolated Git worktrees and GitHub/CI evidence behind one fail-closed control plane.
 
-> Status: pre-alpha / PC-beta candidate with an early MCP + Agent Registry slice. The current hardening boundaries have deterministic tests, but fresh Linux + Windows GitHub Actions on the exact final commit and the complete current-stack OpenCode/GitHub PC beta are still open verification gates.
+> Status: pre-alpha / PC-beta candidate with Project-first repository discovery plus early MCP + Agent Registry slices. Deterministic and rendered-browser gates exist for the Project-first UI. A beta claim still requires Linux + Windows GitHub Actions green on the exact final commit and the complete current-stack OpenCode/GitHub PC beta.
 
 ## Product model
 
@@ -31,6 +31,22 @@ Exploration -> direct-model analysis/report -> explicit idempotent Project promo
 Exploration/Research context is never implementation evidence.
 
 Planner output is also fail-closed. Generated work Tasks stay in the non-executable `planning` quarantine while one StateStore transaction validates the complete persisted plan, reconstructs only an exact missing suffix after a crash, resolves dependency IDs, links the Idea and releases the complete set to `backlog`. Invalid/ambiguous partial state moves the Idea and candidates to `needs_input`; a replan supersedes and quarantines the old candidates instead of reusing them as new work.
+
+## Project-first discovery and onboarding
+
+The default UI is Project-first rather than a global control-plane telemetry wall. The Dashboard shows one aggregate card per Project; opening it enters a Project workspace with Overview, Tasks, Agents, GitHub, Evidence, Research and Settings.
+
+Workspace Roots are privileged local configuration. Discovery scans only direct children of configured roots, inspects Git/static metadata read-only and never executes repository scripts. Local/GitHub matching uses normalized remote identity and fails closed on ambiguity. Detected verification commands remain suggestions until the operator explicitly accepts them.
+
+Import creates managed Project state only: it never creates a Task/Run or grants execution authority. A discovered local repository may inherit only a GitHub identity proven by its own origin; unrelated/unproven binding is rejected during discovery import.
+
+`Clone & Import` uses argument-array Git into a validated Workspace Root. A retry after an interrupted import may reuse an existing destination only when the control plane can prove a complete Git repository with the exact requested GitHub origin and a real HEAD commit. Partial or mismatched destinations are never overwritten/deleted automatically.
+
+The presentation layer maps canonical states to operator language and derives `projectNextAction` from Project/Task/Run/GitHub truth. Backlog Tasks with unfinished dependencies are shown as waiting rather than runnable; unknown dependency IDs are surfaced as repair-required attention.
+
+Material UI changes are guarded by deterministic contracts plus rendered Chrome smoke at desktop/tablet/phone widths. The smoke fails on missing expected render state, uncaught browser/console errors, or horizontal page overflow.
+
+See `docs/10-project-first-ux-discovery.md` and `docs/11-design-principles.md`.
 
 ## Harness != Provider != Model != MCP
 
@@ -232,7 +248,7 @@ npm test
 npm start
 ```
 
-Runtime versions are pinned in `package.json`; the complete dependency graph is committed in `package-lock.json`. CI uses `npm ci` on Linux and Windows.
+Runtime versions are pinned in `package.json`; the complete dependency graph is committed in `package-lock.json`. CI uses `npm ci` on Linux and Windows. The Linux job additionally boots the actual Dashboard and renders the Project-first homepage plus Project Overview at 1440, 768 and 390 px using the fail-closed browser smoke gate.
 
 Important variables:
 
@@ -278,6 +294,14 @@ MCP server endpoints:
 
 ## Implemented now
 
+- Project-first Dashboard cards and dedicated Project workspaces,
+- privileged Workspace Roots + read-only local/GitHub repository discovery,
+- conservative local ↔ GitHub remote matching,
+- idempotent one-click local import with no execution authority,
+- recoverable Clone & Import for complete matching clones,
+- human-readable state/next-action presentation with dependency-aware readiness,
+- structured evidence as the primary operator view with raw JSON under Advanced,
+- contextual toasts/dialogs instead of native alert/prompt/confirm flows,
 - responsive local control UI + SSE,
 - SQLite/WAL state/journal/leases,
 - Exploration -> optional Project promotion,
@@ -305,23 +329,25 @@ MCP server endpoints:
 - restart/idempotency guards,
 - reproducible npm lock + `npm ci` CI install.
 
+Global Project defaults are intentionally **partial** in this slice: model-role defaults plus autonomy mode/CI requirement exist. Broader harness, verification-policy and concurrency defaults remain planned instead of introducing abstraction ahead of the reliability gates.
+
 ## Verification levels
 
 Keep claims separate:
 
 1. **implemented** — code exists.
 2. **deterministic/integration tested** — defined boundaries exercised locally/with test servers.
-3. **GitHub Actions verified** — Linux + Windows suite passes on exact PR head.
+3. **GitHub Actions verified** — Linux + Windows suite passes on exact PR head, including rendered-browser smoke for material Project-first UI.
 4. **real interoperability/dogfood** — real OpenCode/MCP + disposable GitHub/Actions execute current stack.
 5. **production remote autonomy** — auth/authz/audit/kill-switch/fencing proven.
 
-Do not promote a level-2/3 MCP test into a claim that every real MCP host has been verified.
+Do not promote a level-2/3 MCP or rendered-UI test into a claim that every real external host/workflow has been verified.
 
-For the current hardening work, level 1 and focused deterministic coverage exist. Fresh level-3 Linux + Windows GitHub Actions on the exact final commit and level-4 full PC beta evidence have not yet been produced and remain required.
+The exact final head must satisfy level 3 before beta-candidate evidence is current. Level 4 remains a separate mandatory gate even after deterministic/Actions success.
 
 ## Canonical docs
 
-- `AGENTS.md` — binding agent/Master/safety rules
+- `AGENTS.md` — binding agent/Master/safety and definition-of-done rules
 - `docs/02-architecture.md` — domain/authority/topology
 - `docs/04-roadmap.md` — implemented vs planned
 - `docs/05-pc-beta-checklist.md` — external beta gate
@@ -329,5 +355,7 @@ For the current hardening work, level 1 and focused deterministic coverage exist
 - `docs/07-mcp-agent-architecture.md` — MCP + Agent Registry model
 - `docs/08-mcp-input-required.md` — MCP 2026 operator-input contract
 - `docs/09-hardening-review-checkpoint.md` — adversarial hardening status and open evidence gates
+- `docs/10-project-first-ux-discovery.md` — Project-first/discovery slice and remaining partial breadth
+- `docs/11-design-principles.md` — binding visual/interaction quality bar
 
 Canonical tracking issue: https://github.com/B4kke/AI-Dashboard/issues/1

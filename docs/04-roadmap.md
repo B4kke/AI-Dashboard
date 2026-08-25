@@ -1,8 +1,39 @@
 # Roadmap
 
-> Current focus: prove and harden the autonomous control plane against real OpenCode/GitHub/MCP use. The project owner explicitly reprioritized MCP + specialist-agent foundations on 2026-08-24 because they are required for the intended Master AI orchestration model. This does not relax M1/M2 reliability gates.
+> Current focus: prove and harden the autonomous control plane against real OpenCode/GitHub/MCP use. Project-first discovery/UX is now an implemented usability layer over that control plane, not a replacement for the reliability gates. MCP + specialist-agent foundations remain required for the intended Master AI orchestration model.
 
-> Evidence boundary: the hardening items described below are implemented with focused deterministic coverage in the working tree. Fresh Linux + Windows GitHub Actions on the exact final commit and the full current-stack real OpenCode + disposable GitHub/Actions PC beta have not yet been run; both remain open gates.
+> Evidence boundary: implementation, deterministic tests and rendered-browser acceptance are distinct from exact-head GitHub Actions and from real external dogfood. The final commit must be green on Linux + Windows, and the full current-stack real OpenCode + disposable GitHub/Actions PC beta remains a separate mandatory gate.
+
+## Project-first UX & repository discovery — IMPLEMENTED / BETA-CANDIDATE
+
+Implemented/tested:
+
+- Project cards as the Dashboard visual root,
+- dedicated Project workspace: Overview / Tasks / Agents / GitHub / Evidence / Research / Settings,
+- human-readable state presentation plus deterministic `projectNextAction`,
+- dependency-aware presentation so unfinished `blockedBy` Tasks are not advertised as runnable and unknown dependency IDs require repair,
+- privileged durable Workspace Roots,
+- read-only depth-one local repository discovery,
+- static metadata/manifest inspection without executing repository code or scripts,
+- deterministic SSH/HTTPS/`.git` GitHub identity normalization and conservative local ↔ GitHub matching,
+- ambiguity blocking rather than folder-name guessing,
+- idempotent local import with no Task/Run/execution authority,
+- discovered local import accepts only a GitHub identity proved by the local repository origin,
+- GitHub repository discovery,
+- argument-array Clone & Import into a validated Workspace Root,
+- safe clone retry/read-repair only for a complete repository with exact expected origin + real HEAD; partial/mismatched destinations are preserved and blocked,
+- structured evidence as the primary operator view; raw JSON remains under Advanced,
+- contextual dialog/toast repair flows rather than native alert/prompt/confirm,
+- responsive Project-first UI,
+- fail-closed rendered Chrome/Chromium smoke for Dashboard + Project Overview at 1440 / 768 / 390, rejecting runtime/console errors, render timeout and required horizontal page overflow.
+
+Intentionally partial:
+
+- global Project defaults currently cover role-model defaults plus autonomy mode/CI requirement; harness, verification-policy and concurrency defaults remain planned,
+- discovery remains depth-one and informational; it never auto-imports or starts execution,
+- real OpenCode/GitHub usability and autonomous dogfood remain project-wide external gates below.
+
+See `docs/10-project-first-ux-discovery.md` and `docs/11-design-principles.md`.
 
 ## Pre-project Exploration — IMPLEMENTED / BETA-CANDIDATE
 
@@ -22,7 +53,7 @@ Limitation: Exploration research is model analysis only; live source-aware retri
 
 Implemented/tested:
 
-- existing repository/project registration,
+- existing repository/project registration/import,
 - fail-closed Project preflight for status, clean/configured base, verification, harness/model and optional GitHub origin/access/synchronization,
 - durable `needs_sync` Project repair state plus Task-local `needs_input` blockers,
 - bound Project/Task admission identities, concrete model and exact proven base SHA,
@@ -72,9 +103,9 @@ Implemented/tested:
 - post-review revalidation,
 - expected-head guarded merge + post-merge proof,
 - optional cleanup,
-- Linux + Windows GitHub Actions workflow definitions; a fresh exact-final-commit result remains open.
+- Linux + Windows GitHub Actions workflow with locked install; Linux additionally performs rendered-browser Project-first acceptance.
 
-A disposable real GitHub/Actions happy-path dogfood succeeded before the MCP/hardening slice. It is historical context, not evidence for the current tree. Fresh Linux + Windows GitHub Actions and the full loop must be repeated on the exact current final commit, including deliberate CI failure/repair, moved base, supervisor rejection/correction and protected-branch behavior.
+A disposable real GitHub/Actions happy-path dogfood succeeded before the MCP/hardening slice. It is historical context, not evidence for the current stack. The full loop must be repeated on the exact current final commit, including deliberate CI failure/repair, moved base, supervisor rejection/correction and protected-branch behavior.
 
 Deferred breadth: GitHub issue sync, webhooks, review-comment workflow and raw Actions-log ingestion.
 
@@ -197,16 +228,17 @@ Planned: hardware-aware model cookbook, richer local endpoint discovery, role re
 On one clean, exact final commit (the beta harness refuses a dirty Dashboard checkout and refuses resume across commit drift):
 
 1. syntax + full deterministic Linux suite green,
-2. Windows GitHub Actions portability green on the same commit,
-3. pinned lockfile + `npm ci`,
-4. real OpenCode configured as MCP host against Dashboard read/master,
-5. real resource/tool/prompt discovery,
-6. real `task_resolve_input` operator round-trip through OpenCode if supported by its current MCP host UX,
-7. Master creates two disjoint specialists/Tasks and both can be admitted concurrently,
-8. overlapping specialist/Task is rejected by control plane,
-9. restart retains ownership/uncertain-run protection,
-10. focused deterministic PC-beta harness/resume tests prove stable Project/Task IDs, exact contracts, canonical evidence validation and fail-closed duplicate rejection,
-11. run the full real OpenCode + disposable GitHub Actions beta on the current stack and preserve its report/evidence.
+2. rendered Project-first browser acceptance green at 1440 / 768 / 390 with no uncaught errors/required horizontal overflow,
+3. Windows GitHub Actions portability green on the same commit,
+4. pinned lockfile + `npm ci`,
+5. real OpenCode configured as MCP host against Dashboard read/master,
+6. real resource/tool/prompt discovery,
+7. real `task_resolve_input` operator round-trip through OpenCode if supported by its current MCP host UX,
+8. Master creates two disjoint specialists/Tasks and both can be admitted concurrently,
+9. overlapping specialist/Task is rejected by control plane,
+10. restart retains ownership/uncertain-run protection,
+11. focused deterministic PC-beta harness/resume tests prove stable Project/Task IDs, exact contracts, canonical evidence validation and fail-closed duplicate rejection,
+12. run the full real OpenCode + disposable GitHub Actions beta on the current stack and preserve its report/evidence.
 
 A failed external scenario is evidence to harden the control plane, not permission to weaken a gate.
 
@@ -259,4 +291,4 @@ Odysseus, VibeBoard, OpenHands/Agent Canvas, Codeman and OpenCode may inform arc
 
 ## Priority rule
 
-Reliability and evidence outrank feature count. MCP/Agent work is foundational to the explicitly requested Master-AI architecture, but it must use the same fail-closed control plane rather than creating a second autonomous execution path.
+Reliability and evidence outrank feature count. Project-first UX must stay a translation layer over canonical state, and MCP/Agent work must use the same fail-closed control plane rather than creating a second autonomous execution path.

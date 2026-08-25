@@ -2,7 +2,7 @@
 
 ## Domain model
 
-`Project` is the root aggregate once executable work exists. Existing repositories can be attached directly. A Task may be created manually, by Master AI, by a planner or by an integration; no Idea is required.
+`Project` is the root aggregate once executable work exists. Existing repositories can be discovered/imported and attached directly. A Task may be created manually, by Master AI, by a planner or by an integration; no Idea is required.
 
 ```text
 Exploration (optional, pre-project)
@@ -26,6 +26,46 @@ Project
 ```
 
 Exploration remains outside Project until promotion. Research remains outside the coding merge loop.
+
+## Project-first discovery and onboarding boundary
+
+Repository discovery is a read-only onboarding subsystem in front of Project creation. It does **not** create execution authority.
+
+```text
+privileged Workspace Root(s)
+        |
+        v
+read-only depth-one repository scan
+        |
+        +-> local Git/static metadata
+        +-> optional GitHub repository metadata
+        |
+        v
+conservative identity matching + Project proposal
+        |
+        v
+explicit Import / Clone & Import
+        |
+        v
+managed Project state
+        |
+        v
+ordinary preflight/admission before any execution
+```
+
+Workspace Roots are durable privileged local configuration. Discovery inspects direct children only; it does not recursively scan the machine. It may read filesystem metadata, Git metadata and bounded static repository files/manifests, but it never executes package scripts, hooks, Make targets, repository binaries or a worker.
+
+Local ↔ GitHub matching is based on normalized Git remote identity, not folder-name guessing. SSH/HTTPS/`.git` variants of the same GitHub repository normalize to one identity. Ambiguous or unsupported identities remain unbound. A discovered local repository may inherit only a GitHub identity proven by its own origin; an operator-supplied unrelated identity is rejected by discovery import rather than being presented as a discovered match.
+
+Detected verification commands are proposals only. They become executable control-plane configuration only after explicit operator acceptance and remain subject to the shell-free verifier/preflight contract.
+
+Import is idempotent and creates Project state only: no Task, Run, branch, worktree, PR or autonomous execution starts merely because a repository was discovered/imported.
+
+`Clone & Import` reconstructs an HTTPS GitHub URL from a strictly parsed `owner/repository`, resolves Git outside the destination, invokes it with an argument array and clones into a validated Workspace Root destination. Post-clone origin identity and a real `HEAD^{commit}` are proven before import. After an interrupted post-clone flow, an existing destination may be reused only if those same proofs succeed. Partial, non-Git or mismatched destinations are blocked and preserved for operator inspection; the control plane never deletes/overwrites them simply to make retry progress.
+
+The browser presentation layer is read-only with respect to domain truth. Human labels and `projectNextAction` are derived from canonical Project/Task/Run/GitHub state. Backlog Tasks are shown as runnable only when their canonical `blockedBy` dependencies are complete; missing dependency IDs are surfaced as repair-required inconsistency rather than silently presented as ready work.
+
+See `docs/10-project-first-ux-discovery.md` and `docs/11-design-principles.md`.
 
 ## Harness, Provider, Model and protocols
 
@@ -292,6 +332,12 @@ Leases renew during long operations but are not full distributed fencing tokens.
 
 Browser refresh uses SSE. MCP clients receive MCP resource-update notifications. Neither stream is source of truth; SQLite state/revision is canonical. Slow/broken SSE clients are removed rather than accumulating unbounded buffers.
 
+## UI acceptance boundary
+
+The browser UI is not considered verified merely because source syntax or text contracts pass. Material Project-first changes are exercised by a real headless Chrome/Chromium session against a running Dashboard at representative desktop/tablet/phone widths. The acceptance smoke requires the expected route surface to render with the control plane online and fails on uncaught runtime exceptions, `console.error`, timeout or required horizontal document overflow. Screenshots are uploaded as CI artifacts for human inspection.
+
+This is UI/runtime evidence only. It does not replace control-plane tests or real OpenCode/GitHub dogfood.
+
 ## Security boundaries
 
 - Default bind is loopback.
@@ -315,6 +361,7 @@ Browser/mobile
    |
 node:http control API
    |
+   +-> Project-first presentation + read-only discovery/import boundary
    +-> StateStore -> SQLite/WAL/journal/leases
    +-> SSE EventHub
    +-> AutonomyEngine + fail-closed policy decorators
@@ -333,10 +380,8 @@ Claims must stay distinct:
 
 1. **implemented** — code exists.
 2. **deterministic/integration tested** — local/test-double/loopback tests prove defined invariants.
-3. **GitHub Actions verified** — complete Linux + Windows suite passes on exact PR head.
+3. **GitHub Actions verified** — complete Linux + Windows suite passes on exact PR head; material UI changes also pass rendered-browser acceptance on that head.
 4. **real interoperability/dogfood** — real OpenCode/MCP host and real external systems execute the flow.
 5. **production-ready remote autonomy** — authentication, authorization, audit, kill switch and distributed side-effect fencing are proven.
 
-A green local MCP loopback test can prove only levels 1-2. Exact-head GitHub Actions is separate level-3 evidence, and neither proves all external MCP hosts or public exposure.
-
-Current hardening changes have implementation and focused deterministic evidence. The exact final commit still requires fresh Linux + Windows GitHub Actions and a full real OpenCode + disposable GitHub/Actions PC beta; neither external gate is inferred from the local suite.
+A green local MCP loopback or rendered-browser test proves only its defined boundary. Exact-head GitHub Actions is separate level-3 evidence, and none of those prove all external MCP hosts or public exposure. The full real OpenCode + disposable GitHub/Actions PC beta remains a mandatory level-4 gate.
