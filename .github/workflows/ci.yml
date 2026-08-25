@@ -70,9 +70,28 @@ jobs:
           NODE
           )"
 
+          PROJECT_ID="$PROJECT_ID" node --input-type=module <<'NODE'
+          const response = await fetch('http://127.0.0.1:7331/api/tasks', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              projectId: process.env.PROJECT_ID,
+              title: 'Rendered operator Task',
+              description: 'Task fixture for safe repair and mobile navigation rendering.',
+              acceptanceCriteria: ['The operator surface renders without runtime errors.'],
+              priority: 'P1',
+            }),
+          });
+          if (!response.ok) throw new Error(`Task fixture creation failed: HTTP ${response.status} ${await response.text()}`);
+          const task = await response.json();
+          if (!task?.id) throw new Error('Task fixture response is missing id');
+          NODE
+
           for SIZE in 1440x1000 768x1000 390x844; do
             node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" 'http://127.0.0.1:7331/#/projects' "home-${SIZE}" '.project-card'
             node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/overview" "project-${SIZE}" '.overview-now'
+            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/tasks" "tasks-${SIZE}" '[data-operator-action="edit-task"]'
+            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/settings" "settings-${SIZE}" '#project-settings-form [name="workerRole"]'
           done
 
       - name: Upload UI smoke screenshots
