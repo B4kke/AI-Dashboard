@@ -1,3 +1,5 @@
+import './operator-ui.js';
+
 // Presentation layer: translates canonical control-plane state into operator
 // language. It never changes domain state and never invents new states; every
 // label is derived from canonical Project/Task/Run/GitHub fields.

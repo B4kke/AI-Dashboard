@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
+import { repairTaskFromOperator } from './core/operator-task-repair.mjs';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
 const SECURITY_HEADERS = {
@@ -139,6 +140,10 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       return json(response, 200, readiness);
     }
 
+    const taskPatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
+    if (request.method === 'PATCH' && taskPatch) {
+      return json(response, 200, await repairTaskFromOperator(store, decodeURIComponent(taskPatch[1]), await body(request)));
+    }
     const ideaAnalyze = url.pathname.match(/^\/api\/ideas\/([^/]+)\/analyze$/);
     if (request.method === 'POST' && ideaAnalyze) return json(response, 202, await orchestrator.startIdeaPlanning(decodeURIComponent(ideaAnalyze[1])));
     const delegate = url.pathname.match(/^\/api\/tasks\/([^/]+)\/delegate$/);

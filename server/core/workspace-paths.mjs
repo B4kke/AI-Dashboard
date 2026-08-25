@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { lstat, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, posix, resolve, sep, win32 } from 'node:path';
 
@@ -15,9 +16,21 @@ export function canonicalWorkspacePath(value, { platform = process.platform } = 
 }
 
 export function workspacePathKey(value, options = {}) {
-  const canonical = canonicalWorkspacePath(value, options);
   const platform = options.platform || process.platform;
+  let canonical = canonicalWorkspacePath(value, { platform });
   if (!canonical) return null;
+  // On the real host, existing paths may have multiple lexical identities
+  // (notably Windows 8.3 short names versus long names, plus junction aliases).
+  // Resolve those read-only before producing the durable comparison key. When
+  // tests emulate another platform or the path does not exist, retain the
+  // deterministic lexical form.
+  if (platform === process.platform) {
+    try {
+      canonical = canonicalWorkspacePath(realpathSync.native(canonical), { platform }) || canonical;
+    } catch {
+      // Non-existing/inaccessible paths still get a deterministic lexical key.
+    }
+  }
   return platform === 'win32' ? canonical.toLowerCase() : canonical;
 }
 
