@@ -8,117 +8,200 @@
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><span class="brand-mark">AI</span><span>Control Center</span></div>
-    <nav>
-      <p class="nav-label">Operate</p>
-      <a class="active" href="#overview">Dashboard</a>
-      <a href="#tasks">Tasks</a>
-      <a href="#projects">Projects</a>
-      <a href="#agents">Runs</a>
-      <p class="nav-label">Explore</p>
-      <a href="#explorations">Explorations</a>
-      <a href="#research">Research</a>
+    <div class="brand"><span class="brand-mark">AI</span><span>AI Dashboard</span></div>
+    <nav aria-label="Primary">
+      <p class="nav-label">Work</p>
+      <a href="#/projects" data-nav="projects" class="active">Projects</a>
+      <a href="#/explorations" data-nav="explorations">Explorations</a>
       <p class="nav-label">System</p>
-      <a href="#integrations">System</a>
+      <a href="#/system" data-nav="system">System</a>
     </nav>
     <div class="sidebar-foot"><span class="dot" id="system-dot"></span><span id="system-label">Connecting…</span></div>
   </aside>
 
   <main>
-    <header>
-      <div><p class="eyebrow">SELF-HOSTED AI OPERATIONS</p><h1>Control center</h1><p class="header-copy">Projects are the execution root. Tasks enter one evidence-gated coding flow; exploration and research stay outside it.</p></div>
-      <div class="header-actions"><button id="refresh">Refresh</button><button id="new-exploration" class="secondary-action">+ Exploration</button><button id="new-research" class="secondary-action">+ Research</button><button id="new-project">+ Project</button><button class="primary" id="new-task">+ Task</button></div>
-    </header>
-
-    <section class="status-strip" id="overview" aria-label="Control plane summary">
-      <div><span>Projects</span><strong id="project-count">0</strong><small>registered workspaces</small></div>
-      <div><span>Tasks</span><strong id="task-count">0</strong><small id="task-sub">0 active</small></div>
-      <div><span>Runs</span><strong id="run-count">0</strong><small id="run-sub">0 running</small></div>
-      <div><span>Research</span><strong id="research-count">0</strong><small id="research-sub">direct model runs</small></div>
-      <div><span>Explorations</span><strong id="exploration-count">0</strong><small id="exploration-sub">pre-project ideas</small></div>
+    <!-- ============ Projects (home) ============ -->
+    <section class="page active-page" id="page-projects" aria-label="Projects overview">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">PROJECTS</p>
+          <h1>Projects</h1>
+          <p class="header-copy">Every piece of executable work lives in a Project. Open one to see current work, what happens next and anything that needs you.</p>
+        </div>
+        <div class="header-actions">
+          <button id="refresh" class="secondary-action">Refresh</button>
+          <button id="open-discovery" class="primary">Add / discover projects</button>
+        </div>
+      </header>
+      <div id="home-banners"></div>
+      <div id="project-grid" class="project-grid"></div>
     </section>
 
-    <section class="flow-section" aria-labelledby="coding-flow-title">
-      <div class="section-heading"><div><p class="eyebrow">PRIMARY EXECUTION FLOW</p><h2 id="coding-flow-title">One path from task to verified merge</h2></div><span class="flow-note">Worker never approves itself</span></div>
-      <div class="flow-track" aria-label="Coding task lifecycle">
-        <div class="flow-step"><span>01</span><strong>Task</strong><small>scope + criteria</small></div>
-        <i aria-hidden="true">→</i>
-        <div class="flow-step"><span>02</span><strong>Worker</strong><small>isolated worktree</small></div>
-        <i aria-hidden="true">→</i>
-        <div class="flow-step"><span>03</span><strong>Evidence</strong><small>diff + verification</small></div>
-        <i aria-hidden="true">→</i>
-        <div class="flow-step"><span>04</span><strong>PR / CI</strong><small>GitHub gates</small></div>
-        <i aria-hidden="true">→</i>
-        <div class="flow-step"><span>05</span><strong>Supervisor</strong><small>read-only review</small></div>
-        <i aria-hidden="true">→</i>
-        <div class="flow-step"><span>06</span><strong>Merge</strong><small>head/tree verified</small></div>
+    <!-- ============ Project workspace ============ -->
+    <section class="page" id="page-project" aria-label="Project workspace">
+      <div id="project-workspace"></div>
+    </section>
+
+    <!-- ============ Explorations ============ -->
+    <section class="page" id="page-explorations" aria-label="Explorations and research">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">PRE-PROJECT</p>
+          <h1>Explorations</h1>
+          <p class="header-copy">Capture something before it is a Project. Analysis is read-only; promotion into a real Project is always an explicit step.</p>
+        </div>
+        <div class="header-actions"><button id="new-exploration" class="primary">+ Exploration</button></div>
+      </header>
+      <div class="section">
+        <div id="exploration-list" class="stack"></div>
       </div>
-      <div class="flow-alt"><strong>Separate read-only lane</strong><span>Project → Research Run → provider/model → persisted report</span></div>
-    </section>
 
-    <section class="workspace-section" id="tasks">
-      <div class="section-heading"><div><p class="eyebrow">ACTIVE WORK</p><h2>Task queue</h2><p class="section-copy">The task state tells you what the control plane expects next. Actions only appear when that transition is valid.</p></div><button id="new-task-inline">+ Task</button></div>
-      <div id="task-list" class="stack list-surface"></div>
-    </section>
+      <div class="section">
+        <div class="section-heading">
+          <div><p class="eyebrow">READ-ONLY LANE</p><h2>Research reports</h2>
+          <p class="section-copy">Separate read-only lane: Project → Research Run → provider/model → persisted report. Research never creates branches or merges.</p></div>
+          <button id="new-research" class="secondary-action">+ Research</button>
+        </div>
+        <div id="research-list" class="stack"></div>
+      </div>
 
-    <section class="workspace-section compact-section" id="agents">
-      <div class="section-heading"><div><p class="eyebrow">EXECUTION</p><h2>Agent & harness runs</h2></div><span class="pill muted">HARDENING</span></div>
-      <div id="run-list" class="stack list-surface"></div>
-    </section>
-
-    <section class="workspace-section" id="projects">
-      <div class="section-heading"><div><p class="eyebrow">PROJECTS</p><h2>Execution roots</h2><p class="section-copy">Register an existing repository directly, then create ordinary Tasks without passing through Idea or Exploration.</p></div><button id="new-project-inline" type="button">+ Project</button></div>
-      <div id="project-list" class="stack list-surface"></div>
-
-      <details class="subsection" id="ideas">
-        <summary><span><strong>Optional project ideas</strong><small>Planner input only — never required before a Task</small></span><span class="summary-action">Open</span></summary>
-        <div class="subsection-body"><div class="subsection-head"><p>Use this when an idea already belongs to a Project and you want the planner to expand it into normal Tasks.</p><button id="new-idea-inline">+ Idea</button></div><div id="idea-list" class="stack list-surface"></div></div>
+      <details class="subsection">
+        <summary><span><strong>Ideas &amp; planning</strong><small>Planner input only — never required before a Task</small></span><span class="summary-action">Open</span></summary>
+        <div class="subsection-body">
+          <div class="subsection-head"><p class="subsection-copy">An Idea belongs to a Project and can be expanded into ordinary Tasks by the planner.</p><button id="new-idea-inline" class="secondary-action compact">+ Idea</button></div>
+          <div id="idea-list" class="stack"></div>
+        </div>
       </details>
     </section>
 
-    <section class="workspace-section" id="explorations">
-      <div class="section-heading"><div><p class="eyebrow">PRE-PROJECT</p><h2>Explorations</h2><p class="section-copy">Capture and analyze something before it is a Project. Promotion is explicit; this lane never creates coding worktrees.</p></div><button id="new-exploration-inline">+ Exploration</button></div>
-      <div id="exploration-list" class="stack list-surface"></div>
-    </section>
+    <!-- ============ System ============ -->
+    <section class="page" id="page-system" aria-label="System">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">SYSTEM</p>
+          <h1>System</h1>
+          <p class="header-copy">Runtime plumbing, workspace configuration and diagnostics. Deliberately lower in the hierarchy than Projects and Tasks.</p>
+        </div>
+      </header>
 
-    <section class="workspace-section" id="research">
-      <div class="section-heading"><div><p class="eyebrow">READ-ONLY PROJECT WORK</p><h2>Research</h2><p class="section-copy">Repository context goes directly to a selected provider/model and produces a persisted report. No OpenCode, branch, worktree or merge loop.</p></div><button id="new-research-inline">+ Research</button></div>
-      <div id="research-list" class="stack list-surface"></div>
-    </section>
+      <details class="subsection">
+        <summary><span><strong>How work flows</strong><small>The one path from Task to verified merge</small></span><span class="summary-action">Open</span></summary>
+        <div class="subsection-body">
+          <p class="subsection-copy">Worker never approves itself. Every step leaves machine evidence.</p>
+          <div class="flow-strip" aria-label="Coding task lifecycle">
+            <span class="flow-step"><strong>Task</strong><small>scope + criteria</small></span><i aria-hidden="true">→</i>
+            <span class="flow-step"><strong>Worker</strong><small>isolated worktree</small></span><i aria-hidden="true">→</i>
+            <span class="flow-step"><strong>Evidence</strong><small>diff + verification</small></span><i aria-hidden="true">→</i>
+            <span class="flow-step"><strong>PR / CI</strong><small>GitHub gates</small></span><i aria-hidden="true">→</i>
+            <span class="flow-step"><strong>Supervisor</strong><small>read-only review</small></span><i aria-hidden="true">→</i>
+            <span class="flow-step"><strong>Merge</strong><small>head/tree verified</small></span>
+          </div>
+        </div>
+      </details>
 
-    <section class="workspace-section system-section" id="integrations">
-      <div class="section-heading"><div><p class="eyebrow">SYSTEM</p><h2>Runtime & control plane</h2><p class="section-copy">Operational plumbing is intentionally lower in the hierarchy than Tasks and Projects.</p></div></div>
-      <div class="integration-list">
-        <div class="integration-row"><div><strong>OpenCode</strong><p>coding harness · model selected per task/run</p></div><div class="status" id="opencode-status">Checking…</div></div>
+      <div class="integration-list section" style="margin-top:16px;">
+        <div class="integration-row"><div><strong>OpenCode</strong><p>coding harness · models selected per run</p></div><div class="status" id="opencode-status">Checking…</div></div>
         <div class="integration-row"><div><strong>GitHub</strong><p>branch publishing, PR, fail-closed CI evidence and merge</p></div><div class="status pending" id="github-status">checking</div></div>
-        <div class="integration-row"><div><strong>Direct model</strong><p>provider API → exploration/project research reports</p></div><div class="status" id="model-status">ready</div></div>
+        <div class="integration-row"><div><strong>Direct model providers</strong><p>used by Exploration and Research</p></div><div class="status good" id="model-status">ready</div></div>
         <div class="integration-row"><div><strong>Persistence</strong><p>durable control-plane state</p></div><div class="status pending" id="persistence-status">checking</div></div>
       </div>
 
-      <details class="subsection" id="models">
-        <summary><span><strong>Model providers</strong><small>LM Studio, NVIDIA/NIM and compatible endpoints</small></span><span class="summary-action">Configure</span></summary>
-        <div class="subsection-body"><div class="subsection-head"><p>Provider is an inference endpoint. It is separate from the coding harness and from the model selected for a Run.</p><button id="new-provider">+ Provider</button></div><div id="provider-list" class="stack list-surface"></div></div>
+      <details class="subsection" id="workspace-roots-section">
+        <summary><span><strong>Workspace Roots</strong><small>Folders where AI Dashboard discovers local repositories and clones GitHub ones</small></span><span class="summary-action">Configure</span></summary>
+        <div class="subsection-body">
+          <div class="subsection-head">
+            <p class="subsection-copy">Discovery is strictly read-only: it inspects Git metadata and files, and never runs repository scripts.</p>
+          </div>
+          <label style="max-width:560px;">Add folder to scan<input id="workspace-root-input" type="text" placeholder="D:\Projects or /home/me/projects"></label>
+          <div class="row-actions"><button id="add-workspace-root" class="primary compact">Add root</button></div>
+          <div id="workspace-root-list" class="stack" style="margin-top:12px;"></div>
+        </div>
       </details>
 
-      <details class="subsection" id="automations">
+      <details class="subsection">
+        <summary><span><strong>Global project defaults</strong><small>New Projects inherit these unless overridden per project</small></span><span class="summary-action">Configure</span></summary>
+        <div class="subsection-body">
+          <p class="subsection-copy">Defaults keep normal import to a single action. Advanced values remain editable inside each Project's Settings tab.</p>
+          <form id="defaults-form">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px;">
+              <label>Default coding model<input name="codingModel" list="opencode-models" placeholder="provider/model or blank"></label>
+              <label>Planner model<input name="planningModel" list="opencode-models" placeholder="defaults to coding model"></label>
+              <label>Supervisor model<input name="supervisorModel" list="opencode-models"></label>
+              <label>Research model<input name="researchModel" list="direct-models"></label>
+              <label>Autonomy mode<select name="mode"><option value="manual">Manual</option><option value="assisted">Assisted</option><option value="autonomous">Autonomous</option></select></label>
+            </div>
+            <label class="check"><input type="checkbox" name="requireCi" checked>Require successful GitHub CI before review/merge</label>
+            <button class="primary compact" type="submit">Save defaults</button>
+          </form>
+        </div>
+      </details>
+
+      <details class="subsection">
+        <summary><span><strong>Model providers</strong><small>LM Studio, NVIDIA/NIM and compatible endpoints</small></span><span class="summary-action">Configure</span></summary>
+        <div class="subsection-body">
+          <div class="subsection-head"><p class="subsection-copy">A provider is an inference endpoint — separate from the coding harness and the model chosen per Run.</p><button id="new-provider" class="secondary-action compact">+ Provider</button></div>
+          <div id="provider-list" class="stack"></div>
+        </div>
+      </details>
+
+      <details class="subsection">
         <summary><span><strong>Autonomy controls</strong><small>Per-project loop mode and safety gates</small></span><span class="summary-action">Inspect</span></summary>
-        <div class="subsection-body"><p class="subsection-copy">Workers require a real diff and control-plane verification. CI errors fail closed. Independent supervisor approval is criterion-scoped and final verification runs again before merge.</p><div id="autonomy-list" class="stack list-surface"></div></div>
+        <div class="subsection-body">
+          <p class="subsection-copy">Workers require a real diff and control-plane verification. CI errors fail closed. Independent supervisor approval is criterion-scoped and final verification runs again before merge.</p>
+          <div id="autonomy-list" class="stack"></div>
+        </div>
       </details>
 
       <details class="subsection terminal-panel">
         <summary><span><strong>Control-plane event stream</strong><small>Operational detail for diagnosis</small></span><span class="summary-action">Open log</span></summary>
-        <div class="subsection-body"><div class="terminal-head"><span>Committed state events</span><button id="clear-events">Clear</button></div><pre id="events">waiting for events…</pre></div>
+        <div class="subsection-body"><pre id="events" class="terminal" style="margin-top:12px;">waiting for events…</pre><div class="row-actions" style="margin-top:8px;"><button id="clear-events" class="subtle compact">Clear log</button></div></div>
       </details>
     </section>
   </main>
 
+  <!-- ============ Discovery dialog ============ -->
+  <dialog id="discovery-dialog">
+    <div class="panel-head">
+      <div><p class="eyebrow">ADD PROJECTS</p><h2>Discover projects</h2></div>
+      <button value="cancel" id="close-discovery">Close</button>
+    </div>
+    <p class="dialog-note">Pick where your projects live. AI Dashboard finds local Git repositories, matches them with GitHub and imports with one action. Discovery never runs repository code.</p>
+    <div id="discovery-error" class="form-error" role="alert"></div>
+
+    <div class="discovery-tabs" role="tablist">
+      <button id="discovery-local-tab" class="active" data-tab="local" type="button">Local repositories</button>
+      <button id="discovery-github-tab" data-tab="github" type="button">GitHub</button>
+    </div>
+    <div id="discovery-local-panel"></div>
+    <div id="discovery-github-panel" hidden></div>
+  </dialog>
+
+  <!-- ============ Manual registration (advanced) ============ -->
+  <dialog id="project-dialog"><form method="dialog" id="project-form">
+    <h2>Register project manually</h2>
+    <label>Name<input name="name" required placeholder="Norge World Engine"></label>
+    <label>Description<input name="description" placeholder="One sentence about this project"></label>
+    <label>Local repository path<input name="repoPath" placeholder="C:\projects\nwe or /srv/nwe"></label>
+    <label>GitHub repository<input name="repository" placeholder="owner/repository"></label>
+    <label>Base branch<input name="baseBranch" value="main"></label>
+    <label>Verification commands<textarea name="verificationCommands" rows="3" placeholder="npm test&#10;npm run lint"></textarea></label>
+    <p class="dialog-note">One command per line. Commands are parsed to argv and executed without a shell. Prefer discovery — it fills these automatically.</p>
+    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create project</button></div>
+  </form></dialog>
+
   <dialog id="exploration-dialog"><form method="dialog" id="exploration-form">
     <h2>Capture exploration</h2>
     <label>Idea / working title<input name="title" required placeholder="Self-hosted autonomous AI control center"></label>
-    <label>Notes<textarea name="notes" rows="8" placeholder="What are you considering, why might it matter, constraints, questions, rough goals..."></textarea></label>
-    <label>Direct model<input name="model" list="direct-models" placeholder="Optional now; required when you run analysis"></label>
-    <p class="dialog-note">No Project or repository is required. Saving this does not start an agent or create Git state.</p>
+    <label>Notes<textarea name="notes" rows="8" placeholder="What are you considering, why might it matter, constraints, questions..."></textarea></label>
+    <p class="dialog-note">No Project or repository required. Saving does not start an agent or create Git state.</p>
     <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Save exploration</button></div>
+  </form></dialog>
+
+  <dialog id="model-choice-dialog"><form method="dialog" id="model-choice-form">
+    <h2>Choose a direct model</h2>
+    <label>Model<input id="model-choice-input" name="model" list="direct-models" placeholder="provider/model" required></label>
+    <p class="dialog-note">Runs go straight to the configured provider. Nothing is executed in any repository.</p>
+    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Start run</button></div>
   </form></dialog>
 
   <dialog id="promotion-dialog"><form method="dialog" id="promotion-form">
@@ -128,58 +211,44 @@
     <label>Local repository path<input name="repoPath" placeholder="Optional; bind later if no repository exists yet"></label>
     <label>GitHub repository<input name="repository" placeholder="Optional owner/repository"></label>
     <label>Base branch<input name="baseBranch" value="main"></label>
-    <label>Default verification commands<textarea name="verificationCommands" rows="3" placeholder="npm test&#10;npm run lint"></textarea></label>
-    <label>Default coding model<input name="codingModel" list="opencode-models" placeholder="provider/model or leave blank"></label>
-    <label>Planner model<input name="planningModel" list="opencode-models"></label>
-    <label>Supervisor model<input name="supervisorModel" list="opencode-models"></label>
-    <label>Default research model<input name="researchModel" list="direct-models"></label>
-    <p class="dialog-note">The latest completed Exploration report becomes the Project bootstrap brief. Promotion is idempotent: replay cannot create a second Project.</p>
+    <p class="dialog-note">The latest completed Exploration report becomes the bootstrap brief. Promotion is idempotent.</p>
     <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create Project</button></div>
   </form></dialog>
 
-  <dialog id="project-dialog"><form method="dialog" id="project-form">
-    <h2>Register project</h2>
-    <label>Name<input name="name" required placeholder="Norge World Engine"></label>
-    <label>Local repository path<input name="repoPath" placeholder="C:\\projects\\nwe or /srv/nwe"></label>
-    <label>GitHub repository<input name="repository" placeholder="owner/repository"></label>
-    <label>Base branch<input name="baseBranch" value="main"></label>
-    <label>Default verification commands<textarea name="verificationCommands" rows="3" placeholder="npm test&#10;npm run lint"></textarea></label>
-    <p class="dialog-note">One command per line. Commands are parsed to argv and executed without a shell.</p>
-    <label>Default coding model<input name="codingModel" list="opencode-models" placeholder="provider/model or leave blank"></label>
-    <label>Planner model<input name="planningModel" list="opencode-models" placeholder="defaults to coding model"></label>
-    <label>Supervisor model<input name="supervisorModel" list="opencode-models" placeholder="defaults to task model"></label>
-    <label>Default research model<input name="researchModel" list="direct-models" placeholder="lmstudio/model or nvidia/model"></label>
-    <label>Autonomy mode<select name="autonomyMode"><option value="manual">Manual</option><option value="assisted">Assisted</option><option value="autonomous">Autonomous</option></select></label>
-    <label class="check"><input type="checkbox" name="requireCi" checked> Require successful GitHub CI before review/merge</label>
-    <label class="check"><input type="checkbox" name="autoAnalyzeIdeas"> Automatically analyze new ideas</label>
-    <label class="check"><input type="checkbox" name="autoMerge"> Auto-merge only after machine evidence + CI + independent supervisor approval</label>
-    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create</button></div>
+  <dialog id="task-dialog"><form method="dialog" id="task-form">
+    <h2>Create task</h2>
+    <input type="hidden" name="projectId" id="task-project">
+    <label>Title<input name="title" required placeholder="Harden terrain streaming admission"></label>
+    <label>Description<textarea name="description" rows="5" placeholder="Concrete implementation scope, constraints and context..."></textarea></label>
+    <label>Acceptance criteria<textarea name="acceptanceCriteria" rows="4" placeholder="One verifiable criterion per line"></textarea></label>
+    <label>Dependencies<textarea name="blockedBy" rows="2" placeholder="Task titles or IDs, one per line"></textarea></label>
+    <label>Priority<select name="priority"><option>P0</option><option>P1</option><option selected>P2</option><option>P3</option></select></label>
+    <details><summary style="min-height:44px;display:flex;align-items:center;color:var(--text-muted);cursor:pointer;">Advanced options</summary>
+      <label>Verification commands<textarea name="verificationCommands" rows="3" placeholder="Leave blank to inherit project defaults"></textarea></label>
+      <label>Model<input name="model" list="opencode-models" placeholder="project default / provider/model"></label>
+    </details>
+    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create task</button></div>
+  </form></dialog>
+
+  <dialog id="respond-dialog"><form method="dialog" id="respond-form">
+    <h2 id="respond-title">Respond to blocker</h2>
+    <input type="hidden" name="taskId" id="respond-task-id">
+    <p class="muted" id="respond-context"></p>
+    <label>Your answer / decision<textarea name="response" rows="4" required placeholder="What should the worker do?"></textarea></label>
+    <label class="check"><input type="checkbox" name="resume">Make the Task ready for work again after saving</label>
+    <p class="dialog-note">Saving stores your answer as Task context. Resuming only requeues the Task — every admission and review gate still applies. Never enter passwords, keys or tokens.</p>
+    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Save answer</button></div>
   </form></dialog>
 
   <dialog id="idea-dialog"><form method="dialog" id="idea-form">
-    <h2>Capture project idea</h2><label>Project<select name="projectId" id="idea-project" required></select></label>
+    <h2>Capture project idea</h2><input type="hidden" name="projectId" id="idea-project">
     <label>Idea<input name="title" required placeholder="Add autonomous release notes"></label>
     <label>Context<textarea name="description" rows="6" placeholder="What should exist when this is finished?"></textarea></label>
     <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Save idea</button></div>
   </form></dialog>
 
-  <dialog id="task-dialog"><form method="dialog" id="task-form">
-    <h2>Create task</h2>
-    <label>Project<select name="projectId" id="task-project" required></select></label>
-    <label>Title<input name="title" required placeholder="Harden terrain streaming admission"></label>
-    <label>Description<textarea name="description" rows="5" placeholder="Concrete implementation scope, constraints and context..."></textarea></label>
-    <label>Acceptance criteria<textarea name="acceptanceCriteria" rows="4" placeholder="One verifiable criterion per line"></textarea></label>
-    <label>Dependencies<textarea name="blockedBy" rows="2" placeholder="Task IDs, one per line"></textarea></label>
-    <label>Verification commands<textarea name="verificationCommands" rows="3" placeholder="Leave blank to inherit project defaults"></textarea></label>
-    <label>Priority<select name="priority"><option>P0</option><option>P1</option><option selected>P2</option><option>P3</option></select></label>
-    <label>Harness<select name="runner"><option value="opencode">OpenCode</option></select></label>
-    <label>Model<input name="model" list="opencode-models" placeholder="project default / provider/model"></label>
-    <label>Agent role<input name="agentRole" placeholder="LUMEN / FORGE / general"></label>
-    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create task</button></div>
-  </form></dialog>
-
   <dialog id="research-dialog"><form method="dialog" id="research-form">
-    <h2>Research project</h2><label>Project<select name="projectId" id="research-project" required></select></label>
+    <h2>Research project</h2><input type="hidden" name="projectId" id="research-project">
     <label>Direct model<input name="model" list="direct-models" placeholder="project research default / provider/model"></label>
     <label>Research request<textarea name="prompt" required rows="8" placeholder="Analyze the renderer architecture, identify risks and recommend the next three verifiable steps."></textarea></label>
     <p class="dialog-note">Read-only repository context. No coding harness, worktree or Git branch.</p>
@@ -194,10 +263,13 @@
     <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Save provider</button></div>
   </form></dialog>
 
-  <dialog id="evidence-dialog"><form method="dialog"><div class="panel-head"><div><p class="eyebrow">TASK EVIDENCE</p><h2 id="evidence-title">Evidence</h2></div><button value="cancel">Close</button></div><pre id="evidence-content">Loading…</pre></form></dialog>
+  <dialog id="evidence-dialog"><form method="dialog">
+    <div class="panel-head"><div><p class="eyebrow">TASK EVIDENCE</p><h2 id="evidence-title">Evidence</h2></div><button value="cancel">Close</button></div>
+    <div id="evidence-content"><p class="muted">Loading…</p></div>
+  </form></dialog>
 
+  <div id="toast-region" aria-live="polite"></div>
   <datalist id="opencode-models"></datalist><datalist id="direct-models"></datalist>
-  <script type="module" src="/navigation.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { normalizeWorkScopes, scopeSetsOverlap, scopeSubset, taskWorkScopes } from './work-scope.mjs';
 import { projectAdmissionIdentity, taskAdmissionIdentity } from './admission-identity.mjs';
+import { resolveWorkspaceRoot, workspacePathKey } from './workspace-paths.mjs';
 
 const SCHEMA_VERSION = 8;
 const PROJECT_STATUSES = new Set(['active', 'needs_sync', 'blocked']);
@@ -13,6 +14,10 @@ const DEFAULT_AUTONOMY = Object.freeze({
   ciDiscoverySeconds: 30, requireCi: true, mergeMethod: 'squash', deleteRemoteBranch: true,
 });
 const DEFAULT_MODEL_POLICY = Object.freeze({ codingModel: null, planningModel: null, supervisorModel: null, researchModel: null });
+const DEFAULT_PROJECT_DEFAULTS = Object.freeze({
+  modelPolicy: structuredClone(DEFAULT_MODEL_POLICY),
+  autonomy: { mode: 'manual', requireCi: true },
+});
 const ACTIVE_RUN_STATES = new Set(['preparing', 'running', 'retrying', 'dispatch_unknown']);
 const TERMINAL_RUN_STATES = new Set(['completed', 'merged', 'failed', 'aborted']);
 const READ_ONLY_AGENT_ROLES = new Set(['supervisor', 'reviewer', 'research', 'master', 'planner']);
@@ -30,6 +35,7 @@ const EMPTY_STATE = Object.freeze({
   modelProviders: [],
   mcpServers: [],
   integrations: {},
+  settings: { workspaceRoots: [], projectDefaults: structuredClone(DEFAULT_PROJECT_DEFAULTS) },
 });
 
 function cloneEmpty() { return structuredClone(EMPTY_STATE); }
@@ -64,6 +70,7 @@ function projectRecord(input, now = new Date().toISOString()) {
   return {
     id: input.id || randomUUID(),
     name: input.name.trim(),
+    description: boundedText(input.description, 2_000) || null,
     repoPath: input.repoPath?.trim() || null,
     repository: input.repository?.trim() || null,
     baseBranch: input.baseBranch?.trim() || 'main',
@@ -270,8 +277,16 @@ function normalizeState(parsed) {
     if (!Array.isArray(state[key])) state[key] = [];
   }
   if (!state.integrations || typeof state.integrations !== 'object' || Array.isArray(state.integrations)) state.integrations = {};
-  state.projects = state.projects.map((project) => ({ repoPath: null, repository: null, baseBranch: 'main', status: 'active', brief: null, sourceExplorationId: null, sourceExplorationRunId: null, lastPreflight: null, ...project,
+  state.projects = state.projects.map((project) => ({ repoPath: null, repository: null, baseBranch: 'main', status: 'active', brief: null, description: null, sourceExplorationId: null, sourceExplorationRunId: null, lastPreflight: null, ...project,
     autonomy: autonomy(project.autonomy), modelPolicy: modelPolicy(project.modelPolicy), verificationCommands: stringList(project.verificationCommands) }));
+  if (!state.settings || typeof state.settings !== 'object' || Array.isArray(state.settings)) state.settings = { workspaceRoots: [], projectDefaults: structuredClone(DEFAULT_PROJECT_DEFAULTS) };
+  if (!Array.isArray(state.settings.workspaceRoots)) state.settings.workspaceRoots = [];
+  const defaults = state.settings.projectDefaults && typeof state.settings.projectDefaults === 'object' ? state.settings.projectDefaults : {};
+  state.settings.projectDefaults = {
+    modelPolicy: modelPolicy(defaults.modelPolicy),
+    autonomy: { mode: ['manual', 'assisted', 'autonomous'].includes(defaults.autonomy?.mode) ? defaults.autonomy.mode : DEFAULT_PROJECT_DEFAULTS.autonomy.mode,
+      requireCi: defaults.autonomy?.requireCi !== false },
+  };
   state.explorations = state.explorations.map((exploration) => ({ state: 'draft', model: null, promotedProjectId: null, promotedAt: null, ...exploration }));
   state.explorationRuns = state.explorationRuns.map((run) => ({ kind: 'analysis', harness: 'direct-model', report: null, reasoning: null, usage: null, error: null, ...run }));
   state.ideas = state.ideas.map((idea) => ({ materialization: null, ...idea }));
@@ -358,6 +373,67 @@ export class StateStore {
   }, ({ project }) => project, ({ created }) => created ? 'exploration.promoted' : 'exploration.promotion_replayed'); }
 
   async addProject(input) { return this.#mutate('project.created', (state) => { const project = projectRecord(input); state.projects.push(project); return project; }); }
+
+  async addWorkspaceRoot(input) { return this.#mutate('settings.workspace_root_added', async (state) => {
+    const resolved = await resolveWorkspaceRoot(typeof input === 'string' ? input : input?.path);
+    const key = workspacePathKey(resolved);
+    if (state.settings.workspaceRoots.some((existing) => workspacePathKey(existing) === key)) {
+      return { path: resolved, created: false, workspaceRoots: structuredClone(state.settings.workspaceRoots) };
+    }
+    state.settings.workspaceRoots.push(resolved);
+    return { path: resolved, created: true, workspaceRoots: structuredClone(state.settings.workspaceRoots) };
+  }, (value) => value, (value) => value.created ? 'settings.workspace_root_added' : 'settings.workspace_root_replayed'); }
+  async removeWorkspaceRoot(input) { return this.#mutate('settings.workspace_root_removed', (state) => {
+    const raw = typeof input === 'string' ? input : input?.path;
+    const key = workspacePathKey(raw);
+    const index = state.settings.workspaceRoots.findIndex((existing) => workspacePathKey(existing) === key);
+    if (index < 0) throw new Error('Workspace root not found');
+    const [removed] = state.settings.workspaceRoots.splice(index, 1);
+    return { path: removed, workspaceRoots: structuredClone(state.settings.workspaceRoots) };
+  }); }
+  async setProjectDefaults(patch = {}) { return this.#mutate('settings.project_defaults_updated', (state) => {
+    const current = state.settings.projectDefaults;
+    if (patch.modelPolicy !== undefined) current.modelPolicy = modelPolicy({ ...current.modelPolicy, ...patch.modelPolicy });
+    if (patch.autonomy !== undefined) {
+      current.autonomy = {
+        mode: ['manual', 'assisted', 'autonomous'].includes(patch.autonomy.mode) ? patch.autonomy.mode : current.autonomy.mode,
+        requireCi: patch.autonomy.requireCi !== undefined ? patch.autonomy.requireCi !== false : current.autonomy.requireCi,
+      };
+    }
+    return structuredClone(current);
+  }); }
+
+  // Discovery import establishes managed Project state only. It never creates
+  // Runs/Tasks and therefore never grants execution authority by itself.
+  async importDiscoveredProject(input) { return this.#mutate('project.imported', (state) => {
+    const repoPathKey = input.repoPath ? workspacePathKey(input.repoPath) : null;
+    if (!input.name?.trim()) throw new Error('Project name is required for import');
+    if (!repoPathKey && !input.repository) throw new Error('Import requires a local repository path or a GitHub repository');
+    const duplicate = state.projects.find((project) => (
+      (repoPathKey && project.repoPath && workspacePathKey(project.repoPath) === repoPathKey)
+      || (input.repository && project.repository && project.repository.toLowerCase() === String(input.repository).toLowerCase())
+    ));
+    if (duplicate) return { project: duplicate, created: false };
+    const defaults = state.settings.projectDefaults;
+    const project = projectRecord({
+      name: input.name,
+      description: input.description || null,
+      repoPath: input.repoPath || null,
+      repository: input.repository || null,
+      baseBranch: input.baseBranch || 'main',
+      verificationCommands: stringList(input.verificationCommands),
+      modelPolicy: modelPolicy({
+        codingModel: input.modelPolicy?.codingModel ?? defaults.modelPolicy.codingModel,
+        planningModel: input.modelPolicy?.planningModel ?? defaults.modelPolicy.planningModel,
+        supervisorModel: input.modelPolicy?.supervisorModel ?? defaults.modelPolicy.supervisorModel,
+        researchModel: input.modelPolicy?.researchModel ?? defaults.modelPolicy.researchModel,
+      }),
+      autonomy: autonomy({ ...defaults.autonomy }),
+    });
+    state.projects.push(project);
+    return { project, created: true };
+  }, (value) => value, ({ created }) => created ? 'project.imported' : 'project.import_replayed'); }
+
   async updateProject(id, patch) { return this.#mutate('project.updated', (state) => {
     const project = state.projects.find((item) => item.id === id); if (!project) throw new Error('Project not found');
     if (patch.status !== undefined && !PROJECT_STATUSES.has(patch.status)) throw new Error('Invalid Project status');
@@ -366,6 +442,7 @@ export class StateStore {
     if (patch.modelPolicy) project.modelPolicy = modelPolicy({ ...project.modelPolicy, ...patch.modelPolicy });
     if (patch.verificationCommands !== undefined) project.verificationCommands = stringList(patch.verificationCommands);
     if (patch.brief !== undefined) project.brief = boundedText(patch.brief, 60_000) || null;
+    if (patch.description !== undefined) project.description = boundedText(patch.description, 2_000) || null;
     for (const key of ['name', 'repoPath', 'repository', 'baseBranch', 'status']) if (patch[key] !== undefined) project[key] = patch[key];
     if (invalidatesPreflight) project.lastPreflight = null;
     project.updatedAt = new Date().toISOString(); return project;
@@ -754,13 +831,14 @@ export class StateStore {
   async setIntegration(name, value) { return this.#mutate('integration.updated', (state) => { state.integrations[name] = { ...value, updatedAt: new Date().toISOString() }; return { name, ...state.integrations[name] }; }); }
 
   async #mutate(defaultType, mutator, resultSelector = (value) => value, eventTypeSelector = () => defaultType) {
-    const operation = this.mutationChain.then(async () => { const next = structuredClone(this.state); const mutationResult = mutator(next);
+    const operation = this.mutationChain.then(async () => { const next = structuredClone(this.state); const mutationResult = await mutator(next);
       const eventType = eventTypeSelector(mutationResult); const result = resultSelector(mutationResult); next.revision = Number(this.state.revision || 0) + 1;
       const eventPayload = structuredClone(result); await this.#persistSnapshot(next, eventType, eventPayload); this.state = next;
       this.onChange(eventType, structuredClone(eventPayload)); return structuredClone(result); });
     this.mutationChain = operation.then(() => undefined, () => undefined); return operation;
   }
   async #persistSnapshot(snapshot, eventType = null, eventPayload = null) {
+    if (!this.persistence && !this.filePath) return;
     const durableSnapshot = structuredClone(snapshot); const durablePayload = eventPayload === null ? null : structuredClone(eventPayload);
     if (this.persistence) { if (eventType && typeof this.persistence.saveWithEvent === 'function') await this.persistence.saveWithEvent(durableSnapshot, eventType, durablePayload);
       else await this.persistence.save(durableSnapshot); return; }

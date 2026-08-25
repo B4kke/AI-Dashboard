@@ -38,7 +38,7 @@ async function body(request) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-export function createHttpServer({ store, events, orchestrator, autonomy, research, github, mcp = null, mcpClients = null, privateMode = false, publicDir, version = '0.0.6' }) {
+export function createHttpServer({ store, events, orchestrator, autonomy, research, github, mcp = null, mcpClients = null, discovery = null, privateMode = false, publicDir, version = '0.0.6' }) {
   async function api(request, response, url) {
     if (request.method === 'GET' && url.pathname === '/api/health') {
       const [openCode, providers] = await Promise.all([orchestrator.opencodeOverview(), research.listProviders().catch(() => [])]);
@@ -101,6 +101,32 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
     if (request.method === 'POST' && url.pathname === '/api/projects') return json(response, 201, await store.addProject(await body(request)));
     if (request.method === 'POST' && url.pathname === '/api/tasks') return json(response, 201, await store.addTask(await body(request)));
     if (request.method === 'POST' && url.pathname === '/api/ideas') return json(response, 201, await store.addIdea(await body(request)));
+
+    if (url.pathname.startsWith('/api/discovery')) {
+      if (!discovery) return json(response, 503, { error: 'Discovery is not available' });
+      if (request.method === 'GET' && url.pathname === '/api/discovery') {
+        return json(response, 200, await discovery.scan({ force: url.searchParams.get('refresh') === '1' }));
+      }
+      if (request.method === 'POST' && url.pathname === '/api/discovery/import') {
+        const input = await body(request);
+        if (input.repository && !input.repoPath) return json(response, 202, await discovery.importGitHubRepository(input));
+        return json(response, 201, await discovery.importLocalRepository(input));
+      }
+    }
+    if (request.method === 'GET' && url.pathname === '/api/settings') {
+      return json(response, 200, { workspaceRoots: store.snapshot().settings?.workspaceRoots || [], projectDefaults: discovery?.projectDefaults?.() || null });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/settings/workspace-roots') {
+      const result = await discovery.addWorkspaceRoot((await body(request)).path);
+      return json(response, result.created ? 201 : 200, result);
+    }
+    const rootDelete = url.pathname.match(/^\/api\/settings\/workspace-roots\/(.+)$/);
+    if (request.method === 'DELETE' && rootDelete) {
+      return json(response, 200, await discovery.removeWorkspaceRoot(decodeURIComponent(rootDelete[1])));
+    }
+    if (request.method === 'PUT' && url.pathname === '/api/settings/project-defaults') {
+      return json(response, 200, await discovery.setProjectDefaults(await body(request)));
+    }
     const projectPatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
     if (request.method === 'PATCH' && projectPatch) return json(response, 200, await store.updateProject(decodeURIComponent(projectPatch[1]), await body(request)));
     const projectPreflight = url.pathname.match(/^\/api\/projects\/([^/]+)\/preflight$/);

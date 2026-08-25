@@ -217,6 +217,36 @@ export class GitHubClient {
     return this.call('users.getAuthenticated', () => this.octokit.rest.users.getAuthenticated());
   }
 
+  async listRepositories({ maxPages = 3, perPage = 100 } = {}) {
+    if (!this.token) return [];
+    const repositories = [];
+    for (let page = 1; page <= Math.max(1, maxPages); page += 1) {
+      const batch = await this.call('repos.listForAuthenticatedUser', () => this.octokit.rest.repos.listForAuthenticatedUser({
+        visibility: 'all',
+        affiliation: 'owner,collaborator,organization_member',
+        sort: 'pushed',
+        direction: 'desc',
+        per_page: perPage,
+        page,
+      }));
+      for (const repo of Array.isArray(batch) ? batch : []) {
+        let fullName = null;
+        try { fullName = parseGitHubRepository(repo.full_name).fullName; } catch { continue; }
+        repositories.push({
+          fullName,
+          name: repo.name || null,
+          description: repo.description || null,
+          defaultBranch: repo.default_branch || 'main',
+          private: repo.private === true,
+          pushedAt: repo.pushed_at || null,
+          url: repo.html_url || null,
+        });
+      }
+      if (!Array.isArray(batch) || batch.length < perPage) break;
+    }
+    return repositories;
+  }
+
   async rateLimit() {
     const value = await this.call('rateLimit.get', () => this.octokit.rest.rateLimit.get());
     const core = value?.resources?.core || value?.rate || null;

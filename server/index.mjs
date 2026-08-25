@@ -17,6 +17,7 @@ import { OpenCodeClient } from './integrations/opencode.mjs';
 import { GitHubClient } from './integrations/github.mjs';
 import { createResearchService } from './research/service.mjs';
 import { createOrchestrator } from './orchestrator.mjs';
+import { createDiscoveryService } from './discovery/service.mjs';
 import { createHttpServer } from './http-server.mjs';
 import { createDashboardMcp } from './mcp/dashboard-server.mjs';
 import { McpClientManager } from './mcp/client-manager.mjs';
@@ -82,6 +83,14 @@ const autonomy = new AutonomyEngine({
   },
 });
 
+// Startup repository discovery is read-only and informational. New
+// repositories are surfaced to the operator for explicit import; discovery
+// never auto-imports, starts workers or creates Git side effects.
+const discovery = createDiscoveryService({ store, github });
+discovery.scan().then((report) => {
+  if (report.roots.length && report.newCount > 0) console.log(`AI Dashboard discovered ${report.newCount} not-yet-imported repository(ies) in configured Workspace Roots`);
+}).catch(() => {});
+
 // MCP is deliberately loopback-only until authentication, authorization and audit exist.
 // The master profile can request bounded mutations, but coding work still enters normal control-plane gates.
 mcp = privateMode ? createDashboardMcp({ store, orchestrator, research, version: VERSION, allowMutations: true }) : null;
@@ -89,7 +98,7 @@ const mcpClients = privateMode ? new McpClientManager({ store, version: VERSION,
 if (!privateMode) console.log('AI Dashboard MCP disabled because the control API is not bound to loopback');
 
 const server = createHttpServer({
-  store, events, orchestrator, autonomy, research, github, mcp, mcpClients,
+  store, events, orchestrator, autonomy, research, github, mcp, mcpClients, discovery,
   publicDir: PUBLIC, version: VERSION, privateMode,
 });
 autonomy.start();
