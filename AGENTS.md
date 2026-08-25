@@ -17,6 +17,22 @@ Before planning or changing executable work, read:
 
 When docs and implementation disagree, inspect current code/tests/Git state, treat the docs as stale, and update them in the same change.
 
+### Mandatory UX / frontend / discovery reading
+
+The general read order above is not sufficient for user-facing work.
+
+Before changing `public/`, navigation, onboarding, Project presentation, responsive behavior, interaction patterns, visual states or any other operator-facing UI, also read:
+
+- `docs/11-design-principles.md` — **binding visual and interaction design contract**.
+
+Before changing Project cards, Project workspace, Workspace Roots, repository discovery, local/GitHub matching, Project import/clone flow, human-readable state presentation, evidence presentation or repair UX, also read:
+
+- `docs/10-project-first-ux-discovery.md` — **binding implementation slice for Project-first UX and repository discovery**.
+
+These two documents are conditional requirements, not a replacement for architecture or safety rules. For pure backend work unrelated to their surfaces they do not need to be read. When convenience or visual simplification conflicts with fail-closed control-plane, evidence, authority or security invariants, the control-plane invariant wins and the UI must explain that state clearly rather than hide or weaken it.
+
+Frontend/UX work is not complete merely because DOM, syntax or unit tests pass. For material layout/navigation changes, verify the rendered result at desktop, tablet and phone widths, including approximately **1440 px, 768 px and 390 px**, and check the design acceptance criteria in `docs/11-design-principles.md`. Do not claim visual completion without rendered visual inspection.
+
 ## Product model
 
 `Project` is the root aggregate for executable work. Existing repositories are a primary entry path. A user or Master AI may create an ordinary `Task` directly; `Idea` is optional.
@@ -211,7 +227,11 @@ Architecture-changing work updates canonical docs in the same change:
 - `docs/06-sdk-integrations.md` — SDK boundaries/version caveats
 - `docs/07-mcp-agent-architecture.md` — MCP/agent model
 - `docs/08-mcp-input-required.md` — modern operator-input contract
+- `docs/10-project-first-ux-discovery.md` — Project-first/discovery scope when that slice changes
+- `docs/11-design-principles.md` — visual/interaction contract when product design rules change
 - `AGENTS.md` — binding behavior
+
+Do not duplicate roadmap/status truth into `docs/10` or `docs/11`: `docs/04-roadmap.md` remains the priority/implemented-vs-planned authority. `docs/10` specifies the current Project-first slice and `docs/11` specifies the durable design contract.
 
 Never label a planned capability implemented because an interface exists. Distinguish implemented, deterministic/isolated tested, exact-head GitHub Actions verified and real external PC dogfood.
 
@@ -225,6 +245,7 @@ A change is not done merely because code exists. Before claiming completion:
 4. verify dependency lock matches pinned dependencies,
 5. keep docs aligned with implementation/limitations,
 6. preserve fail-closed authority/security boundaries,
-7. state remaining external risks honestly.
+7. for material UI/layout/navigation changes, perform rendered visual verification against `docs/11-design-principles.md` at desktop/tablet/phone widths,
+8. state remaining external risks honestly.
 
 Real OpenCode + real disposable GitHub/Actions PC dogfood remains a verification level above deterministic MCP integration tests. A green loopback MCP test does not prove interoperability with every external host.
