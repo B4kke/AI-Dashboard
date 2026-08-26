@@ -4,7 +4,7 @@ Self-hosted control center for AI-assisted and progressively autonomous project 
 
 AI Dashboard connects existing projects/repositories, direct Tasks, optional Ideas/Explorations, specialist agents, AI coding harnesses, model providers, MCP capabilities, read-only Research Runs, isolated Git worktrees and GitHub/CI evidence behind one fail-closed control plane.
 
-> Status: pre-alpha / PC-beta candidate with Project-first discovery + MCP/Agent Registry + **Master chat** (normal chat environment) early slices. Fleet head `36b94c2` is Linux+Windows Actions green on PR (#32988127729); Master chat is implemented + deterministic + locally rendered (1440/768/390) on top, pending its own exact-head Actions green. A beta claim still requires Linux + Windows green on the exact final commit and the complete current-stack OpenCode/GitHub PC beta.
+> Status: pre-alpha / PC-beta candidate with Project-first discovery + MCP/Agent Registry + **Master chat** (normal chat environment) early slices. Fleet + Master head `a990d75` is Linux+Windows Actions green on exact head (push `32995600890` + PR `32995605683`); fleet head `36b94c2` (`#32988127729`) and Project-first head `5af53ae` (`#451`) were prior level-3 milestones. A beta claim still requires Linux + Windows green on the exact final commit and the complete current-stack OpenCode/GitHub PC beta.
 
 ## Product model
 

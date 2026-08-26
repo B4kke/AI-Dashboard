@@ -141,7 +141,7 @@ Worker never approves/merges itself. Supervisor is a separate read-only Run. Con
 
 ## Agent Registry and ownership
 
-State schema v8 contains durable project specialists plus external-session termination proof for coding Runs. The Agent Registry introduced in v7 gives an agent stable identity, project, role, harness, optional model, instructions, capabilities, enabled state and concrete project-relative `workScopes`.
+State schema v9 contains durable project specialists plus external-session termination proof for coding Runs and persistent Master conversations/messages. The Agent Registry introduced in v7 gives an agent stable identity, project, role, harness, optional model, instructions, capabilities, enabled state and concrete project-relative `workScopes`.
 
 A Task may reference an `agentId`. Assignment snapshots agent name/role/instructions and uses scopes constrained to the agent's registered scopes. Assignment and Task `workScopes` may change only while there is no execution history; a positive iteration or any persisted Run freezes them even if the Task is later back in `backlog` or `needs_input`.
 

@@ -168,7 +168,7 @@ Implemented via M3B:
 
 - first-class Master conversation/session history (global + project-scoped, `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`).
 
-### M3B — Master conversational workspace / chat — IMPLEMENTED EARLY SLICE
+### M3B — Master conversational workspace / chat — IMPLEMENTED / LEVEL-3 VERIFIED
 
 Implemented early slice (normal chat environment, inspired by `odysseus-dev/odysseus@dev` but own implementation — `odysseus` is `AGPL-3.0-or-later`, no substantial code reuse):
 
@@ -181,6 +181,8 @@ Implemented early slice (normal chat environment, inspired by `odysseus-dev/odys
 - empty state like a normal chat: centered `✦ Master` mark, tip, durably stored history,
 - mobile-first: desktop 300px+1fr grid, tablet/phone stacked, no horizontal overflow, 44px touch targets,
 - deterministic coverage `test/master-chat.test.mjs` + rendered smoke 1440/768/390 for `/#/master` and `/project/:id/master` (see hardening checkpoint).
+
+Exact-head Linux+Windows GitHub Actions verified on commit `a990d75` (push `32995600890` + PR `32995605683`).
 
 Still planned:
 
@@ -246,11 +248,11 @@ Still planned:
 - trusted Master-chat approval/elicitation UI,
 - optional MCP Tasks extension only if interoperability requires it; Dashboard domain Tasks remain canonical.
 
-### M3E — Agent Registry & specialist assistants — IMPLEMENTED EARLY SLICE
+### M3E — Agent Registry & specialist assistants — IMPLEMENTED / LEVEL-3 VERIFIED
 
 Implemented/tested:
 
-- durable project Agent Registry in StateStore schema v8,
+- durable project Agent Registry in StateStore schema v9,
 - identity/name/role/harness/model/instructions/capabilities/enabled state,
 - explicit project-relative `workScopes`,
 - static conflict rejection for overlapping mutating specialists,
@@ -270,6 +272,8 @@ Implemented/tested:
 - uncertain OpenCode dispatch retains ownership,
 - disjoint scopes can run concurrently when dependencies/concurrency allow.
 - Project-scoped Agent fleet operator surface: whitelisted `POST /api/projects/:id/agents`, `PATCH /api/agents/:id`, `GET /api/projects/:id/agents` (fleet view with assigned Task/active Run) and rendered Agents tab at 1440/768/390 showing name/role/enabled/harness/model/capabilities/workScopes/assigned Task/active Run.
+
+Exact-head Linux+Windows GitHub Actions verified on commit `36b94c2` (PR run `32988127729`) and re-verified on `a990d75` (PR `32995605683`).
 
 Still planned:
 
@@ -313,7 +317,7 @@ On one clean exact final commit:
 11. deterministic beta harness/resume proves stable IDs/contracts/evidence/idempotence,
 12. full real OpenCode + disposable GitHub Actions campaign including failure/repair/rejection/correction/merge.
 
-Gates 1–4 were proven on Project-first implementation head `5af53ae` / Actions #451 before the documentation truth-sync. They must be green again on the final branch head after any subsequent commit.
+Gates 1–4 were proven on Project-first implementation head `5af53ae` / Actions `#451` before the documentation truth-sync. They were re-verified on fleet head `36b94c2` / PR run `32988127729` and on Master head `a990d75` / PR run `32995605683`. They must be green again on the final branch head after any subsequent commit.
 
 A failed external scenario is evidence to harden the control plane, never permission to weaken a gate.
 
