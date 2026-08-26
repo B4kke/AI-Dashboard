@@ -117,17 +117,17 @@ try {
   for (let i = 0; i < 80; i += 1) {
     const probe = await client.send('Runtime.evaluate', { expression: `(() => {
       const ready = document.querySelector(${JSON.stringify(expectedSelector)});
-      const connected = document.getElementById('system-label')?.textContent || '';
+      const mounted = Boolean(document.getElementById('root')?.firstElementChild);
       const root = document.documentElement;
       return JSON.stringify({
-        ready: Boolean(ready), connected,
+        ready: Boolean(ready), mounted,
         scrollWidth: root.scrollWidth, clientWidth: root.clientWidth,
         overflow: root.scrollWidth > root.clientWidth + 1,
       });
     })()`, returnByValue: true });
     const value = JSON.parse(probe.result.value);
     overflow = value;
-    if (value.ready && value.connected === 'control plane online') { rendered = true; break; }
+    if (value.ready && value.mounted) { rendered = true; break; }
     if (runtimeErrors.length) break;
     await sleep(250);
   }
