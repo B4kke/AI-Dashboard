@@ -76,6 +76,19 @@ M3 model source/API study:
 
 AI Dashboard therefore passes an explicit provider/model object to OpenCode and uses the connected harness catalog for coding-model choices instead of maintaining a competing hard-coded OpenCode list.
 
+## Odysseus
+
+Repository studied: https://github.com/odysseus-dev/odysseus
+
+Relevant product/UX ideas:
+- a persistent assistant inside a broader workspace shell,
+- conversation navigation beside a focused message stream,
+- conversational access to project context without replacing the underlying product model.
+
+AI Dashboard's Master workspace uses those high-level interaction ideas, but its HTML, CSS, state model and control-plane integration are independently implemented. No Odysseus source files, components, assets or substantial implementation have been copied.
+
+License observed for the studied repository: AGPL-3.0-or-later. Any future source or asset reuse requires an explicit compatibility decision and the applicable source/attribution obligations before merge.
+
 ## Direct model provider APIs
 
 The direct-model layer is independently implemented against the common OpenAI-compatible API contract rather than copied from a client SDK.

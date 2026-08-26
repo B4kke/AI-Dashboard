@@ -5,6 +5,7 @@ import { repairTaskFromOperator } from './core/operator-task-repair.mjs';
 import { agentFleetView } from './core/agent-fleet-view.mjs';
 
 const AGENT_MUTATION_FIELDS = new Set(['name', 'role', 'harness', 'model', 'instructions', 'capabilities', 'workScopes', 'enabled']);
+const MASTER_USER_MESSAGE_FIELDS = new Set(['content']);
 
 function agentMutationPatch(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid agent payload');
@@ -13,6 +14,25 @@ function agentMutationPatch(input) {
   }
   if (!Object.keys(input).length) throw new Error('Agent mutation requires at least one field');
   return input;
+}
+
+function masterUserMessage(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid Master message payload');
+  for (const key of Object.keys(input)) {
+    if (!MASTER_USER_MESSAGE_FIELDS.has(key)) throw new Error(`Invalid Master user message field: ${key}`);
+  }
+  return { role: 'user', kind: 'conversation', content: input.content };
+}
+
+function masterStubResponse(store, conversationId, content) {
+  const snapshot = store.snapshot();
+  const conversation = snapshot.masterConversations.find((item) => item.id === conversationId);
+  const project = conversation?.projectId ? snapshot.projects.find((item) => item.id === conversation.projectId) : null;
+  const openTasks = snapshot.tasks.filter((task) => (!project || task.projectId === project.id) && task.state !== 'done').length;
+  if (project) {
+    return `Master received your message in ${project.name}. This Project has ${openTasks} open Task${openTasks === 1 ? '' : 's'}. I can help shape scoped work or Research, but execution, verification and merge remain in the control plane. Your message was: "${String(content).slice(0, 240)}".`;
+  }
+  return `Master received your message. ${snapshot.projects.length ? `There are ${snapshot.projects.length} Projects and ${openTasks} open Tasks in the Dashboard.` : 'Create a Project to enable project-aware orchestration.'} This early chat slice does not publish, approve or merge work.`;
 }
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
@@ -189,6 +209,20 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
         return json(response, 200, await store.updateMasterConversation(conversationId, await body(request)));
       }
     }
+    const masterTurns = url.pathname.match(/^\/api\/master\/conversations\/([^/]+)\/turns$/);
+    if (request.method === 'POST' && masterTurns) {
+      const conversationId = decodeURIComponent(masterTurns[1]);
+      const input = masterUserMessage(await body(request));
+      const user = await store.addMasterMessage({ conversationId, ...input });
+      const assistant = await store.addMasterMessage({
+        conversationId,
+        role: 'assistant',
+        kind: 'conversation',
+        content: masterStubResponse(store, conversationId, input.content),
+      });
+      return json(response, 201, { user, assistant });
+    }
+
     const masterMessages = url.pathname.match(/^\/api\/master\/conversations\/([^/]+)\/messages$/);
     if (masterMessages) {
       const conversationId = decodeURIComponent(masterMessages[1]);
@@ -198,7 +232,7 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
         return json(response, 200, { messages: store.masterMessagesFor(conversationId) });
       }
       if (request.method === 'POST') {
-        const input = await body(request);
+        const input = masterUserMessage(await body(request));
         return json(response, 201, await store.addMasterMessage({ conversationId, ...input }));
       }
     }

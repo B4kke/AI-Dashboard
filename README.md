@@ -141,7 +141,7 @@ The intended Master AI can inspect Projects/Tasks/Runs/agents/evidence, reason a
 
 It cannot fabricate evidence, approve its own coding work, interpret unavailable CI as green, force-push/reset, merge an unreviewed checkpoint or bypass locks/recovery.
 
-Persistent Master chat is implemented as a **normal chat environment** (global `Master` + project `Master` tab, sidebar conversations + centered bubble stream + rounded `Message Master…` composer, inspired by `odysseus-dev/odysseus@dev` but own implementation — `odysseus` is `AGPL-3.0-or-later`, no substantial reuse). It persists history, tags turns as `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`, and creates Tasks/Research only via control-plane. Persona/memory and a full automatic fleet scheduler remain planned; the MCP/Agent/Master-chat foundation is.
+Persistent Master chat is implemented as a **normal chat environment** (global `Master` + project `Master` tab, sidebar conversations + centered bubble stream + rounded `Message Master…` composer, inspired by `odysseus-dev/odysseus@dev` but own implementation — `odysseus` is `AGPL-3.0-or-later`, no substantial reuse). It persists history and renders internal assistant/control-plane turn kinds as `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`. Ordinary HTTP/UI input can create only `user` + `conversation`; it cannot fabricate assistant roles, tool calls or verified-result labels. Task/Research creation still enters the normal control plane. Persona/memory and a full automatic fleet scheduler remain planned; the MCP/Agent/Master-chat foundation is.
 
 ## Project readiness and admission identity
 

@@ -462,48 +462,73 @@ function renderMasterWorkspaceTab(project) {
   const last = conversations[0] || null;
   const messages = last ? (state.masterMessages||[]).filter((m)=>m.conversationId===last.id).slice(-3) : [];
   return `
-    <div class="section-heading"><div><h2>Master</h2><p class="section-copy">Project-aware chat with the Master orchestrator — ask, propose, execute and verify without ever bypassing control-plane gates. Looks like a normal chat, stays fail-closed.</p></div>
-    <div class="row-actions"><button class="primary compact" data-action="new-master-conversation" data-project="${project.id}">＋ New chat</button><a href="#/master" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface-2);font-size:13px;">Open full chat →</a></div></div>
+    <div class="section-heading"><div><h2>Master</h2><p class="section-copy">Project-aware chat with the Master orchestrator — ask, propose, execute and verify without ever bypassing control-plane gates.</p></div>
+    <div class="row-actions"><button class="primary compact" data-action="new-master-conversation" data-project="${project.id}">＋ New chat</button><a href="#/master" class="secondary-action compact">Open full chat</a></div></div>
     ${conversations.length ? `
-      <div style="display:grid;grid-template-columns:320px 1fr;gap:16px;align-items:start;">
-        <div style="display:flex;flex-direction:column;gap:8px;">
+      <div class="master-workspace-split">
+        <div class="master-workspace-list">
           ${conversations.slice(0,6).map((conv)=>{
             const count = (state.masterMessages||[]).filter((m)=>m.conversationId===conv.id).length;
             const isActive = conv.id===last.id;
-            return `<button class="master-conv-row ${isActive?'active':''}" data-action="open-master-conversation" data-conversation="${conv.id}" style="text-align:left;">
-              <span style="font-weight:650;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(conv.title)}</span>
-              <span class="small">${count} messages · ${escapeHtml(timeAgo(conv.updatedAt))}</span>
+            const latestMessage = (state.masterMessages || []).filter((message) => message.conversationId === conv.id).at(-1);
+            const needsAttention = latestMessage?.kind === 'needs_input';
+            const attentionClass = needsAttention ? ' attention' : '';
+            return `<button class="master-conv-row${isActive?' active':''}${attentionClass}" data-action="open-master-conversation" data-conversation="${conv.id}">
+              <span class="conv-title">${escapeHtml(conv.title)}</span>
+              <span class="conv-meta">
+                <span class="conv-count">${count} messages</span>
+                <span class="conv-separator" aria-hidden="true">·</span>
+                <span class="conv-time">${escapeHtml(timeAgo(conv.updatedAt))}</span>
+                ${needsAttention ? '<span class="conv-attention">Needs you</span>' : ''}
+              </span>
             </button>`;
           }).join('')}
         </div>
-        <div class="master-chat-panel" style="min-height:260px;">
-          <div class="master-chat-head"><div style="min-width:0;"><div class="title" style="font-size:14px;font-weight:700;">${escapeHtml(last.title)}</div><div class="small">${escapeHtml(timeAgo(last.updatedAt))} · ${messages.length} recent</div></div><button class="subtle compact" data-action="open-master-conversation" data-conversation="${last.id}">Open</button></div>
-          <div class="master-messages" style="padding:14px;min-height:160px;">
+        <div class="master-workspace-preview">
+          <div class="master-chat-head"><div style="min-width:0;"><div class="title">${escapeHtml(last.title)}</div><div class="small">${escapeHtml(timeAgo(last.updatedAt))} · ${messages.length} recent</div></div><button class="subtle compact" data-action="open-master-conversation" data-conversation="${last.id}">Open</button></div>
+          <div class="master-messages" style="padding:var(--sp-4);min-height:200px;">
             ${messages.length ? messages.map((msg)=>{
               const isUser = msg.role==='user';
-              return `<div class="master-message ${isUser?'user':'assistant'}"><div class="master-bubble"><div class="master-message-meta"><span class="master-role">${escapeHtml(isUser?'You':'Master')}</span> ${masterMessageKindPill(msg.kind)}</div><div>${escapeHtml(msg.content.slice(0,160))}</div></div></div>`;
-            }).join('') : `<div class="master-empty" style="min-height:100px;"><div class="small">No messages yet — open the chat to continue.</div></div>`}
+              return `<div class="master-message ${isUser?'user':'assistant'}"><div class="master-bubble"><div class="master-message-meta"><span class="master-role">${escapeHtml(isUser?'You':'Master')}</span> ${masterKindPill(msg.kind)}</div><div>${escapeHtml(msg.content.slice(0,160))}</div></div></div>`;
+            }).join('') : `<div class="master-empty" style="min-height:120px;"><div class="master-empty-content"><h3>No messages yet</h3><p>Open the chat to continue.</p></div></div>`}
           </div>
-          <div class="master-composer-wrap" style="padding:12px;">
-            <div class="master-composer" style="padding:10px;">
-              <div class="small" style="color:var(--text-muted);">Continue in full Master — normal chat input, same project context, never merges directly.</div>
-              <div style="display:flex;gap:8px;margin-top:8px;">
-                <button class="primary compact" data-action="open-master-conversation" data-conversation="${last.id}" style="flex:1;">Continue chat</button>
+          <div class="master-composer-wrap" style="padding:var(--sp-3);">
+            <div class="master-composer" style="padding:var(--sp-3);">
+              <p class="master-composer-hint">Continue in full Master — same project context, never merges directly.</p>
+              <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-2);flex-wrap:wrap;">
+                <button class="primary compact" data-action="open-master-conversation" data-conversation="${last.id}" style="flex:1;min-width:140px;">Continue chat</button>
                 <button class="compact" data-action="new-master-conversation" data-project="${project.id}">New chat</button>
               </div>
             </div>
           </div>
         </div>
-      </div>` : emptyBox('No Master chats for this project', 'Start a normal chat — Master understands this project’s Tasks, Runs, Agents, CI and evidence and will propose scoped work instead of editing directly.', `<button class="primary" data-action="new-master-conversation" data-project="${project.id}">＋ New chat</button>`)}
-    <div class="info-banner" style="margin-top:16px;">Master creates Tasks/Ideas/Research only via control plane; publish/review/merge stay gated by verification, CI and independent supervisor.</div>`;
+      </div>` : emptyBox('No Master chats for this project', 'Start a chat — Master understands this project\'s Tasks, Runs, Agents, CI and evidence and will propose scoped work instead of editing directly.', `<button class="primary" data-action="new-master-conversation" data-project="${project.id}">＋ New chat</button>`)}
+    <div class="info-banner" style="margin-top:var(--sp-4);">Master creates Tasks/Ideas/Research only via control plane; publish/review/merge stay gated by verification, CI and independent supervisor.</div>`;
 }
 
-function masterMessageKindPill(kind) {
-  const map = { conversation: '', proposal: 'proposal', executing: 'running', needs_input: 'warning attention-glow', verified_result: 'ok' };
-  const label = { conversation: 'CONVERSATION', proposal: 'PROPOSAL', executing: 'EXECUTING', needs_input: 'NEEDS INPUT', verified_result: 'VERIFIED RESULT' }[kind] || kind.toUpperCase();
-  const cls = map[kind] ? `pill ${map[kind]}` : 'pill';
-  return `<span class="${cls}" style="font-size:10.5px;letter-spacing:0.06em;padding:2px 8px;">${escapeHtml(label)}</span>`;
+function masterKindLabel(kind) {
+  const labels = {
+    conversation: 'Chatting',
+    proposal: 'Proposing work',
+    executing: 'Working',
+    needs_input: 'Needs you',
+    verified_result: 'Verified',
+  };
+  return labels[kind] || kind;
 }
+
+function masterKindPill(kind) {
+  const clsMap = {
+    conversation: 'pill',
+    proposal: 'pill ok',
+    executing: 'pill running',
+    needs_input: 'pill warning attention-glow',
+    verified_result: 'pill ok',
+  };
+  const cls = clsMap[kind] || 'pill';
+  return `<span class="${cls}" style="font-size:12px;padding:2px 8px;">${escapeHtml(masterKindLabel(kind))}</span>`;
+}
+
 function renderMasterPage() {
   let conversations = [...(state.masterConversations || [])].sort((a,b)=> String(b.updatedAt).localeCompare(String(a.updatedAt)));
   if (masterFilter === '__global') conversations = conversations.filter((c)=> !c.projectId);
@@ -515,79 +540,118 @@ function renderMasterPage() {
   const displayActive = active || unfilteredActive;
   const messages = displayActive ? (state.masterMessages || []).filter((m)=>m.conversationId===displayActive.id).sort((a,b)=> String(a.createdAt).localeCompare(String(b.createdAt))) : [];
   const projectForActive = displayActive?.projectId ? state.projects.find((p)=>p.id===displayActive.projectId) : null;
-  const listHtml = conversations.length ? conversations.map((conv)=>{
-    const isActive = conv.id===displayActive?.id;
-    const proj = conv.projectId ? state.projects.find((p)=>p.id===conv.projectId) : null;
-    const count = (state.masterMessages||[]).filter((m)=>m.conversationId===conv.id).length;
-    return `<button class="master-conv-row ${isActive?'active':''}" data-action="open-master-conversation" data-conversation="${conv.id}">
-      <span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13.5px;">${escapeHtml(conv.title)}</span>
-      <span class="small" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><span>${escapeHtml(proj ? proj.name : 'Global')}</span><span>·</span><span>${count} msg</span><span>·</span><span>${escapeHtml(timeAgo(conv.updatedAt))}</span></span>
+
+  const conversationRows = conversations.map((conv) => {
+    const isActive = conv.id === displayActive?.id;
+    const proj = conv.projectId ? state.projects.find((p) => p.id === conv.projectId) : null;
+    const conversationMessages = (state.masterMessages || []).filter((m) => m.conversationId === conv.id);
+    const count = conversationMessages.length;
+    const needsAttention = conversationMessages.at(-1)?.kind === 'needs_input';
+    const attentionClass = needsAttention ? ' attention' : '';
+    const projectName = proj ? proj.name : 'Global';
+    return `<button class="master-conv-row${isActive ? ' active' : ''}${attentionClass}" data-action="open-master-conversation" data-conversation="${conv.id}">
+      <span class="conv-title">${escapeHtml(conv.title)}</span>
+      <span class="conv-meta">
+        <span class="conv-project">${escapeHtml(projectName)}</span>
+        <span class="conv-separator" aria-hidden="true">·</span>
+        <span class="conv-count">${count} messages</span>
+        <span class="conv-separator" aria-hidden="true">·</span>
+        <span class="conv-time">${escapeHtml(timeAgo(conv.updatedAt))}</span>
+        ${needsAttention ? '<span class="conv-attention">Needs you</span>' : ''}
+      </span>
     </button>`;
-  }).join('') : `<div class="empty" style="padding:14px;"><strong>No conversations yet</strong><span class="small">Start a global or project-aware chat. Master proposes scoped Tasks instead of editing directly.</span></div>`;
+  }).join('');
+
+  const listHtml = conversations.length ? conversationRows : `
+    <div class="master-empty">
+      <div class="master-empty-content">
+        <h3>No conversations yet</h3>
+        <p>Start a chat with Master — your project-aware orchestrator. Master can:</p>
+        <ul class="master-empty-list">
+          <li>Summarize evidence and CI failures</li>
+          <li>Propose scoped Tasks with dependencies</li>
+          <li>Create or rebalance specialist agents</li>
+          <li>Start read-only Research runs</li>
+          <li>Request your decision on blocked work</li>
+        </ul>
+        <p class="master-empty-note">All proposals go through the control plane. Chat never publishes or merges directly.</p>
+        <div class="master-empty-actions">
+          <button class="primary" data-action="new-master-conversation">New conversation</button>
+          ${state.projects.length ? `<button class="secondary-action" data-action="new-master-conversation" data-project="${state.projects[0].id}">New project chat</button>` : ''}
+        </div>
+      </div>
+    </div>`;
+
   const headerTitle = displayActive ? escapeHtml(displayActive.title) : 'Master';
-  const headerMeta = displayActive ? `${projectForActive ? `${escapeHtml(projectForActive.name)} · ` : 'Global · '}${escapeHtml(timeAgo(displayActive.updatedAt))} · ${messages.length} messages` : 'Your orchestrator — proposals become Tasks, evidence stays gated';
+  const headerMeta = displayActive
+    ? `${projectForActive ? `${escapeHtml(projectForActive.name)} · ` : 'Global · '}${escapeHtml(timeAgo(displayActive.updatedAt))} · ${messages.length} messages`
+    : 'Select a conversation or start a new one';
+
   const messagesInner = !displayActive
     ? `<div class="master-empty">
-        <div>
-          <div class="master-empty-mark">✦ Master</div>
-          <div style="font-weight:600;color:var(--text);margin-top:6px;">Your project-aware orchestrator</div>
-          <div class="master-empty-sub" style="max-width:420px;margin:6px auto 0;">Ask about Projects, Tasks, Runs, Agents or CI — Master streams proposal → executing → verified result. Chat never publishes or merges directly.</div>
-          <div class="small" style="margin-top:10px;">Tip: Right-click a conversation for rename (delete stays durable history).</div>
-          <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
-            <button class="primary compact" data-action="new-master-conversation">New conversation</button>
-            <button class="compact" data-action="new-master-conversation" data-project="${state.projects[0]?.id||''}">New project chat</button>
-          </div>
+        <div class="master-empty-content">
+          <h3>Select a conversation</h3>
+          <p>Choose from the list or start a new chat.</p>
         </div>
       </div>`
-    : (messages.length ? messages.map((msg)=>{
-        const isUser = msg.role==='user';
-        const roleLabel = isUser ? 'You' : msg.role==='assistant' ? 'Master' : escapeHtml(msg.role);
-        const toolHtml = (msg.toolCalls||[]).map((tc)=> `<span class="master-chip" style="margin-top:6px;">${escapeHtml(tc.tool)}<span style="color:var(--text-faint);">${escapeHtml(tc.status||'')}</span></span>`).join('');
-        const meta = `<div class="master-message-meta"><span class="master-role">${escapeHtml(roleLabel)}</span> ${masterMessageKindPill(msg.kind)} <span>·</span> <span>${escapeHtml(timeAgo(msg.createdAt))}</span></div>`;
-        return `<div class="master-message ${isUser?'user':'assistant'}"><div class="master-bubble">${meta}<div>${escapeHtml(msg.content)}</div>${toolHtml?`<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">${toolHtml}</div>`:''}</div></div>`;
-      }).join('') : `<div class="master-empty"><div><div class="master-empty-mark">✦ ${escapeHtml(displayActive.title)}</div><div class="master-empty-sub">No messages yet. Ask Master to summarize evidence, propose scoped Tasks, or start Research — all through the control plane.</div></div></div>`);
+    : (messages.length ? messages.map((msg) => {
+        const isUser = msg.role === 'user';
+        const roleLabel = isUser ? 'You' : msg.role === 'assistant' ? 'Master' : escapeHtml(msg.role);
+        const toolHtml = (msg.toolCalls || []).map((tc) => `<span class="master-chip">${escapeHtml(tc.tool)}${tc.status ? `<span class="chip-status">${escapeHtml(tc.status)}</span>` : ''}</span>`).join('');
+        const meta = `<div class="master-message-meta"><span class="master-role">${escapeHtml(roleLabel)}</span> ${masterKindPill(msg.kind)} <span aria-hidden="true">·</span> <span>${escapeHtml(timeAgo(msg.createdAt))}</span></div>`;
+        return `<div class="master-message ${isUser ? 'user' : 'assistant'}"><div class="master-bubble">${meta}<div>${escapeHtml(msg.content)}</div>${toolHtml ? `<div class="master-tool-chips">${toolHtml}</div>` : ''}</div></div>`;
+      }).join('') : `<div class="master-empty">
+        <div class="master-empty-content">
+          <h3>${escapeHtml(displayActive.title)}</h3>
+          <p>No messages yet. Ask Master to summarize evidence, propose scoped Tasks, or start Research — all through the control plane.</p>
+          <div class="master-empty-actions" style="margin-top:16px;">
+            <button class="primary compact" data-action="master-create-task" data-conversation="${displayActive.id}">＋ Create Task</button>
+            <button class="secondary-action compact" data-action="master-start-research" data-conversation="${displayActive.id}">Start Research</button>
+          </div>
+        </div>
+      </div>`);
+
   const composer = displayActive ? `
     <div class="master-composer-wrap">
       <form id="master-composer" data-conversation="${displayActive.id}" class="master-composer">
-        <textarea name="content" rows="2" required placeholder="Message Master …  — e.g. 'propose 2 scoped Tasks for the failing CI' or 'summarize evidence for Task …'" aria-label="Message Master"></textarea>
+        <textarea name="content" rows="2" required placeholder="Message Master — e.g. 'propose 2 scoped Tasks for the failing CI' or 'summarize evidence for Task …'" aria-label="Message Master"></textarea>
         <div class="master-composer-bar">
-          <div class="master-composer-left">
-            <select name="kind" aria-label="Message kind" style="background:var(--surface-2);border:1px solid var(--line-soft);border-radius:999px;padding:4px 10px;font-size:12px;">
-              <option value="conversation">CONVERSATION</option>
-              <option value="proposal">PROPOSAL</option>
-              <option value="executing">EXECUTING</option>
-              <option value="needs_input">NEEDS INPUT</option>
-              <option value="verified_result">VERIFIED RESULT</option>
-            </select>
-            <span class="small" style="color:var(--text-faint);">kind tags the turn</span>
-          </div>
+          <div class="master-composer-left"><span class="master-safety-note">Conversation only · evidence stays separate</span></div>
           <div class="master-composer-right">
             <button type="button" class="master-chip" data-action="master-create-task" data-conversation="${displayActive.id}" title="Create Task via control plane">＋ Task</button>
             <button type="button" class="master-chip" data-action="master-start-research" data-conversation="${displayActive.id}">Research</button>
-            <button type="submit" class="master-send" aria-label="Send">↑</button>
+            <button type="submit" class="master-send" aria-label="Send message">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </button>
           </div>
         </div>
       </form>
-      <div class="small" style="margin-top:8px;color:var(--text-faint);">Master may create Tasks/Ideas/Research and manage specialists only via control plane. Publish/review/merge stay gated by verification, CI and independent review.</div>
+      <p class="master-composer-hint">Master creates Tasks, Ideas, Research and manages specialists via the control plane. Publish, review and merge stay gated by verification, CI and independent supervisor.</p>
     </div>` : '';
+
   $('master-root').innerHTML = `
     <div class="master-layout">
       <aside class="master-conv-list">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-          <span class="eyebrow" style="margin:0;">CONVERSATIONS</span>
-          <button class="primary compact" data-action="new-master-conversation" style="min-height:30px;padding:4px 10px;">＋ New chat</button>
+        <div class="master-conv-header">
+          <span class="eyebrow">Conversations</span>
+          <button class="primary compact" data-action="new-master-conversation" style="min-height:40px;">＋ New chat</button>
         </div>
-        <div class="small" style="color:var(--text-faint);margin-top:2px;">${conversations.length} total · global + project-aware</div>
-        <label style="margin:0;">Filter by project<select id="master-project-filter"><option value="" ${masterFilter===''?'selected':''}>All projects + global</option><option value="__global" ${masterFilter==='__global'?'selected':''}>Global only</option>${state.projects.map((p)=>`<option value="${escapeHtml(p.id)}" ${masterFilter===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></label>
+        <label class="master-filter-label">Filter by project
+          <select id="master-project-filter">
+            <option value="" ${masterFilter === '' ? 'selected' : ''}>All projects + global</option>
+            <option value="__global" ${masterFilter === '__global' ? 'selected' : ''}>Global only</option>
+            ${state.projects.map((p) => `<option value="${escapeHtml(p.id)}" ${masterFilter === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
+          </select>
+        </label>
         <div class="conv-scroll">${listHtml}</div>
       </aside>
       <section class="master-chat-panel">
         <div class="master-chat-head">
           <div style="min-width:0;flex:1;">
-            <div class="title" style="font-size:16px;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${headerTitle}</div>
-            <div class="small" style="color:var(--text-muted);">${headerMeta}</div>
+            <div class="title">${headerTitle}</div>
+            <div class="small">${headerMeta}</div>
           </div>
-          <div class="row-actions" style="flex:0 0 auto;">${displayActive?`<button class="subtle compact" data-action="rename-master-conversation" data-conversation="${displayActive.id}">Rename</button><button class="subtle compact" data-action="delete-master-conversation" data-conversation="${displayActive.id}" style="color:var(--danger);">Delete</button>` : ''}</div>
+          <div class="row-actions">${displayActive ? `<button class="subtle compact" data-action="rename-master-conversation" data-conversation="${displayActive.id}">Rename</button>` : ''}</div>
         </div>
         <div id="master-messages" class="master-messages">${messagesInner}</div>
         ${composer}
@@ -1084,15 +1148,9 @@ document.addEventListener('click', async (event) => {
     event.preventDefault();
     const conv = state.masterConversations.find((c)=>c.id===button.dataset.conversation);
     if (!conv) return;
-    const next = window.prompt('Rename conversation', conv.title);
-    if (!next || next.trim()===conv.title) return;
-    try { await api(`/api/master/conversations/${encodeURIComponent(conv.id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: next.trim() }) }); await refresh(); } catch (e){ toast(e.message,'error'); }
-    return;
-  }
-  if (action === 'delete-master-conversation') {
-    event.preventDefault();
-    // soft delete via title marker; hard delete not implemented — keep history for evidence
-    toast('Delete not yet supported — conversations are durable history', 'warning');
+    $('master-rename-conversation-id').value = conv.id;
+    $('master-rename-title').value = conv.title;
+    $('master-rename-dialog').showModal();
     return;
   }
   if (action === 'master-create-task') {
@@ -1288,6 +1346,21 @@ $('research-form').addEventListener('submit', async (event) => {
   const data = Object.fromEntries(new FormData(event.currentTarget));
   try { await api('/api/research', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }); $('research-dialog').close(); event.currentTarget.reset(); await refresh(); } catch (error) { toast(error.message, 'error'); }
 });
+$('master-rename-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const conversationId = $('master-rename-conversation-id').value;
+  const title = $('master-rename-title').value.trim();
+  if (!conversationId || !title) return;
+  try {
+    await api(`/api/master/conversations/${encodeURIComponent(conversationId)}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title }),
+    });
+    $('master-rename-dialog').close();
+    toast('Conversation renamed', 'success');
+    await refresh();
+  } catch (error) { toast(error.message, 'error'); }
+});
 $('provider-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.currentTarget));
@@ -1326,25 +1399,12 @@ document.addEventListener('submit', (event) => {
     const content = String(raw.content || '').trim();
     if (!content) return;
     const conversationId = form.dataset.conversation;
-    const kind = String(raw.kind || 'conversation').toLowerCase();
     form.elements.content.value = '';
     (async () => {
       try {
-        await api(`/api/master/conversations/${encodeURIComponent(conversationId)}/messages`, {
+        await api(`/api/master/conversations/${encodeURIComponent(conversationId)}/turns`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ role: 'user', content, kind }),
-        });
-        // Stub assistant response: echo with project context so UI streams something immediately
-        const conv = state.masterConversations.find((c)=>c.id===conversationId);
-        const proj = conv?.projectId ? state.projects.find((p)=>p.id===conv.projectId) : null;
-        const taskCount = proj ? state.tasks.filter((t)=>t.projectId===proj.id && t.state!=='done').length : state.tasks.filter((t)=>t.state!=='done').length;
-        const nextAction = proj ? projectNextAction({ project: proj, tasks: state.tasks.filter((t)=>t.projectId===proj.id), runs: state.runs.filter((r)=>r.projectId===proj.id) }) : null;
-        const assistantContent = proj
-          ? `Master received in ${proj.name}. Open tasks: ${taskCount}. Next: ${nextAction ? nextAction.label : 'no queued work'}. I can propose scoped Tasks, create specialists via the fleet registry, or start Research — all through the control plane. Your message was: "${content.slice(0, 240)}". Use "Create Task from chat" to materialize a proposal; I never publish or merge directly.`
-          : `Master (global) received: "${content.slice(0, 240)}". ${state.projects.length ? `You have ${state.projects.length} Project(s); ${taskCount} open Task(s).` : 'No Projects yet — create one to enable project-aware orchestration.'} I propose, you approve; execution stays gated by verification, CI and independent review.`;
-        await api(`/api/master/conversations/${encodeURIComponent(conversationId)}/messages`, {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ role: 'assistant', kind: 'conversation', content: assistantContent }),
+          body: JSON.stringify({ content }),
         });
         await refresh();
         render();

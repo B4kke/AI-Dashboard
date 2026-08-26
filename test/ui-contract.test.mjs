@@ -6,6 +6,7 @@ const indexUrl = new URL('../public/index.html', import.meta.url);
 const appUrl = new URL('../public/app.js', import.meta.url);
 const presentationUrl = new URL('../public/presentation.js', import.meta.url);
 const screenshotUrl = new URL('../scripts/screenshot.mjs', import.meta.url);
+const workflowUrl = new URL('../.github/workflows/ci.yml', import.meta.url);
 
 function idsInHtml(html) {
   return [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
@@ -93,10 +94,14 @@ test('presentation layer never leaks internal state names into primary UI copy',
 });
 
 test('rendered screenshot smoke fails closed on runtime errors, timeout and horizontal overflow', async () => {
-  const screenshot = await readFile(screenshotUrl, 'utf8');
+  const [screenshot, workflow] = await Promise.all([readFile(screenshotUrl, 'utf8'), readFile(workflowUrl, 'utf8')]);
   assert.match(screenshot, /Runtime\.exceptionThrown/);
   assert.match(screenshot, /consoleAPICalled/);
   assert.match(screenshot, /Horizontal page overflow/);
   assert.match(screenshot, /process\.exit\(1\)/);
   assert.doesNotMatch(screenshot, /TIMEOUT-RENDER.*process\.exit\(0\)/s);
+  assert.match(workflow, /#\/master\/\$\{MASTER_CONVERSATION_ID\}/, 'global Master must be rendered at every CI viewport');
+  assert.match(workflow, /#\/project\/\$\{PROJECT_ID\}\/master/, 'Project Master must be rendered at every CI viewport');
+  assert.match(workflow, /\.master-chat-panel \.master-bubble/);
+  assert.match(workflow, /\.master-workspace-split \.master-bubble/);
 });

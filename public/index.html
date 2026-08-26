@@ -294,6 +294,14 @@
     <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Run research</button></div>
   </form></dialog>
 
+  <dialog id="master-rename-dialog"><form method="dialog" id="master-rename-form">
+    <h2>Rename conversation</h2>
+    <input type="hidden" id="master-rename-conversation-id" name="conversationId">
+    <label>Conversation title<input id="master-rename-title" name="title" required maxlength="200"></label>
+    <p class="dialog-note">Renaming changes presentation only. Durable conversation history is preserved.</p>
+    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Save name</button></div>
+  </form></dialog>
+
   <dialog id="provider-dialog"><form method="dialog" id="provider-form">
     <h2>Add model provider</h2><label>ID<input name="id" required placeholder="my-nim"></label><label>Name<input name="name" required placeholder="My NIM"></label>
     <label>OpenAI-compatible base URL<input name="baseUrl" required placeholder="http://127.0.0.1:8000/v1"></label>
