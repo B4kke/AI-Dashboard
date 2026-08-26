@@ -20,7 +20,7 @@ const DEFAULT_PROJECT_DEFAULTS = Object.freeze({
 });
 const ACTIVE_RUN_STATES = new Set(['preparing', 'running', 'retrying', 'dispatch_unknown']);
 const TERMINAL_RUN_STATES = new Set(['completed', 'merged', 'failed', 'aborted']);
-const READ_ONLY_AGENT_ROLES = new Set(['supervisor', 'reviewer', 'research', 'master', 'planner']);
+export const READ_ONLY_AGENT_ROLES = new Set(['supervisor', 'reviewer', 'research', 'master', 'planner']);
 const EMPTY_STATE = Object.freeze({
   schemaVersion: SCHEMA_VERSION,
   revision: 0,

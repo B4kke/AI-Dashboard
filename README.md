@@ -316,6 +316,7 @@ MCP server endpoints:
 - optional external MCP elicitation bridge,
 - default-deny external tool policy,
 - durable specialist Agent Registry,
+- Project-scoped Agent fleet operator surface (Registry as canonical truth, fleet view with assigned Task/active Run, whitelisted HTTP create/edit/enable/disable, rendered Agents tab at 1440/768/390),
 - Task assignment/workScopes,
 - static + runtime anti-overlap,
 - fail-closed Project preflight, `needs_sync` repair state and exact-base admission,

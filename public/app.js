@@ -216,7 +216,7 @@ function renderWorkspace() {
     <div id="workspace-content"></div>`;
   const content = $('workspace-content');
   if (route.tab === 'tasks') content.innerHTML = renderTasksTab(project, tasks);
-  else if (route.tab === 'agents') content.innerHTML = renderAgentsTab(runs, agents);
+  else if (route.tab === 'agents') content.innerHTML = renderAgentsTab(project, tasks, runs, agents);
   else if (route.tab === 'github') content.innerHTML = renderGithubTab(project, tasks);
   else if (route.tab === 'evidence') content.innerHTML = renderEvidenceTab(project, tasks);
   else if (route.tab === 'research') content.innerHTML = renderResearchTab(project);
@@ -328,13 +328,36 @@ function renderTasksTab(project, tasks) {
     ${planning.length ? `<h3 class="task-group-title">Planner</h3><div class="stack">${planning.map((task) => taskRow(task, { tasks: work })).join('')}</div>` : ''}`;
 }
 
-function renderAgentsTab(runs, agents) {
+function renderAgentsTab(project, tasks, runs, agents) {
   const activeRuns = runs.filter((run) => ['preparing', 'running', 'retrying', 'dispatch_unknown'].includes(run.status) || run.dispatchUncertain === true);
   const pastRuns = runs.filter((run) => !activeRuns.includes(run)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 10);
+  const readOnlyRoles = new Set(['supervisor', 'reviewer', 'research', 'master', 'planner']);
+  const openTasks = tasks.filter((task) => task.state !== 'done');
+  const agentCards = agents.map((agent) => {
+    const assigned = openTasks.filter((task) => task.agentId === agent.id);
+    const activeRun = activeRuns.find((run) => assigned.some((task) => task.id === run.taskId)) || null;
+    const readOnly = readOnlyRoles.has(String(agent.role || '').toLowerCase());
+    return `<div class="row-card" data-agent-card="${escapeHtml(agent.id)}">
+      <div>
+        <div class="title">${escapeHtml(agent.name)} <span class="pill ${agent.enabled === false ? '' : 'ok'}">${agent.enabled === false ? 'disabled' : 'enabled'}</span>${readOnly ? ' <span class="tag">read-only</span>' : ''}</div>
+        <div class="meta">${escapeHtml(agent.role)} · ${escapeHtml(agent.harness || 'opencode')}${agent.model ? ` · ${escapeHtml(agent.model)}` : ' · project default model'}${agent.workScopes?.length ? ` · owns ${escapeHtml(agent.workScopes.join(', '))}` : ''}</div>
+        ${agent.capabilities?.length ? `<div class="meta">${agent.capabilities.map((capability) => `<span class="tag">${escapeHtml(capability)}</span>`).join(' ')}</div>` : ''}
+        ${agent.instructions ? `<details class="raw-evidence" style="margin-top:6px;"><summary>Specialist instructions</summary><p class="small" style="white-space:pre-wrap;margin:8px 0 0;">${escapeHtml(agent.instructions)}</p></details>` : ''}
+        ${assigned.length ? `<div class="meta" style="margin-top:6px;">Assigned: ${assigned.map((task) => `<a href="#/project/${encodeURIComponent(project.id)}/tasks">${escapeHtml(task.title)}</a> (${escapeHtml(humanizeTaskState(task.state))})`).join(', ')}</div>` : '<div class="meta" style="margin-top:6px;">No assigned open Tasks</div>'}
+        ${activeRun ? `<div class="meta">Active run: ${escapeHtml(humanizeRunState(activeRun.status))}${activeRun.dispatchUncertain === true ? ' (uncertain dispatch — scope ownership retained)' : ''}</div>` : ''}
+      </div>
+      <div class="row-actions">
+        <button class="subtle compact" data-action="edit-agent" data-agent="${escapeHtml(agent.id)}">Edit</button>
+        <button class="${agent.enabled === false ? 'compact' : 'danger-action compact'}" data-action="toggle-agent" data-agent="${escapeHtml(agent.id)}" data-enabled="${agent.enabled === false ? 'true' : 'false'}">${agent.enabled === false ? 'Enable' : 'Disable'}</button>
+      </div>
+    </div>`;
+  });
   return `
+    <div class="section-heading"><div><h2>Agents</h2><p class="section-copy">Durable specialists with explicit ownership scopes. The registry is canonical truth; admission still enforces scope ownership at runtime.</p></div>
+    <div class="row-actions"><button class="primary compact" data-action="new-agent" data-project="${project.id}">+ Specialist</button></div></div>
     <h3 class="task-group-title">Registered specialists</h3>
-    ${agents.length ? `<div class="stack">${agents.map((agent) => `<div class="row-card"><div><div class="title">${escapeHtml(agent.name)}</div><div class="meta">${escapeHtml(agent.role)} · ${agent.enabled === false ? 'disabled' : 'enabled'}${agent.workScopes?.length ? ` · owns ${escapeHtml(agent.workScopes.join(', '))}` : ''}</div></div><div class="row-actions"><span class="tag">${escapeHtml(agent.harness || 'opencode')}</span></div></div>`).join('')}</div>`
-      : emptyBox('No specialist agents', 'Specialists are optional durable workers with explicit ownership scopes. Ordinary Tasks work without them.')}
+    ${agentCards.length ? `<div class="stack">${agentCards.join('')}</div>`
+      : emptyBox('No specialist agents', 'Specialists are optional durable workers with explicit ownership scopes. Ordinary Tasks work without them.', `<button class="primary" data-action="new-agent" data-project="${project.id}">+ Specialist</button>`)}
     <h3 class="task-group-title" style="margin-top:24px;">Active runs</h3>
     ${activeRuns.length ? `<div class="stack">${activeRuns.map((run) => `<div class="row-card"><div><div class="title">${run.kind === 'supervisor' ? 'Independent review' : run.kind === 'planner' ? 'Planning run' : 'Worker'}</div><div class="meta">${escapeHtml(humanizeRunState(run.status))}${run.error ? ` · ${escapeHtml(run.error)}` : ''}</div></div><div class="row-actions"><button class="danger-action compact" data-action="abort-run" data-run="${run.id}">Abort</button></div></div>`).join('')}</div>` : `<div class="empty">Nothing is running right now.</div>`}
     <h3 class="task-group-title" style="margin-top:24px;">Recent finished runs</h3>
@@ -787,6 +810,53 @@ document.addEventListener('click', async (event) => {
   if (action === 'new-task') { event.preventDefault(); $('task-project').value = button.dataset.project; $('task-dialog').showModal(); return; }
   if (action === 'new-idea') { event.preventDefault(); $('idea-project').value = button.dataset.project; $('idea-dialog').showModal(); return; }
   if (action === 'new-research') { event.preventDefault(); $('research-project').value = button.dataset.project; $('research-dialog').showModal(); return; }
+  if (action === 'new-agent') {
+    event.preventDefault();
+    const form = $('agent-form');
+    form.reset();
+    $('agent-project').value = button.dataset.project;
+    $('agent-id').value = '';
+    $('agent-dialog-title').textContent = 'New specialist';
+    $('agent-submit').textContent = 'Create specialist';
+    $('agent-dialog').showModal();
+    return;
+  }
+  if (action === 'edit-agent') {
+    event.preventDefault();
+    const agent = state.agents.find((item) => item.id === button.dataset.agent);
+    if (!agent) return;
+    const form = $('agent-form');
+    form.reset();
+    $('agent-project').value = agent.projectId;
+    $('agent-id').value = agent.id;
+    form.elements.name.value = agent.name || '';
+    form.elements.role.value = agent.role || 'specialist';
+    form.elements.harness.value = agent.harness || 'opencode';
+    form.elements.model.value = agent.model || '';
+    form.elements.workScopes.value = (agent.workScopes || []).join('\n');
+    form.elements.capabilities.value = (agent.capabilities || []).join(', ');
+    form.elements.instructions.value = agent.instructions || '';
+    form.elements.enabled.checked = agent.enabled !== false;
+    $('agent-dialog-title').textContent = `Edit: ${agent.name}`;
+    $('agent-submit').textContent = 'Save specialist';
+    $('agent-dialog').showModal();
+    return;
+  }
+  if (action === 'toggle-agent') {
+    event.preventDefault();
+    const agent = state.agents.find((item) => item.id === button.dataset.agent);
+    if (!agent) return;
+    button.disabled = true;
+    try {
+      await api(`/api/agents/${encodeURIComponent(agent.id)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: button.dataset.enabled === 'true' }),
+      });
+      toast(button.dataset.enabled === 'true' ? `${agent.name} enabled` : `${agent.name} disabled`, 'success');
+      await refresh();
+    } catch (error) { toast(error.message, 'error'); button.disabled = false; }
+    return;
+  }
 
   const simplePosts = {
     delegate: [`/api/tasks/${encodeURIComponent(button.dataset.task)}/delegate`, 'Worker started'],
@@ -941,6 +1011,53 @@ $('task-form').addEventListener('submit', async (event) => {
   try {
     await api('/api/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
     $('task-dialog').close(); form.reset(); await refresh();
+  } catch (error) { toast(error.message, 'error'); }
+});
+$('agent-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const raw = Object.fromEntries(new FormData(form));
+  const agentId = $('agent-id').value;
+  try {
+    if (agentId) {
+      const original = state.agents.find((item) => item.id === agentId);
+      const patch = {};
+      const parsedScopes = parseLines(raw.workScopes);
+      const parsedCapabilities = parseLines(raw.capabilities);
+      const nextModel = raw.model?.trim() || null;
+      const originalModel = original?.model || null;
+      const nextInstructions = String(raw.instructions || '').trim();
+      const originalInstructions = String(original?.instructions || '').trim();
+      const nextEnabled = form.elements.enabled.checked;
+      const originalEnabled = original?.enabled !== false;
+      if (raw.name.trim() !== (original?.name || '')) patch.name = raw.name.trim();
+      if (raw.role !== (original?.role || '')) patch.role = raw.role;
+      if (raw.harness !== (original?.harness || '')) patch.harness = raw.harness;
+      if (nextModel !== originalModel) patch.model = nextModel;
+      if (nextInstructions !== originalInstructions) patch.instructions = raw.instructions;
+      if (nextEnabled !== originalEnabled) patch.enabled = nextEnabled;
+      const sameScopes = parsedScopes.length === (original?.workScopes || []).length && parsedScopes.every((value, index) => value === (original?.workScopes || [])[index]);
+      if (!sameScopes) patch.workScopes = parsedScopes;
+      const sameCapabilities = parsedCapabilities.length === (original?.capabilities || []).length && parsedCapabilities.every((value, index) => value === (original?.capabilities || [])[index]);
+      if (!sameCapabilities) patch.capabilities = parsedCapabilities;
+      if (!Object.keys(patch).length) { toast('No changes to save', 'info'); return; }
+      await api(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
+      toast(`${patch.name || original?.name || 'Specialist'} updated`, 'success');
+    } else {
+      const data = {
+        name: raw.name.trim(),
+        role: raw.role,
+        harness: raw.harness,
+        workScopes: parseLines(raw.workScopes),
+        capabilities: parseLines(raw.capabilities),
+        instructions: String(raw.instructions || '').trim(),
+        enabled: form.elements.enabled.checked,
+        model: raw.model?.trim() || null,
+      };
+      await api(`/api/projects/${encodeURIComponent($('agent-project').value)}/agents`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
+      toast(`${data.name} registered`, 'success');
+    }
+    $('agent-dialog').close(); form.reset(); await refresh();
   } catch (error) { toast(error.message, 'error'); }
 });
 $('respond-form').addEventListener('submit', async (event) => {

@@ -39,7 +39,7 @@ The Project-first usability slice is implemented and reached level 3 on `5af53ae
 - Mobile primary Project navigation is Overview / Tasks / Agents / GitHub; Evidence / Research / Settings move under `More` on small widths.
 - Empty Overview has one primary Create Task action.
 - A Project without a local repository exposes one clear Connect repository path.
-- Rendered browser acceptance covers Dashboard, Project Overview, Tasks and full Project Settings at 1440 / 768 / 390. Missing expected render state, uncaught runtime/console errors, timeout or required horizontal overflow fails CI.
+- Rendered browser acceptance covers Dashboard, Project Overview, Tasks, Agents (fleet) and full Project Settings at 1440 / 768 / 390 — local deterministic isolation smoke for the new fleet slice verified at all three widths without overflow/runtime errors; CI rendered smoke on the exact final head must also stay green (previous fleet-less head `5af53ae` was run #451). Missing expected render state, uncaught runtime/console errors, timeout or required horizontal overflow fails CI.
 
 ## Verification evidence
 
@@ -59,7 +59,7 @@ This proves deterministic + exact-head Actions behavior for that implementation 
 12. **Open:** automatic bounded Master/fleet scheduler above ordinary Task delegation. It must re-evaluate canonical state, create only scoped Tasks and never self-certify completion.
 13. **Next product slice after current closeout:** persistent Master AI conversation/session context and bounded inspectable memory. Chat remains context/orchestration, never machine evidence or merge authority.
 14. **Implemented:** structured diff/scope/verification/CI/supervisor/merge evidence is primary; raw evidence JSON remains Advanced.
-15. **Open:** richer Agent Registry/fleet controls. Existing registry state remains canonical; no alternate execution path is permitted.
+15. **Implemented + deterministic coverage + rendered acceptance (this slice):** Project-scoped Agent fleet operator surface. `GET /api/projects/:id/agents` (fleet view with assigned Task/active Run), `POST /api/projects/:id/agents` and `PATCH /api/agents/:id` are whitelisted over `StateStore` (`addAgent`/`updateAgent`) as canonical truth — same guards as MCP `agent_create`/`agent_update` (unique name, no overlapping mutating scopes, read-only roles cannot execute work, identity/scopes lock after execution history, active work retains ownership, disable fail-closed with unfinished assigned work, no raw field bypass, no alternate execution motor). Rendered Agents tab at 1440/768/390 shows name/role/enabled/harness/model/capabilities/workScopes/assigned Task/active Run/ownership and exposes create/edit/enable/disable through dialogs/toasts (no native alert/prompt/confirm). No publish/review/merge bypass. `docs/04-roadmap.md` M3E is now the implemented early slice for fleet controls.
 
 ## Master AI / chat direction
 

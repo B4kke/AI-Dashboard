@@ -230,6 +230,31 @@
     <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit">Create task</button></div>
   </form></dialog>
 
+  <dialog id="agent-dialog"><form method="dialog" id="agent-form">
+    <h2 id="agent-dialog-title">New specialist</h2>
+    <input type="hidden" name="projectId" id="agent-project">
+    <input type="hidden" name="agentId" id="agent-id">
+    <label>Name<input name="name" required placeholder="LUMEN"></label>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px;">
+      <label>Role<select name="role" id="agent-role">
+        <option value="specialist" selected>specialist (mutating)</option>
+        <option value="supervisor">supervisor (read-only)</option>
+        <option value="reviewer">reviewer (read-only)</option>
+        <option value="research">research (read-only)</option>
+        <option value="planner">planner (read-only)</option>
+        <option value="master">master (read-only)</option>
+      </select></label>
+      <label>Harness<select name="harness"><option value="opencode" selected>opencode</option></select></label>
+    </div>
+    <label>Model<input name="model" list="opencode-models" placeholder="project default / provider/model"></label>
+    <label>Work scopes<textarea name="workScopes" rows="3" required placeholder="Project-relative paths, one per line&#10;server&#10;public"></textarea></label>
+    <label>Capabilities<input name="capabilities" placeholder="webgpu, typescript"></label>
+    <label>Specialist instructions<textarea name="instructions" rows="4" placeholder="How this specialist should work inside its scopes"></textarea></label>
+    <label class="check" id="agent-enabled-check"><input type="checkbox" name="enabled" checked>Enabled</label>
+    <p class="dialog-note">Two enabled mutating specialists cannot own overlapping scopes. Read-only roles cannot execute work Tasks. Identity and scopes lock after execution history, and disabling fails closed while assigned work is unfinished.</p>
+    <div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="submit" id="agent-submit">Save specialist</button></div>
+  </form></dialog>
+
   <dialog id="respond-dialog"><form method="dialog" id="respond-form">
     <h2 id="respond-title">Respond to blocker</h2>
     <input type="hidden" name="taskId" id="respond-task-id">

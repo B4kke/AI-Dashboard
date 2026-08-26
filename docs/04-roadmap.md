@@ -266,10 +266,10 @@ Implemented/tested:
 - only active/uncertain worker Runs own mutation scopes,
 - uncertain OpenCode dispatch retains ownership,
 - disjoint scopes can run concurrently when dependencies/concurrency allow.
+- Project-scoped Agent fleet operator surface: whitelisted `POST /api/projects/:id/agents`, `PATCH /api/agents/:id`, `GET /api/projects/:id/agents` (fleet view with assigned Task/active Run) and rendered Agents tab at 1440/768/390 showing name/role/enabled/harness/model/capabilities/workScopes/assigned Task/active Run.
 
 Still planned:
 
-- richer Agent Registry/fleet controls in the Dashboard,
 - persistent agent memory/persona,
 - harness capability matrix,
 - verified historical performance,

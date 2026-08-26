@@ -2,6 +2,18 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { repairTaskFromOperator } from './core/operator-task-repair.mjs';
+import { agentFleetView } from './core/agent-fleet-view.mjs';
+
+const AGENT_MUTATION_FIELDS = new Set(['name', 'role', 'harness', 'model', 'instructions', 'capabilities', 'workScopes', 'enabled']);
+
+function agentMutationPatch(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid agent payload');
+  for (const key of Object.keys(input)) {
+    if (!AGENT_MUTATION_FIELDS.has(key)) throw new Error(`Invalid agent field: ${key}`);
+  }
+  if (!Object.keys(input).length) throw new Error('Agent mutation requires at least one field');
+  return input;
+}
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
 const SECURITY_HEADERS = {
@@ -140,6 +152,21 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       return json(response, 200, readiness);
     }
 
+    const projectAgents = url.pathname.match(/^\/api\/projects\/([^/]+)\/agents$/);
+    if (projectAgents) {
+      const projectId = decodeURIComponent(projectAgents[1]);
+      if (!store.getProject(projectId)) throw new Error('Project not found');
+      if (request.method === 'GET') return json(response, 200, { agents: agentFleetView(store.snapshot(), projectId) });
+      if (request.method === 'POST') {
+        const input = await body(request);
+        return json(response, 201, await store.addAgent({ ...agentMutationPatch(input), projectId }));
+      }
+    }
+    const agentPatch = url.pathname.match(/^\/api\/agents\/([^/]+)$/);
+    if (request.method === 'PATCH' && agentPatch) {
+      return json(response, 200, await store.updateAgent(decodeURIComponent(agentPatch[1]), agentMutationPatch(await body(request))));
+    }
+
     const taskPatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
     if (request.method === 'PATCH' && taskPatch) {
       return json(response, 200, await repairTaskFromOperator(store, decodeURIComponent(taskPatch[1]), await body(request)));
@@ -199,8 +226,8 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
     } catch (error) {
       const message = String(error?.message || error || 'Request failed');
       const status = /not found/i.test(message) ? 404
-        : /already in progress|cannot .* from state|already promoted|integrity review|cannot be promoted while|already has an active|overlaps active task|preflight failed/i.test(message) ? 409
-        : /required|valid .*id|choose .*model|invalid|request body too large|JSON|allowlist|workScope/i.test(message) ? 400 : 500;
+        : /already in progress|cannot .* from state|already promoted|integrity review|cannot be promoted while|already has an active|overlaps active task|preflight failed|cannot disable agent|cannot change agent|would exclude assigned task|workScopes overlap|already exists/i.test(message) ? 409
+        : /required|valid .*id|choose .*model|invalid|request body too large|JSON|allowlist|workScope|agent field|read-only agent role|cannot be assigned to an executable work task|requires at least one field|invalid agent payload/i.test(message) ? 400 : 500;
       const payload = error?.readiness
         ? { error: message, code: 'PROJECT_NOT_READY', readiness: error.readiness }
         : { error: message };
