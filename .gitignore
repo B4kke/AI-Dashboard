@@ -3,6 +3,7 @@ data/*.json
 data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
+data/master/
 !data/.gitkeep
 .ai-dashboard-beta/
 .ai-dashboard-beta-archive*/
