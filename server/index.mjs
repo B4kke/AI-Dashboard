@@ -32,6 +32,7 @@ const { host, port, privateMode } = dashboardBindConfiguration(process.env);
 const dashboardBaseUrl = `http://${host === '::1' ? '[::1]' : host}:${port}`;
 const legacyDataFile = resolve(process.env.AI_DASHBOARD_DATA || resolve(ROOT, 'data', 'state.json'));
 const dbFile = resolve(process.env.AI_DASHBOARD_DB || resolve(ROOT, 'data', 'control.sqlite'));
+const masterSoulFile = resolve(process.env.AI_DASHBOARD_MASTER_SOUL || resolve(ROOT, 'data', 'master', 'SOUL.md'));
 
 const events = new EventHub();
 let mcp = null;
@@ -91,7 +92,8 @@ const autonomy = new AutonomyEngine({
 // never auto-imports, starts workers or creates Git side effects.
 const discovery = createDiscoveryService({ store, github });
 const setup = createSetupService({ store, persistence: sqlite, discovery, opencode: rawOpenCode, research, dashboardBaseUrl });
-const master = createMasterService({ store, setup, dashboardBaseUrl });
+const master = createMasterService({ store, setup, dashboardBaseUrl, persistence: sqlite, soulPath: masterSoulFile });
+await master.initialize();
 discovery.scan().then((report) => {
   if (report.roots.length && report.newCount > 0) console.log(`AI Dashboard discovered ${report.newCount} not-yet-imported repository(ies) in configured Workspace Roots`);
 }).catch(() => {});
