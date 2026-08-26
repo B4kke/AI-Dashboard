@@ -29,6 +29,16 @@ test('Master SOUL.md and memory are durable, inspectable, editable and deletable
     assert.equal(memory.list().length, 1);
     assert.match(memory.context(), /Svar på norsk/);
 
+    const relearned = memory.remember({
+      kind: 'preference', text: 'Svar på norsk som standard.', confidence: 0.99,
+      source: 'assistant_reflection', sourceConversationId: 'conversation-1', sourceMessageIds: ['user-1', 'assistant-1'],
+    });
+    assert.equal(memory.list().length, 1);
+    assert.equal(relearned.id, saved.id);
+    assert.equal(relearned.source, 'operator');
+    assert.equal(relearned.sourceConversationId, null);
+    assert.deepEqual(relearned.sourceMessageIds, ['user-1', 'assistant-1']);
+
     const updated = memory.update(saved.id, { text: 'Svar på norsk og vær konkret.', confidence: 1 });
     assert.match(updated.text, /vær konkret/);
     assert.equal(memory.list()[0].confidence, 1);
