@@ -1,0 +1,34 @@
+@media (max-width: 520px) {
+  .project-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .project-card {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    padding: 16px;
+  }
+
+  .project-card > div:nth-child(2) {
+    min-width: 0;
+  }
+
+  .project-card p {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .meta-row {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .page-head .actions {
+    width: 100%;
+  }
+
+  .page-head .actions > button {
+    flex: 1 1 auto;
+  }
+}
