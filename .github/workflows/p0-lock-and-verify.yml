@@ -1,11 +1,16 @@
-name: P0 Master product repair runner
+name: P0 dependency lock and verify
 
 on:
   push:
     branches:
       - bootstrap/control-center-foundation
     paths:
-      - scripts/p0-master-product-repair.py
+      - package.json
+      - package-lock.json
+      - web/**
+      - server/**
+      - test/**
+      - .github/workflows/ci.yml
       - .github/workflows/p0-lock-and-verify.yml
   workflow_dispatch:
 
@@ -13,39 +18,36 @@ permissions:
   contents: write
 
 jobs:
-  repair:
+  lock-and-verify:
+    if: ${{ !contains(github.event.head_commit.message || '', '[p0-lock]') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: bootstrap/control-center-foundation
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-      - name: Apply Product Foundation repair
-        run: python scripts/p0-master-product-repair.py
+          package-manager-cache: false
       - name: Refresh dependency lock
-        run: npm install --package-lock-only --ignore-scripts
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       - name: Install locked dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Syntax checks
         run: |
-          node --check server/index.mjs
-          node --check server/http-server.mjs
-          node --check server/master/service.mjs
-          node --check server/master/memory.mjs
+          find server test scripts -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
+          find public -type f -name '*.js' -print0 | xargs -0 -n1 node --check
       - name: Build React frontend
         run: npm run build
-      - name: Test
+      - name: Tests
         run: npm test
-      - name: Commit verified Product Foundation repair
+      - name: Commit refreshed lock when needed
         run: |
-          if git diff --quiet; then exit 0; fi
+          if git diff --quiet -- package-lock.json; then exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "p0: finish Master memory and product foundation"
+          git add package-lock.json
+          git commit -m "build: refresh P0 dependency lock [p0-lock]"
           git push origin HEAD:bootstrap/control-center-foundation
