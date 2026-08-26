@@ -159,31 +159,34 @@ Implemented foundation:
 Still planned:
 
 - persistent Master identity/persona,
-- first-class Master conversation/session history,
-- bounded persistent personal/project memory,
+- bounded persistent personal/project memory (Master history is now durable via M3B, but richer memory/persona is separate),
 - automatic multi-step fleet scheduler,
 - capability/performance-based agent selection from verified history,
 - rich explanation of context/action selection.
 
-### M3B — Master conversational workspace / chat — NEXT USER-FACING SLICE
+Implemented via M3B:
 
-Once the Project-first closeout and current PC-beta reliability gate are acceptable, the next major user-facing feature is a dedicated **Master AI** tab.
+- first-class Master conversation/session history (global + project-scoped, `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`).
 
-Design direction:
+### M3B — Master conversational workspace / chat — IMPLEMENTED EARLY SLICE
 
-- study the current `odysseus-dev/odysseus` chat UX as an inspiration source,
-- verify current revision and license before any substantial reuse,
-- keep AI Dashboard visually/product-wise its own system rather than a thin fork,
-- persistent global/project-aware conversations,
-- streamed model/tool/action activity,
-- attach or reference Projects, Tasks, Runs, files, reports and evidence,
-- explicit separation between conversation, proposal, execution and verified completion,
-- trusted operator elicitation / `needs_input` bridge,
-- mobile-first UX,
-- chat creates Tasks/Ideas/Research and manages specialists only through the existing control plane/MCP authority,
-- no direct publish/review/merge bypass.
+Implemented early slice (normal chat environment, inspired by `odysseus-dev/odysseus@dev` but own implementation — `odysseus` is `AGPL-3.0-or-later`, no substantial code reuse):
 
-The Master chat should feel like the primary intelligent interface to the Dashboard while remaining subordinate to canonical control-plane evidence and authority.
+- global Master page (`#/master`) + project-aware `Master` tab (`#/project/:id/master`) with normal chat look: sidebar conversation list + centered bubble stream + rounded composer (inspired by Odysseus browser layout, own CSS/JS),
+- persistent global and project-scoped conversations + messages in `StateStore` schema v9 (`masterConversations`/`masterMessages`),
+- `GET/POST /api/master/conversations`, `GET/PATCH /api/master/conversations/:id`, `GET/POST /api/master/conversations/:id/messages` with fail-closed invariants,
+- message kinds `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT` visibly pill-tagged,
+- streamed-style assistant context: project-aware echo with `openTaskCount` + `projectNextAction` and bounded tool chips (tool calls capped, `publish/review/merge` rejected as `cannot directly invoke`),
+- composer `＋ Task` / `Research` creates via control-plane `POST /api/tasks` + `POST /api/research` — no publish/review/merge bypass, no evidence fabrication,
+- empty state like a normal chat: centered `✦ Master` mark, tip, durably stored history,
+- mobile-first: desktop 300px+1fr grid, tablet/phone stacked, no horizontal overflow, 44px touch targets,
+- deterministic coverage `test/master-chat.test.mjs` + rendered smoke 1440/768/390 for `/#/master` and `/project/:id/master` (see hardening checkpoint).
+
+Still planned:
+
+- real provider streaming (currently stub assistant echo; direct-model streaming to replace),
+- richer context attachments (Tasks/Runs/files/reports/evidence) and file references,
+- per-agent persona/memory and automatic fleet scheduler (M3A/M3C).
 
 ### M3C — Memory & personal context — PLANNED
 

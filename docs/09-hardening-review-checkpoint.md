@@ -6,7 +6,7 @@ PR: #2
 
 This is the current adversarial-review checkpoint. `docs/04-roadmap.md` owns priority; `AGENTS.md` owns binding agent/safety rules; `docs/10-project-first-ux-discovery.md` and `docs/11-design-principles.md` own the Project-first UX/design contract.
 
-A feature is not promoted beyond its evidence level merely because source code exists. The Project-first implementation head `5af53aed0bc14847f2618db7162f81ac60a7b3d1` passed exact-head GitHub Actions run #451 (`32897981754`) before this documentation truth-sync: Ubuntu syntax/tests/rendered UI smoke passed and Windows portability passed. Any later code or documentation commit becomes a new head and must be green again before level-3 evidence is current.
+A feature is not promoted beyond its evidence level merely because source code exists. The fleet slice head `36b94c2bd978be3e358957cf06b23adae0f1bd5c` passed exact-head GitHub Actions PR run `32988127729` (Linux `test` success 16:24:45Z + Windows `Windows portability` success 16:30:07Z) after Project-first head `5af53aed0bc14847f2618db7162f81ac60a7b3d1` (`#451`/`32897981754`). Any later commit (e.g. Master chat) becomes a new head and must be green again before level-3 is current. The Master early slice is implemented + deterministic + local rendered verified (see below) but not yet exact-head Actions green on its own commit.
 
 The full real OpenCode + disposable GitHub/Actions PC-beta campaign remains a separate level-4 external gate.
 
@@ -43,41 +43,43 @@ The Project-first usability slice is implemented and reached level 3 on `5af53ae
 
 ## Verification evidence
 
-Last implementation head before this documentation sync:
+Last fleet implementation head (level 3 verified):
 
-- Commit: `5af53aed0bc14847f2618db7162f81ac60a7b3d1`
-- GitHub Actions: run #451 / `32897981754`
-- Ubuntu: install, syntax, tests, rendered UI smoke — **success**
-- Windows portability: install + tests — **success**
-- Rendered UI smoke includes Home, Overview, Tasks and Settings at desktop/tablet/phone widths.
+- Commit: `36b94c2bd978be3e358957cf06b23adae0f1bd5c`
+- GitHub Actions PR run `32988127729` (fleet slice): `test` Linux success 16:24:45Z + `Windows portability` success 16:30:07Z
+- Prior Project-first head `5af53aed0bc14847f2618db7162f81ac60a7b3d1` was `#451`/`32897981754` (kept as reference)
+- Rendered UI smoke on `36b94c2` includes Home, Overview, Tasks, Agents (fleet) and Settings at 1440/768/390 — **success** (PR run)
 
-This proves deterministic + exact-head Actions behavior for that implementation head. It does **not** prove real OpenCode/GitHub interoperability.
+Master early slice head (pending exact-head Actions on new commit, but deterministic + local rendered verified):
+
+- Local deterministic: `test/master-chat.test.mjs` 3/3 + `agent-fleet` 2/2 + `operator-ui-contract` 4/4; syntax `node --check` clean
+- Local rendered smoke (isolated `control.sqlite`): `/#/master` + `/#/master/:id` + `/#/project/:id/master` at 1440×1000, 768×1000, 390×844 — all **RENDERED**, no overflow/runtime errors, `.master-chat-panel`/`.master-bubble` found (re-tried 390 once). Screenshots in `.tmp/ui-master/` (not committed; CI will upload `ui-smoke-<sha>.png`).
+- Exact-head Linux+Windows on the new Master commit is still **pending** — must be green before level 3 is current for Master.
+
+This proves deterministic + exact-head Actions for the fleet head; Master needs its own exact-head run. Neither proves real OpenCode/GitHub interoperability (level 4).
 
 ## Project-level autonomy / M3 foundation
 
 11. **Open:** explicit Project objective / definition-of-done model with durable project-level completion criteria and evidence.
 12. **Open:** automatic bounded Master/fleet scheduler above ordinary Task delegation. It must re-evaluate canonical state, create only scoped Tasks and never self-certify completion.
-13. **Next product slice after current closeout:** persistent Master AI conversation/session context and bounded inspectable memory. Chat remains context/orchestration, never machine evidence or merge authority.
+13. **Implemented early slice + deterministic + local rendered (needs exact-head Actions on new commit):** persistent Master AI conversation/session context (global + project-aware). `masterConversations`/`masterMessages` StateStore v9, `GET/POST /api/master/conversations`, `GET/PATCH /api/master/conversations/:id`, `GET/POST /api/master/conversations/:id/messages` whitelisted over StateStore (projectId validated, `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT` kinds, toolCalls capped and `publish/review/merge` rejected, durable history). Normal chat UI: global `Master` (`#/master`) + project `Master` tab (`#/project/:id/master`) — sidebar conversation list + centered bubble stream (user right / assistant left) + rounded composer (`Message Master…`, kind select, `＋ Task`/`Research` via control plane). Looks like a normal chat (inspired by `odysseus-dev/odysseus@dev` browser layout, `AGPL-3.0-or-later` — own CSS/JS, no substantial reuse) and stays subordinate to control-plane evidence/authority; inspired UX verified at 1440/768/390. Bounded inspectable memory remains open (history is durable, richer memory/persona separate).
 14. **Implemented:** structured diff/scope/verification/CI/supervisor/merge evidence is primary; raw evidence JSON remains Advanced.
-15. **Implemented + deterministic coverage + rendered acceptance (this slice):** Project-scoped Agent fleet operator surface. `GET /api/projects/:id/agents` (fleet view with assigned Task/active Run), `POST /api/projects/:id/agents` and `PATCH /api/agents/:id` are whitelisted over `StateStore` (`addAgent`/`updateAgent`) as canonical truth — same guards as MCP `agent_create`/`agent_update` (unique name, no overlapping mutating scopes, read-only roles cannot execute work, identity/scopes lock after execution history, active work retains ownership, disable fail-closed with unfinished assigned work, no raw field bypass, no alternate execution motor). Rendered Agents tab at 1440/768/390 shows name/role/enabled/harness/model/capabilities/workScopes/assigned Task/active Run/ownership and exposes create/edit/enable/disable through dialogs/toasts (no native alert/prompt/confirm). No publish/review/merge bypass. `docs/04-roadmap.md` M3E is now the implemented early slice for fleet controls.
+15. **Implemented + deterministic coverage + level-3 verified on `36b94c2` + local rendered:** Project-scoped Agent fleet operator surface. `GET /api/projects/:id/agents` (fleet view with assigned Task/active Run), `POST /api/projects/:id/agents` and `PATCH /api/agents/:id` are whitelisted over `StateStore` (`addAgent`/`updateAgent`) as canonical truth — same guards as MCP `agent_create`/`agent_update` (unique name, no overlapping mutating scopes, read-only roles cannot execute work, identity/scopes lock after execution history, active work retains ownership, disable fail-closed with unfinished assigned work, no raw field bypass, no alternate execution motor). Rendered Agents tab at 1440/768/390 shows name/role/enabled/harness/model/capabilities/workScopes/assigned Task/active Run/ownership and exposes create/edit/enable/disable through dialogs/toasts (no native alert/prompt/confirm). No publish/review/merge bypass. `docs/04-roadmap.md` M3E is now the implemented early slice for fleet controls. Verified on PR run `32988127729` (fleet head `36b94c2`).
 
-## Master AI / chat direction
+## Master AI / chat direction — now implemented early slice (normal chat)
 
-After the Project-first closeout and real PC-beta gate are in acceptable shape, the next user-facing slice is the Master AI chat workspace.
+Implemented as a normal chat environment, inspired by current `odysseus-dev/odysseus@dev` browser layout (verified `AGPL-3.0-or-later` — no substantial code/assets reused; AI Dashboard stays its own product/visual system):
 
-The implementation should study the current `odysseus-dev/odysseus` chat UX as inspiration, but AI Dashboard remains its own product and must review the current revision/license before reusing any substantial code/assets.
+- first-class global `Master` (`#/master`) + project `Master` tab (`#/project/:id/master`),
+- persistent global/project-aware conversations + messages (`StateStore` v9, whitelisted `POST/GET /api/master/*`),
+- understands Projects/Tasks/Runs/Agents/GitHub/CI/Research/evidence (assistant echo includes `projectNextAction` + open counts),
+- bubble stream `user` (right) vs `assistant` (left), `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT` pill-tagged,
+- tool chips (`task_create` etc) capped and `publish/review/merge` fail-closed,
+- `＋ Task` / `Research` inside composer create via control-plane `POST /api/tasks` / `POST /api/research` — never direct publish/review/merge,
+- centered `✦ Master` empty state like a normal chat, tip, durable history,
+- mobile-first: `300px+1fr` → single column on tablet/phone, no overflow, rounded `Message Master…` composer with `↑` send.
 
-The Master chat must:
-
-- be a first-class global/project-aware tab,
-- use persistent conversation/session state,
-- understand Projects, Tasks, Runs, Agents, GitHub/CI, Research and evidence,
-- stream model/tool activity in a readable way,
-- create Tasks/Ideas/Research and manage specialists only through existing control-plane/MCP authority,
-- support trusted operator elicitation/`needs_input`,
-- distinguish proposal, execution, machine verification and completion,
-- never gain direct publish/review/merge bypass,
-- stay mobile-first.
+Still open: real provider streaming (currently stub echo), richer Task/Run/file/evidence attachments, per-agent persona/memory and fleet scheduler (see `docs/04-roadmap.md` M3A/M3C).
 
 ## Review invariants
 

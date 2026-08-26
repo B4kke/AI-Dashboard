@@ -5,8 +5,10 @@ import { normalizeWorkScopes, scopeSetsOverlap, scopeSubset, taskWorkScopes } fr
 import { projectAdmissionIdentity, taskAdmissionIdentity } from './admission-identity.mjs';
 import { resolveWorkspaceRoot, workspacePathKey } from './workspace-paths.mjs';
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 const PROJECT_STATUSES = new Set(['active', 'needs_sync', 'blocked']);
+const MASTER_MESSAGE_ROLES = new Set(['user', 'assistant', 'system', 'tool']);
+const MASTER_MESSAGE_KINDS = new Set(['conversation', 'proposal', 'executing', 'needs_input', 'verified_result']);
 const DEFAULT_AUTONOMY = Object.freeze({
   mode: 'manual', supervisorRole: 'supervisor', plannerRole: 'planner', workerRole: 'builder',
   maxConcurrentRuns: 2, maxTaskIterations: 4, maxRunMinutes: 45, maxRetryAttempts: 5,
@@ -34,6 +36,8 @@ const EMPTY_STATE = Object.freeze({
   researchRuns: [],
   modelProviders: [],
   mcpServers: [],
+  masterConversations: [],
+  masterMessages: [],
   integrations: {},
   settings: { workspaceRoots: [], projectDefaults: structuredClone(DEFAULT_PROJECT_DEFAULTS) },
 });
@@ -102,6 +106,44 @@ function agentRecord(input, project, now = new Date().toISOString()) {
 function normalizeAgent(agent) {
   return { role: 'specialist', harness: 'opencode', model: null, instructions: '', capabilities: [], workScopes: [], enabled: true,
     ...agent, capabilities: stringList(agent?.capabilities), workScopes: normalizeWorkScopes(agent?.workScopes), enabled: agent?.enabled !== false };
+}
+function masterConversationRecord(input, project, now = new Date().toISOString()) {
+  return {
+    id: input.id || randomUUID(),
+    projectId: project ? project.id : (input.projectId?.trim?.() || null),
+    title: boundedText(input.title?.trim() || 'Master conversation', 200) || 'Master conversation',
+    createdAt: input.createdAt || now,
+    updatedAt: now,
+    lastMessageAt: input.lastMessageAt || null,
+  };
+}
+function masterMessageRecord(input, conversationId, now = new Date().toISOString()) {
+  const role = String(input.role || 'user').toLowerCase();
+  if (!MASTER_MESSAGE_ROLES.has(role)) throw new Error(`Invalid master message role: ${role}`);
+  const kind = String(input.kind || 'conversation').toLowerCase();
+  if (!MASTER_MESSAGE_KINDS.has(kind)) throw new Error(`Invalid master message kind: ${kind}`);
+  const content = boundedText(input.content, 40_000);
+  if (!content) throw new Error('Master message content is required');
+  const toolCalls = Array.isArray(input.toolCalls) ? input.toolCalls.slice(0, 8).map((call) => {
+    if (!call || typeof call !== 'object') throw new Error('Invalid toolCalls entry');
+    const name = String(call.tool || call.name || '').trim();
+    if (!name) throw new Error('Tool call requires a tool name');
+    // Forbid direct execution bypass: publish/review/merge are not Master-chat tools
+    if (['publish', 'review', 'merge', 'force-push', 'approve'].some((banned) => name.toLowerCase().includes(banned))) {
+      throw new Error(`Master chat cannot directly invoke ${name}; use Task delegation and control-plane gates`);
+    }
+    if (String(JSON.stringify(call)).length > 8000) throw new Error('Tool call payload too large');
+    return { tool: name, args: call.args ?? null, result: call.result ?? null, status: call.status || null };
+  }) : [];
+  return {
+    id: input.id || randomUUID(),
+    conversationId,
+    role,
+    kind,
+    content,
+    toolCalls,
+    createdAt: input.createdAt || now,
+  };
 }
 function normalizeMcpServer(server) {
   return {
@@ -273,7 +315,7 @@ function normalizeState(parsed) {
   const sourceSchemaVersion = Number(parsed?.schemaVersion || 0);
   const state = parsed ? { ...cloneEmpty(), ...parsed, schemaVersion: SCHEMA_VERSION } : cloneEmpty();
   if (!Number.isInteger(state.revision) || state.revision < 0) state.revision = 0;
-  for (const key of ['explorations', 'explorationRuns', 'projects', 'ideas', 'tasks', 'agents', 'runs', 'researchRuns', 'modelProviders', 'mcpServers']) {
+  for (const key of ['explorations', 'explorationRuns', 'projects', 'ideas', 'tasks', 'agents', 'runs', 'researchRuns', 'modelProviders', 'mcpServers', 'masterConversations', 'masterMessages']) {
     if (!Array.isArray(state[key])) state[key] = [];
   }
   if (!state.integrations || typeof state.integrations !== 'object' || Array.isArray(state.integrations)) state.integrations = {};
@@ -314,6 +356,21 @@ function normalizeState(parsed) {
     }
   }
   state.mcpServers = state.mcpServers.map(normalizeMcpServer);
+  state.masterConversations = state.masterConversations.map((conv) => ({
+    projectId: conv.projectId || null,
+    title: boundedText(conv.title || 'Master conversation', 200),
+    lastMessageAt: conv.lastMessageAt || null,
+    ...conv,
+    projectId: conv.projectId || null,
+    title: boundedText(conv.title || 'Master conversation', 200) || 'Master conversation',
+  }));
+  state.masterMessages = state.masterMessages.map((msg) => ({
+    role: MASTER_MESSAGE_ROLES.has(String(msg.role || '').toLowerCase()) ? String(msg.role).toLowerCase() : 'user',
+    kind: MASTER_MESSAGE_KINDS.has(String(msg.kind || '').toLowerCase()) ? String(msg.kind).toLowerCase() : 'conversation',
+    toolCalls: Array.isArray(msg.toolCalls) ? msg.toolCalls.slice(0, 8) : [],
+    ...msg,
+    content: boundedText(msg.content, 40_000),
+  }));
   return state;
 }
 
@@ -829,6 +886,40 @@ export class StateStore {
       error: null, createdAt: now, updatedAt: now, startedAt: null, finishedAt: null }; state.researchRuns.push(run); return run; }); }
   async updateResearchRun(id, patch) { return this.#mutate('research.updated', (state) => { const run = state.researchRuns.find((item) => item.id === id); if (!run) throw new Error('Research run not found'); Object.assign(run, patch, { updatedAt: new Date().toISOString() }); return run; }); }
   async setIntegration(name, value) { return this.#mutate('integration.updated', (state) => { state.integrations[name] = { ...value, updatedAt: new Date().toISOString() }; return { name, ...state.integrations[name] }; }); }
+
+  async createMasterConversation(input = {}) { return this.#mutate('master-conversation.created', (state) => {
+    const project = input.projectId ? state.projects.find((item) => item.id === input.projectId) : null;
+    if (input.projectId && !project) throw new Error('Valid projectId is required for project-scoped Master conversation');
+    const conversation = masterConversationRecord(input, project);
+    state.masterConversations.push(conversation);
+    return conversation;
+  }); }
+  async updateMasterConversation(id, patch = {}) { return this.#mutate('master-conversation.updated', (state) => {
+    const conversation = state.masterConversations.find((item) => item.id === id);
+    if (!conversation) throw new Error('Master conversation not found');
+    if (patch.projectId !== undefined && patch.projectId !== conversation.projectId) throw new Error('Master conversation projectId cannot be changed');
+    if (patch.title !== undefined) conversation.title = boundedText(patch.title, 200) || conversation.title;
+    conversation.updatedAt = new Date().toISOString();
+    return conversation;
+  }); }
+  async addMasterMessage(input = {}) { return this.#mutate('master-message.created', (state) => {
+    if (!input.conversationId) throw new Error('conversationId is required');
+    const conversation = state.masterConversations.find((item) => item.id === input.conversationId);
+    if (!conversation) throw new Error('Master conversation not found');
+    const message = masterMessageRecord(input, conversation.id);
+    state.masterMessages.push(message);
+    conversation.lastMessageAt = message.createdAt;
+    conversation.updatedAt = message.createdAt;
+    return message;
+  }); }
+  getMasterConversation(id) { return structuredClone(this.state.masterConversations.find((item) => item.id === id) || null); }
+  listMasterConversations(projectId = null) {
+    const filtered = projectId ? this.state.masterConversations.filter((item) => item.projectId === projectId) : this.state.masterConversations;
+    return structuredClone([...filtered].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))));
+  }
+  masterMessagesFor(conversationId) {
+    return structuredClone(this.state.masterMessages.filter((item) => item.conversationId === conversationId).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))));
+  }
 
   async #mutate(defaultType, mutator, resultSelector = (value) => value, eventTypeSelector = () => defaultType) {
     const operation = this.mutationChain.then(async () => { const next = structuredClone(this.state); const mutationResult = await mutator(next);

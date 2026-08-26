@@ -8,12 +8,15 @@ import {
 } from './presentation.js';
 
 const $ = (id) => document.getElementById(id);
-const WORKSPACE_TABS = ['overview', 'tasks', 'agents', 'github', 'evidence', 'research', 'settings'];
+const WORKSPACE_TABS = ['overview', 'tasks', 'agents', 'github', 'evidence', 'research', 'settings', 'master'];
 
 let state = {
   explorations: [], explorationRuns: [], projects: [], ideas: [], tasks: [], agents: [],
   runs: [], researchRuns: [], modelProviders: [], settings: { workspaceRoots: [] },
+  masterConversations: [], masterMessages: [],
 };
+let selectedMasterConversationId = null;
+let masterFilter = '';
 let openCodeModels = [];
 let discoveryData = null;
 let discoveryTab = 'local';
@@ -65,6 +68,7 @@ function parseRoute() {
   if (parts[0] === 'project' && parts[1]) return { page: 'project', projectId: parts[1], tab: WORKSPACE_TABS.includes(parts[2]) ? parts[2] : 'overview' };
   if (parts[0] === 'explorations') return { page: 'explorations' };
   if (parts[0] === 'system') return { page: 'system' };
+  if (parts[0] === 'master') return { page: 'master', conversationId: parts[1] || null };
   if (parts[0] === 'projects') return { page: 'projects', discover: parts[1] === 'discover' };
   return { page: 'projects', discover: false };
 }
@@ -77,7 +81,7 @@ async function refresh() {
     const [nextState, health, providers] = await Promise.all([
       api('/api/state'), api('/api/health').catch(() => ({ integrations: {} })), api('/api/model-providers').catch(() => []),
     ]);
-    state = { explorations: [], explorationRuns: [], projects: [], ideas: [], tasks: [], agents: [], runs: [], researchRuns: [], modelProviders: [], settings: { workspaceRoots: [] }, ...nextState };
+    state = { explorations: [], explorationRuns: [], projects: [], ideas: [], tasks: [], agents: [], runs: [], researchRuns: [], modelProviders: [], settings: { workspaceRoots: [] }, masterConversations: [], masterMessages: [], ...nextState };
     if (!state.settings) state.settings = { workspaceRoots: [] };
     if (Array.isArray(providers)) state.modelProviders = providers;
     const oc = health.integrations.opencode || {};
@@ -220,6 +224,7 @@ function renderWorkspace() {
   else if (route.tab === 'github') content.innerHTML = renderGithubTab(project, tasks);
   else if (route.tab === 'evidence') content.innerHTML = renderEvidenceTab(project, tasks);
   else if (route.tab === 'research') content.innerHTML = renderResearchTab(project);
+  else if (route.tab === 'master') content.innerHTML = renderMasterWorkspaceTab(project);
   else if (route.tab === 'settings') content.innerHTML = renderSettingsTab(project);
   else content.innerHTML = renderOverviewTab(project, tasks, runs, agents);
 }
@@ -450,6 +455,145 @@ function renderSettingsTab(project) {
       </details>
       <div class="row-actions" style="margin-top:8px;"><button class="primary" type="submit">Save settings</button></div>
     </form>`;
+}
+
+function renderMasterWorkspaceTab(project) {
+  const conversations = (state.masterConversations || []).filter((c) => c.projectId === project.id).sort((a,b)=> String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  const last = conversations[0] || null;
+  const messages = last ? (state.masterMessages||[]).filter((m)=>m.conversationId===last.id).slice(-3) : [];
+  return `
+    <div class="section-heading"><div><h2>Master</h2><p class="section-copy">Project-aware chat with the Master orchestrator — ask, propose, execute and verify without ever bypassing control-plane gates. Looks like a normal chat, stays fail-closed.</p></div>
+    <div class="row-actions"><button class="primary compact" data-action="new-master-conversation" data-project="${project.id}">＋ New chat</button><a href="#/master" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface-2);font-size:13px;">Open full chat →</a></div></div>
+    ${conversations.length ? `
+      <div style="display:grid;grid-template-columns:320px 1fr;gap:16px;align-items:start;">
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${conversations.slice(0,6).map((conv)=>{
+            const count = (state.masterMessages||[]).filter((m)=>m.conversationId===conv.id).length;
+            const isActive = conv.id===last.id;
+            return `<button class="master-conv-row ${isActive?'active':''}" data-action="open-master-conversation" data-conversation="${conv.id}" style="text-align:left;">
+              <span style="font-weight:650;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(conv.title)}</span>
+              <span class="small">${count} messages · ${escapeHtml(timeAgo(conv.updatedAt))}</span>
+            </button>`;
+          }).join('')}
+        </div>
+        <div class="master-chat-panel" style="min-height:260px;">
+          <div class="master-chat-head"><div style="min-width:0;"><div class="title" style="font-size:14px;font-weight:700;">${escapeHtml(last.title)}</div><div class="small">${escapeHtml(timeAgo(last.updatedAt))} · ${messages.length} recent</div></div><button class="subtle compact" data-action="open-master-conversation" data-conversation="${last.id}">Open</button></div>
+          <div class="master-messages" style="padding:14px;min-height:160px;">
+            ${messages.length ? messages.map((msg)=>{
+              const isUser = msg.role==='user';
+              return `<div class="master-message ${isUser?'user':'assistant'}"><div class="master-bubble"><div class="master-message-meta"><span class="master-role">${escapeHtml(isUser?'You':'Master')}</span> ${masterMessageKindPill(msg.kind)}</div><div>${escapeHtml(msg.content.slice(0,160))}</div></div></div>`;
+            }).join('') : `<div class="master-empty" style="min-height:100px;"><div class="small">No messages yet — open the chat to continue.</div></div>`}
+          </div>
+          <div class="master-composer-wrap" style="padding:12px;">
+            <div class="master-composer" style="padding:10px;">
+              <div class="small" style="color:var(--text-muted);">Continue in full Master — normal chat input, same project context, never merges directly.</div>
+              <div style="display:flex;gap:8px;margin-top:8px;">
+                <button class="primary compact" data-action="open-master-conversation" data-conversation="${last.id}" style="flex:1;">Continue chat</button>
+                <button class="compact" data-action="new-master-conversation" data-project="${project.id}">New chat</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>` : emptyBox('No Master chats for this project', 'Start a normal chat — Master understands this project’s Tasks, Runs, Agents, CI and evidence and will propose scoped work instead of editing directly.', `<button class="primary" data-action="new-master-conversation" data-project="${project.id}">＋ New chat</button>`)}
+    <div class="info-banner" style="margin-top:16px;">Master creates Tasks/Ideas/Research only via control plane; publish/review/merge stay gated by verification, CI and independent supervisor.</div>`;
+}
+
+function masterMessageKindPill(kind) {
+  const map = { conversation: '', proposal: 'proposal', executing: 'running', needs_input: 'warning attention-glow', verified_result: 'ok' };
+  const label = { conversation: 'CONVERSATION', proposal: 'PROPOSAL', executing: 'EXECUTING', needs_input: 'NEEDS INPUT', verified_result: 'VERIFIED RESULT' }[kind] || kind.toUpperCase();
+  const cls = map[kind] ? `pill ${map[kind]}` : 'pill';
+  return `<span class="${cls}" style="font-size:10.5px;letter-spacing:0.06em;padding:2px 8px;">${escapeHtml(label)}</span>`;
+}
+function renderMasterPage() {
+  let conversations = [...(state.masterConversations || [])].sort((a,b)=> String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  if (masterFilter === '__global') conversations = conversations.filter((c)=> !c.projectId);
+  else if (masterFilter) conversations = conversations.filter((c)=> c.projectId === masterFilter);
+  const selectedId = route.conversationId || selectedMasterConversationId || conversations[0]?.id || null;
+  if (selectedId && selectedId !== selectedMasterConversationId) selectedMasterConversationId = selectedId;
+  const active = conversations.find((c)=>c.id===selectedMasterConversationId) || null;
+  const unfilteredActive = state.masterConversations.find((c)=>c.id===selectedMasterConversationId) || null;
+  const displayActive = active || unfilteredActive;
+  const messages = displayActive ? (state.masterMessages || []).filter((m)=>m.conversationId===displayActive.id).sort((a,b)=> String(a.createdAt).localeCompare(String(b.createdAt))) : [];
+  const projectForActive = displayActive?.projectId ? state.projects.find((p)=>p.id===displayActive.projectId) : null;
+  const listHtml = conversations.length ? conversations.map((conv)=>{
+    const isActive = conv.id===displayActive?.id;
+    const proj = conv.projectId ? state.projects.find((p)=>p.id===conv.projectId) : null;
+    const count = (state.masterMessages||[]).filter((m)=>m.conversationId===conv.id).length;
+    return `<button class="master-conv-row ${isActive?'active':''}" data-action="open-master-conversation" data-conversation="${conv.id}">
+      <span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13.5px;">${escapeHtml(conv.title)}</span>
+      <span class="small" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><span>${escapeHtml(proj ? proj.name : 'Global')}</span><span>·</span><span>${count} msg</span><span>·</span><span>${escapeHtml(timeAgo(conv.updatedAt))}</span></span>
+    </button>`;
+  }).join('') : `<div class="empty" style="padding:14px;"><strong>No conversations yet</strong><span class="small">Start a global or project-aware chat. Master proposes scoped Tasks instead of editing directly.</span></div>`;
+  const headerTitle = displayActive ? escapeHtml(displayActive.title) : 'Master';
+  const headerMeta = displayActive ? `${projectForActive ? `${escapeHtml(projectForActive.name)} · ` : 'Global · '}${escapeHtml(timeAgo(displayActive.updatedAt))} · ${messages.length} messages` : 'Your orchestrator — proposals become Tasks, evidence stays gated';
+  const messagesInner = !displayActive
+    ? `<div class="master-empty">
+        <div>
+          <div class="master-empty-mark">✦ Master</div>
+          <div style="font-weight:600;color:var(--text);margin-top:6px;">Your project-aware orchestrator</div>
+          <div class="master-empty-sub" style="max-width:420px;margin:6px auto 0;">Ask about Projects, Tasks, Runs, Agents or CI — Master streams proposal → executing → verified result. Chat never publishes or merges directly.</div>
+          <div class="small" style="margin-top:10px;">Tip: Right-click a conversation for rename (delete stays durable history).</div>
+          <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+            <button class="primary compact" data-action="new-master-conversation">New conversation</button>
+            <button class="compact" data-action="new-master-conversation" data-project="${state.projects[0]?.id||''}">New project chat</button>
+          </div>
+        </div>
+      </div>`
+    : (messages.length ? messages.map((msg)=>{
+        const isUser = msg.role==='user';
+        const roleLabel = isUser ? 'You' : msg.role==='assistant' ? 'Master' : escapeHtml(msg.role);
+        const toolHtml = (msg.toolCalls||[]).map((tc)=> `<span class="master-chip" style="margin-top:6px;">${escapeHtml(tc.tool)}<span style="color:var(--text-faint);">${escapeHtml(tc.status||'')}</span></span>`).join('');
+        const meta = `<div class="master-message-meta"><span class="master-role">${escapeHtml(roleLabel)}</span> ${masterMessageKindPill(msg.kind)} <span>·</span> <span>${escapeHtml(timeAgo(msg.createdAt))}</span></div>`;
+        return `<div class="master-message ${isUser?'user':'assistant'}"><div class="master-bubble">${meta}<div>${escapeHtml(msg.content)}</div>${toolHtml?`<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">${toolHtml}</div>`:''}</div></div>`;
+      }).join('') : `<div class="master-empty"><div><div class="master-empty-mark">✦ ${escapeHtml(displayActive.title)}</div><div class="master-empty-sub">No messages yet. Ask Master to summarize evidence, propose scoped Tasks, or start Research — all through the control plane.</div></div></div>`);
+  const composer = displayActive ? `
+    <div class="master-composer-wrap">
+      <form id="master-composer" data-conversation="${displayActive.id}" class="master-composer">
+        <textarea name="content" rows="2" required placeholder="Message Master …  — e.g. 'propose 2 scoped Tasks for the failing CI' or 'summarize evidence for Task …'" aria-label="Message Master"></textarea>
+        <div class="master-composer-bar">
+          <div class="master-composer-left">
+            <select name="kind" aria-label="Message kind" style="background:var(--surface-2);border:1px solid var(--line-soft);border-radius:999px;padding:4px 10px;font-size:12px;">
+              <option value="conversation">CONVERSATION</option>
+              <option value="proposal">PROPOSAL</option>
+              <option value="executing">EXECUTING</option>
+              <option value="needs_input">NEEDS INPUT</option>
+              <option value="verified_result">VERIFIED RESULT</option>
+            </select>
+            <span class="small" style="color:var(--text-faint);">kind tags the turn</span>
+          </div>
+          <div class="master-composer-right">
+            <button type="button" class="master-chip" data-action="master-create-task" data-conversation="${displayActive.id}" title="Create Task via control plane">＋ Task</button>
+            <button type="button" class="master-chip" data-action="master-start-research" data-conversation="${displayActive.id}">Research</button>
+            <button type="submit" class="master-send" aria-label="Send">↑</button>
+          </div>
+        </div>
+      </form>
+      <div class="small" style="margin-top:8px;color:var(--text-faint);">Master may create Tasks/Ideas/Research and manage specialists only via control plane. Publish/review/merge stay gated by verification, CI and independent review.</div>
+    </div>` : '';
+  $('master-root').innerHTML = `
+    <div class="master-layout">
+      <aside class="master-conv-list">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <span class="eyebrow" style="margin:0;">CONVERSATIONS</span>
+          <button class="primary compact" data-action="new-master-conversation" style="min-height:30px;padding:4px 10px;">＋ New chat</button>
+        </div>
+        <div class="small" style="color:var(--text-faint);margin-top:2px;">${conversations.length} total · global + project-aware</div>
+        <label style="margin:0;">Filter by project<select id="master-project-filter"><option value="" ${masterFilter===''?'selected':''}>All projects + global</option><option value="__global" ${masterFilter==='__global'?'selected':''}>Global only</option>${state.projects.map((p)=>`<option value="${escapeHtml(p.id)}" ${masterFilter===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></label>
+        <div class="conv-scroll">${listHtml}</div>
+      </aside>
+      <section class="master-chat-panel">
+        <div class="master-chat-head">
+          <div style="min-width:0;flex:1;">
+            <div class="title" style="font-size:16px;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${headerTitle}</div>
+            <div class="small" style="color:var(--text-muted);">${headerMeta}</div>
+          </div>
+          <div class="row-actions" style="flex:0 0 auto;">${displayActive?`<button class="subtle compact" data-action="rename-master-conversation" data-conversation="${displayActive.id}">Rename</button><button class="subtle compact" data-action="delete-master-conversation" data-conversation="${displayActive.id}" style="color:var(--danger);">Delete</button>` : ''}</div>
+        </div>
+        <div id="master-messages" class="master-messages">${messagesInner}</div>
+        ${composer}
+      </section>
+    </div>
+  `;
 }
 
 /* ================= explorations & system pages ================= */
@@ -700,6 +844,7 @@ function render() {
   else if (route.page === 'project') renderWorkspace();
   else if (route.page === 'explorations') renderExplorations();
   else if (route.page === 'system') renderSystem();
+  else if (route.page === 'master') renderMasterPage();
 }
 
 /* ================= global action delegation ================= */
@@ -911,6 +1056,64 @@ document.addEventListener('click', async (event) => {
       $('model-choice-input').value = '';
       $('model-choice-dialog').showModal();
     }
+    return;
+  }
+  if (action === 'new-master-conversation') {
+    event.preventDefault();
+    const projectId = button.dataset.project || null;
+    button.disabled = true;
+    try {
+      const conv = await api('/api/master/conversations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId, title: projectId ? `Master · ${projectName(projectId)}` : 'Master conversation' }) });
+      selectedMasterConversationId = conv.id;
+      if (projectId) window.location.hash = `#/project/${encodeURIComponent(projectId)}/master`;
+      else window.location.hash = `#/master/${encodeURIComponent(conv.id)}`;
+      toast('Master conversation created', 'success');
+      await refresh();
+      render();
+    } catch (error) { toast(error.message, 'error'); } finally { button.disabled = false; }
+    return;
+  }
+  if (action === 'open-master-conversation') {
+    event.preventDefault();
+    selectedMasterConversationId = button.dataset.conversation;
+    window.location.hash = `#/master/${encodeURIComponent(button.dataset.conversation)}`;
+    render();
+    return;
+  }
+  if (action === 'rename-master-conversation') {
+    event.preventDefault();
+    const conv = state.masterConversations.find((c)=>c.id===button.dataset.conversation);
+    if (!conv) return;
+    const next = window.prompt('Rename conversation', conv.title);
+    if (!next || next.trim()===conv.title) return;
+    try { await api(`/api/master/conversations/${encodeURIComponent(conv.id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: next.trim() }) }); await refresh(); } catch (e){ toast(e.message,'error'); }
+    return;
+  }
+  if (action === 'delete-master-conversation') {
+    event.preventDefault();
+    // soft delete via title marker; hard delete not implemented — keep history for evidence
+    toast('Delete not yet supported — conversations are durable history', 'warning');
+    return;
+  }
+  if (action === 'master-create-task') {
+    event.preventDefault();
+    const conv = state.masterConversations.find((c)=>c.id===button.dataset.conversation);
+    if (!conv) return;
+    const projectId = conv.projectId || state.projects[0]?.id;
+    if (!projectId) { toast('Create a Project first', 'warning'); return; }
+    $('task-project').value = projectId;
+    $('task-dialog').showModal();
+    return;
+  }
+  if (action === 'master-start-research') {
+    event.preventDefault();
+    const conv = state.masterConversations.find((c)=>c.id===button.dataset.conversation);
+    if (!conv) return;
+    const projectId = conv.projectId || state.projects[0]?.id;
+    if (!projectId) { toast('Create a Project first', 'warning'); return; }
+    $('research-project').value = projectId;
+    $('research-dialog').showModal();
+    return;
   }
 });
 
@@ -1091,35 +1294,91 @@ $('provider-form').addEventListener('submit', async (event) => {
   try { await api('/api/model-providers', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }); $('provider-dialog').close(); event.currentTarget.reset(); await refresh(); } catch (error) { toast(error.message, 'error'); }
 });
 document.addEventListener('submit', (event) => {
-  if (event.target.id !== 'project-settings-form') return;
+  if (event.target.id === 'project-settings-form') {
+    event.preventDefault();
+    const form = event.target;
+    const raw = Object.fromEntries(new FormData(form));
+    const patch = {
+      name: raw.name,
+      description: raw.description,
+      repoPath: raw.repoPath || null,
+      repository: raw.repository || null,
+      baseBranch: raw.baseBranch || 'main',
+      verificationCommands: parseLines(raw.verificationCommands),
+      modelPolicy: { codingModel: raw.codingModel || null, planningModel: raw.planningModel || null, supervisorModel: raw.supervisorModel || null, researchModel: raw.researchModel || null },
+      autonomy: {
+        mode: raw.autonomyMode,
+        maxConcurrentRuns: Number(raw.maxConcurrentRuns || 2),
+        maxTaskIterations: Number(raw.maxTaskIterations || 4),
+        requireCi: form.elements.requireCi.checked,
+        autoMerge: form.elements.autoMerge.checked,
+      },
+    };
+    api(`/api/projects/${encodeURIComponent(form.dataset.project)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
+      .then(() => { toast('Settings saved — run Sync & check before delegating', 'success'); return refresh(); })
+      .catch((error) => toast(error.message, 'error'));
+    return;
+  }
+  if (event.target.id === 'master-composer') {
+    event.preventDefault();
+    const form = event.target;
+    const raw = Object.fromEntries(new FormData(form));
+    const content = String(raw.content || '').trim();
+    if (!content) return;
+    const conversationId = form.dataset.conversation;
+    const kind = String(raw.kind || 'conversation').toLowerCase();
+    form.elements.content.value = '';
+    (async () => {
+      try {
+        await api(`/api/master/conversations/${encodeURIComponent(conversationId)}/messages`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ role: 'user', content, kind }),
+        });
+        // Stub assistant response: echo with project context so UI streams something immediately
+        const conv = state.masterConversations.find((c)=>c.id===conversationId);
+        const proj = conv?.projectId ? state.projects.find((p)=>p.id===conv.projectId) : null;
+        const taskCount = proj ? state.tasks.filter((t)=>t.projectId===proj.id && t.state!=='done').length : state.tasks.filter((t)=>t.state!=='done').length;
+        const nextAction = proj ? projectNextAction({ project: proj, tasks: state.tasks.filter((t)=>t.projectId===proj.id), runs: state.runs.filter((r)=>r.projectId===proj.id) }) : null;
+        const assistantContent = proj
+          ? `Master received in ${proj.name}. Open tasks: ${taskCount}. Next: ${nextAction ? nextAction.label : 'no queued work'}. I can propose scoped Tasks, create specialists via the fleet registry, or start Research — all through the control plane. Your message was: "${content.slice(0, 240)}". Use "Create Task from chat" to materialize a proposal; I never publish or merge directly.`
+          : `Master (global) received: "${content.slice(0, 240)}". ${state.projects.length ? `You have ${state.projects.length} Project(s); ${taskCount} open Task(s).` : 'No Projects yet — create one to enable project-aware orchestration.'} I propose, you approve; execution stays gated by verification, CI and independent review.`;
+        await api(`/api/master/conversations/${encodeURIComponent(conversationId)}/messages`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ role: 'assistant', kind: 'conversation', content: assistantContent }),
+        });
+        await refresh();
+        render();
+        // scroll to bottom
+        const panel = document.getElementById('master-messages');
+        if (panel) panel.scrollTop = panel.scrollHeight;
+      } catch (error) { toast(error.message, 'error'); }
+    })();
+  }
+});
+
+document.addEventListener('change', (event) => {
+  if (event.target && event.target.id === 'master-project-filter') {
+    masterFilter = event.target.value || '';
+    render();
+  }
+});
+
+$('new-master-conversation')?.addEventListener('click', async (event) => {
+  // fallback for header button without data-action (safety)
+  if (event.currentTarget.dataset.action) return;
   event.preventDefault();
-  const form = event.target;
-  const raw = Object.fromEntries(new FormData(form));
-  const patch = {
-    name: raw.name,
-    description: raw.description,
-    repoPath: raw.repoPath || null,
-    repository: raw.repository || null,
-    baseBranch: raw.baseBranch || 'main',
-    verificationCommands: parseLines(raw.verificationCommands),
-    modelPolicy: { codingModel: raw.codingModel || null, planningModel: raw.planningModel || null, supervisorModel: raw.supervisorModel || null, researchModel: raw.researchModel || null },
-    autonomy: {
-      mode: raw.autonomyMode,
-      maxConcurrentRuns: Number(raw.maxConcurrentRuns || 2),
-      maxTaskIterations: Number(raw.maxTaskIterations || 4),
-      requireCi: form.elements.requireCi.checked,
-      autoMerge: form.elements.autoMerge.checked,
-    },
-  };
-  api(`/api/projects/${encodeURIComponent(form.dataset.project)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
-    .then(() => { toast('Settings saved — run Sync & check before delegating', 'success'); return refresh(); })
-    .catch((error) => toast(error.message, 'error'));
+  try {
+    const conv = await api('/api/master/conversations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Master conversation' }) });
+    selectedMasterConversationId = conv.id;
+    window.location.hash = `#/master/${encodeURIComponent(conv.id)}`;
+    await refresh();
+  } catch (e) { toast(e.message, 'error'); }
 });
 
 /* ================= SSE ================= */
 
 const stream = new EventSource('/api/events');
-const sseTypes = ['exploration.created', 'exploration.updated', 'exploration-run.created', 'exploration-run.updated', 'exploration.promoted', 'exploration.promotion_replayed', 'project.created', 'project.imported', 'project.import_replayed', 'project.updated', 'project.preflight', 'project.status_changed', 'project.status_confirmed', 'project.status_preserved', 'settings.workspace_root_added', 'settings.workspace_root_removed', 'settings.project_defaults_updated', 'idea.created', 'idea.updated', 'task.created', 'task.updated', 'run.created', 'run.updated', 'research.created', 'research.updated', 'model-provider.created', 'model-provider.updated', 'integration.updated'];
+const sseTypes = ['exploration.created', 'exploration.updated', 'exploration-run.created', 'exploration-run.updated', 'exploration.promoted', 'exploration.promotion_replayed', 'project.created', 'project.imported', 'project.import_replayed', 'project.updated', 'project.preflight', 'project.status_changed', 'project.status_confirmed', 'project.status_preserved', 'settings.workspace_root_added', 'settings.workspace_root_removed', 'settings.project_defaults_updated', 'idea.created', 'idea.updated', 'task.created', 'task.updated', 'run.created', 'run.updated', 'research.created', 'research.updated', 'model-provider.created', 'model-provider.updated', 'integration.updated', 'master-conversation.created', 'master-conversation.updated', 'master-message.created'];
 for (const type of sseTypes) {
   stream.addEventListener(type, () => refresh());
 }

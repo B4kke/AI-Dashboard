@@ -167,6 +167,42 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       return json(response, 200, await store.updateAgent(decodeURIComponent(agentPatch[1]), agentMutationPatch(await body(request))));
     }
 
+    if (url.pathname === '/api/master/conversations' || url.pathname === '/api/master/conversations/') {
+      if (request.method === 'GET') {
+        const projectId = url.searchParams.get('projectId');
+        return json(response, 200, { conversations: store.listMasterConversations(projectId || null) });
+      }
+      if (request.method === 'POST') {
+        const input = await body(request);
+        return json(response, 201, await store.createMasterConversation(input));
+      }
+    }
+    const masterConversation = url.pathname.match(/^\/api\/master\/conversations\/([^/]+)$/);
+    if (masterConversation && !url.pathname.includes('/messages')) {
+      const conversationId = decodeURIComponent(masterConversation[1]);
+      if (request.method === 'GET') {
+        const conversation = store.getMasterConversation(conversationId);
+        if (!conversation) throw new Error('Master conversation not found');
+        return json(response, 200, conversation);
+      }
+      if (request.method === 'PATCH') {
+        return json(response, 200, await store.updateMasterConversation(conversationId, await body(request)));
+      }
+    }
+    const masterMessages = url.pathname.match(/^\/api\/master\/conversations\/([^/]+)\/messages$/);
+    if (masterMessages) {
+      const conversationId = decodeURIComponent(masterMessages[1]);
+      if (request.method === 'GET') {
+        const conversation = store.getMasterConversation(conversationId);
+        if (!conversation) throw new Error('Master conversation not found');
+        return json(response, 200, { messages: store.masterMessagesFor(conversationId) });
+      }
+      if (request.method === 'POST') {
+        const input = await body(request);
+        return json(response, 201, await store.addMasterMessage({ conversationId, ...input }));
+      }
+    }
+
     const taskPatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
     if (request.method === 'PATCH' && taskPatch) {
       return json(response, 200, await repairTaskFromOperator(store, decodeURIComponent(taskPatch[1]), await body(request)));
@@ -227,7 +263,7 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       const message = String(error?.message || error || 'Request failed');
       const status = /not found/i.test(message) ? 404
         : /already in progress|cannot .* from state|already promoted|integrity review|cannot be promoted while|already has an active|overlaps active task|preflight failed|cannot disable agent|cannot change agent|would exclude assigned task|workScopes overlap|already exists/i.test(message) ? 409
-        : /required|valid .*id|choose .*model|invalid|request body too large|JSON|allowlist|workScope|agent field|read-only agent role|cannot be assigned to an executable work task|requires at least one field|invalid agent payload/i.test(message) ? 400 : 500;
+        : /required|valid .*id|choose .*model|invalid|request body too large|JSON|allowlist|workScope|agent field|read-only agent role|cannot be assigned to an executable work task|requires at least one field|invalid agent payload|cannot directly invoke|Master conversation/i.test(message) ? 400 : 500;
       const payload = error?.readiness
         ? { error: message, code: 'PROJECT_NOT_READY', readiness: error.readiness }
         : { error: message };

@@ -12,6 +12,7 @@
     <nav aria-label="Primary">
       <p class="nav-label">Work</p>
       <a href="#/projects" data-nav="projects" class="active">Projects</a>
+      <a href="#/master" data-nav="master">Master</a>
       <a href="#/explorations" data-nav="explorations">Explorations</a>
       <p class="nav-label">System</p>
       <a href="#/system" data-nav="system">System</a>
@@ -40,6 +41,19 @@
     <!-- ============ Project workspace ============ -->
     <section class="page" id="page-project" aria-label="Project workspace">
       <div id="project-workspace"></div>
+    </section>
+
+    <!-- ============ Master ============ -->
+    <section class="page" id="page-master" aria-label="Master">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">ORCHESTRATION</p>
+          <h1>Master</h1>
+          <p class="header-copy">Project-aware conversation with the Master orchestrator. Proposals become Tasks; execution stays inside the control plane with fail-closed evidence. Chat never merges or publishes directly.</p>
+        </div>
+        <div class="header-actions"><button id="new-master-conversation" data-action="new-master-conversation" class="primary">+ New conversation</button></div>
+      </header>
+      <div id="master-root"></div>
     </section>
 
     <!-- ============ Explorations ============ -->

@@ -4,7 +4,7 @@ Self-hosted control center for AI-assisted and progressively autonomous project 
 
 AI Dashboard connects existing projects/repositories, direct Tasks, optional Ideas/Explorations, specialist agents, AI coding harnesses, model providers, MCP capabilities, read-only Research Runs, isolated Git worktrees and GitHub/CI evidence behind one fail-closed control plane.
 
-> Status: pre-alpha / PC-beta candidate with Project-first repository discovery plus early MCP + Agent Registry slices. Deterministic and rendered-browser gates exist for the Project-first UI. A beta claim still requires Linux + Windows GitHub Actions green on the exact final commit and the complete current-stack OpenCode/GitHub PC beta.
+> Status: pre-alpha / PC-beta candidate with Project-first discovery + MCP/Agent Registry + **Master chat** (normal chat environment) early slices. Fleet head `36b94c2` is Linux+Windows Actions green on PR (#32988127729); Master chat is implemented + deterministic + locally rendered (1440/768/390) on top, pending its own exact-head Actions green. A beta claim still requires Linux + Windows green on the exact final commit and the complete current-stack OpenCode/GitHub PC beta.
 
 ## Product model
 
@@ -121,7 +121,7 @@ See `docs/07-mcp-agent-architecture.md` and `docs/08-mcp-input-required.md`.
 
 ## Agent Registry and non-overlapping specialists
 
-State schema v8 contains durable project agents and explicit external-session termination proof. The Agent Registry introduced in v7 lets a specialist define name, role, harness, model, instructions, capabilities, explicit project-relative `workScopes` and enabled state.
+State schema **v9** contains durable project agents, explicit external-session termination proof and persistent Master conversations/messages. The Agent Registry introduced in v7 lets a specialist define name, role, harness, model, instructions, capabilities, explicit project-relative `workScopes` and enabled state. Master history (`masterConversations`/`masterMessages` with `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`) is global + project-scoped and whitelisted via `POST/GET /api/master/*`.
 
 Parent/child scopes overlap: `server` conflicts with `server/mcp`. Two enabled mutating specialists cannot own overlapping registered scopes. Read-only roles (`supervisor`, `reviewer`, `research`, `planner`, `master`) do not own mutation scopes and cannot be assigned an executable work Task. A Task assigned to a mutating specialist must remain inside that specialist's scopes and snapshots identity/instructions/model.
 
@@ -141,7 +141,7 @@ The intended Master AI can inspect Projects/Tasks/Runs/agents/evidence, reason a
 
 It cannot fabricate evidence, approve its own coding work, interpret unavailable CI as green, force-push/reset, merge an unreviewed checkpoint or bypass locks/recovery.
 
-Persistent Master chat/persona/memory and a full automatic fleet scheduler are not implemented yet; the MCP/Agent foundation is.
+Persistent Master chat is implemented as a **normal chat environment** (global `Master` + project `Master` tab, sidebar conversations + centered bubble stream + rounded `Message Master…` composer, inspired by `odysseus-dev/odysseus@dev` but own implementation — `odysseus` is `AGPL-3.0-or-later`, no substantial reuse). It persists history, tags turns as `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`, and creates Tasks/Research only via control-plane. Persona/memory and a full automatic fleet scheduler remain planned; the MCP/Agent/Master-chat foundation is.
 
 ## Project readiness and admission identity
 
@@ -269,7 +269,7 @@ Open `http://127.0.0.1:7331`.
 
 ## MCP/API surfaces
 
-Existing product APIs remain under `/api/*` for Exploration, Projects, Tasks, Ideas, Research, models, OpenCode, GitHub, evidence, autonomy, Runs and workspaces.
+Existing product APIs remain under `/api/*` for Exploration, Projects, Tasks, Ideas, Research, models, OpenCode, GitHub, evidence, autonomy, Runs, workspaces and **Master** (`/api/master/conversations`, `/api/master/conversations/:id/messages`).
 
 Loopback MCP host administration:
 
@@ -315,8 +315,9 @@ MCP server endpoints:
 - native `input_required` operator round-trip,
 - optional external MCP elicitation bridge,
 - default-deny external tool policy,
-- durable specialist Agent Registry,
+- durable specialist Agent Registry (v9) + persistent Master chat (normal chat UI, 1440/768/390, no publish/merge bypass),
 - Project-scoped Agent fleet operator surface (Registry as canonical truth, fleet view with assigned Task/active Run, whitelisted HTTP create/edit/enable/disable, rendered Agents tab at 1440/768/390),
+- global + project-aware Master conversations/messages (`POST/GET /api/master/*`, kind-tagged, toolCalls capped),
 - Task assignment/workScopes,
 - static + runtime anti-overlap,
 - fail-closed Project preflight, `needs_sync` repair state and exact-base admission,
