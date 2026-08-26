@@ -199,7 +199,15 @@ export function createMasterMemory({ persistence, soulPath }) {
     const key = normalizedText(candidate.text);
     const existing = state.items.find((item) => item.scope === scope && item.kind === candidate.kind && normalizedText(item.text) === key);
     if (existing) {
-      Object.assign(existing, normalizeItem({ ...candidate, confidence: Math.max(existing.confidence || 0, candidate.confidence) }, existing));
+      const operatorOwned = existing.source === 'operator';
+      const sourceMessageIds = [...new Set([...(existing.sourceMessageIds || []), ...(candidate.sourceMessageIds || [])])].slice(0, 8);
+      Object.assign(existing, normalizeItem({
+        ...candidate,
+        confidence: Math.max(existing.confidence || 0, candidate.confidence),
+        source: operatorOwned ? existing.source : candidate.source,
+        sourceConversationId: operatorOwned ? existing.sourceConversationId : candidate.sourceConversationId,
+        sourceMessageIds,
+      }, existing));
       saveMemoryState(persistence, state);
       return structuredClone(existing);
     }
