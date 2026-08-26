@@ -26,7 +26,10 @@ jobs:
           node-version: 22
           cache: npm
       - name: Apply deterministic P0 repair
-        run: python scripts/p0-live-repair.py
+        run: |
+          cp .github/workflows/ci.yml /tmp/ai-dashboard-ci.yml
+          python scripts/p0-live-repair.py
+          cp /tmp/ai-dashboard-ci.yml .github/workflows/ci.yml
       - name: Refresh dependency lock
         run: npm install --package-lock-only --ignore-scripts
       - name: Install locked dependencies
