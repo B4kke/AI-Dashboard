@@ -1,0 +1,353 @@
+name: Apply P0 wiring repair
+
+on:
+  push:
+    branches:
+      - bootstrap/control-center-foundation
+    paths:
+      - .github/workflows/p0-apply-wiring.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: bootstrap/control-center-foundation
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Apply deterministic P0 repair
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, got {count}: {old[:80]!r}')
+              p.write_text(text.replace(old, new))
+
+          # Plug-and-play verification detection: keep discovery read-only and static.
+          replace('server/discovery/discovery.mjs',
+          "      scripts: parsed?.scripts && typeof parsed.scripts === 'object' ? Object.keys(parsed.scripts) : [],\n      private: parsed?.private === true,",
+          "      scripts: parsed?.scripts && typeof parsed.scripts === 'object' ? Object.keys(parsed.scripts) : [],\n      packageManager: typeof parsed?.packageManager === 'string' ? parsed.packageManager : null,\n      private: parsed?.private === true,")
+
+          replace('server/discovery/discovery.mjs',
+          "export function detectVerificationCommandsFromScripts(scripts = []) {\n  const detected = [];\n  const known = ['test', 'lint', 'typecheck'];\n  for (const script of scripts) {\n    if (script === 'test') detected.push({ command: 'npm test', source: 'package.json#scripts.test' });\n    else if (known.includes(script)) detected.push({ command: `npm run ${script}`, source: `package.json#scripts.${script}` });\n  }\n  return detected;\n}",
+          "export function detectVerificationCommandsFromScripts(scripts = [], { runner = 'npm' } = {}) {\n  const detected = [];\n  const known = ['test', 'lint', 'typecheck'];\n  const executable = ['npm', 'pnpm', 'yarn'].includes(runner) ? runner : 'npm';\n  for (const script of scripts) {\n    if (!known.includes(script)) continue;\n    const command = script === 'test'\n      ? `${executable} test`\n      : (executable === 'yarn' ? `yarn ${script}` : `${executable} run ${script}`);\n    detected.push({ command, source: `package.json#scripts.${script}` });\n  }\n  return detected;\n}\n\nasync function packageRunner(repositoryRoot, manifest) {\n  const declared = String(manifest?.packageManager || '').split('@')[0].toLowerCase();\n  if (['npm', 'pnpm', 'yarn'].includes(declared)) return declared;\n  if (await fileExists(join(repositoryRoot, 'pnpm-lock.yaml'))) return 'pnpm';\n  if (await fileExists(join(repositoryRoot, 'yarn.lock'))) return 'yarn';\n  return 'npm';\n}")
+
+          replace('server/discovery/discovery.mjs',
+          "  if (record.manifest?.type === 'package.json') {\n    record.detectedVerificationCommands = detectVerificationCommandsFromScripts(record.manifest.scripts);\n    record.languages.push('JavaScript/TypeScript');\n  } else if (record.manifest?.type === 'pyproject.toml') {\n    record.languages.push('Python');\n  } else if (record.manifest?.type === 'Cargo.toml') {\n    record.languages.push('Rust');\n  }\n  if (await fileExists(join(repositoryRoot, 'go.mod'))) record.languages.push('Go');",
+          "  if (record.manifest?.type === 'package.json') {\n    const runner = await packageRunner(repositoryRoot, record.manifest);\n    record.detectedVerificationCommands = detectVerificationCommandsFromScripts(record.manifest.scripts, { runner });\n    record.languages.push('JavaScript/TypeScript');\n  } else if (record.manifest?.type === 'pyproject.toml') {\n    const pyproject = await tryRead(join(repositoryRoot, 'pyproject.toml'), MANIFEST_READ_LIMIT);\n    if (/\\bpytest\\b|\\[tool\\.pytest\\./i.test(pyproject || '')) {\n      record.detectedVerificationCommands.push({ command: 'python -m pytest', source: 'pyproject.toml' });\n    }\n    record.languages.push('Python');\n  } else if (record.manifest?.type === 'Cargo.toml') {\n    record.detectedVerificationCommands.push({ command: 'cargo test', source: 'Cargo.toml' });\n    record.languages.push('Rust');\n  }\n  if (await fileExists(join(repositoryRoot, 'go.mod'))) {\n    record.languages.push('Go');\n    record.detectedVerificationCommands.push({ command: 'go test ./...', source: 'go.mod' });\n  }")
+
+          replace('server/discovery/discovery.mjs',
+          "    detectedVerificationCommands: repo.detectedVerificationCommands,\n    detectedLanguages: repo.languages,",
+          "    detectedVerificationCommands: repo.detectedVerificationCommands,\n    verificationCommands: (repo.detectedVerificationCommands || []).map((item) => item.command),\n    detectedLanguages: repo.languages,")
+
+          # OpenCode v1 SDK MCP registration. V2 is intentionally not used.
+          replace('server/integrations/opencode.mjs',
+          "  mcpStatus(directory) {\n    return this.call('mcp.status', () => this.client.mcp.status(this.options(directory, 10_000)));\n  }",
+          "  mcpStatus(directory) {\n    return this.call('mcp.status', () => this.client.mcp.status(this.options(directory, 10_000)));\n  }\n\n  async ensureMcpServer({ name, url, directory } = {}) {\n    const serverName = String(name || '').trim();\n    if (!/^[A-Za-z0-9._-]{1,120}$/.test(serverName)) throw new Error('OpenCode MCP server name is invalid');\n    const remoteUrl = normalizeOpenCodeUrl(url);\n    const before = await this.mcpStatus(directory).catch(() => ({}));\n    if (before?.[serverName]?.status === 'connected') {\n      return { name: serverName, status: 'connected', changed: false };\n    }\n    const value = await this.call('mcp.add', () => this.client.mcp.add({\n      ...this.options(directory, 10_000),\n      body: { name: serverName, config: { type: 'remote', url: remoteUrl, enabled: true } },\n    }));\n    const status = value?.[serverName]?.status || (await this.mcpStatus(directory).catch(() => ({})))?.[serverName]?.status || 'unknown';\n    return { name: serverName, status, changed: true };\n  }")
+
+          # Wire setup + real Master service into the actual running server.
+          replace('server/index.mjs',
+          "import { createDiscoveryService } from './discovery/service.mjs';\nimport { createHttpServer } from './http-server.mjs';",
+          "import { createDiscoveryService } from './discovery/service.mjs';\nimport { createSetupService } from './setup/service.mjs';\nimport { createMasterService } from './master/service.mjs';\nimport { createHttpServer } from './http-server.mjs';")
+          replace('server/index.mjs', "const VERSION = '0.0.6';", "const VERSION = '0.0.7';")
+          replace('server/index.mjs',
+          "const { host, port, privateMode } = dashboardBindConfiguration(process.env);",
+          "const { host, port, privateMode } = dashboardBindConfiguration(process.env);\nconst dashboardBaseUrl = `http://${host === '::1' ? '[::1]' : host}:${port}`;")
+          replace('server/index.mjs',
+          "const discovery = createDiscoveryService({ store, github });\ndiscovery.scan().then((report) => {",
+          "const discovery = createDiscoveryService({ store, github });\nconst setup = createSetupService({ store, persistence: sqlite, discovery, opencode: rawOpenCode, research, dashboardBaseUrl });\nconst master = createMasterService({ store, setup, dashboardBaseUrl });\ndiscovery.scan().then((report) => {")
+          replace('server/index.mjs',
+          "  store, events, orchestrator, autonomy, research, github, mcp, mcpClients, discovery,\n  publicDir: PUBLIC, version: VERSION, privateMode,",
+          "  store, events, orchestrator, autonomy, research, github, mcp, mcpClients, discovery, setup, master,\n  publicDir: PUBLIC, version: VERSION, privateMode,")
+
+          # HTTP routes that the React P0 surface already calls, plus the real model turn.
+          replace('server/http-server.mjs',
+          "import { agentFleetView } from './core/agent-fleet-view.mjs';",
+          "import { agentFleetView } from './core/agent-fleet-view.mjs';\nimport { inspectProjectUsability } from './core/project-usability.mjs';")
+          p = Path('server/http-server.mjs')
+          text = p.read_text()
+          text, n = re.subn(r"\nfunction masterStubResponse\(store, conversationId, content\) \{.*?\n\}\n\nconst MIME", "\nconst MIME", text, count=1, flags=re.S)
+          if n != 1: raise SystemExit('server/http-server.mjs: failed to remove masterStubResponse')
+          p.write_text(text)
+          replace('server/http-server.mjs',
+          "export function createHttpServer({ store, events, orchestrator, autonomy, research, github, mcp = null, mcpClients = null, discovery = null, privateMode = false, publicDir, version = '0.0.6' }) {",
+          "export function createHttpServer({ store, events, orchestrator, autonomy, research, github, mcp = null, mcpClients = null, discovery = null, setup = null, master = null, privateMode = false, publicDir, version = '0.0.7' }) {")
+          replace('server/http-server.mjs',
+          "    if (request.method === 'GET' && url.pathname === '/api/state') return json(response, 200, store.snapshot());\n    if (request.method === 'GET' && url.pathname === '/api/events') { events.subscribe(response); return; }",
+          "    if (request.method === 'GET' && url.pathname === '/api/state') return json(response, 200, store.snapshot());\n    if (request.method === 'GET' && url.pathname === '/api/setup') {\n      if (!setup) return json(response, 503, { error: 'First-run setup service is unavailable' });\n      return json(response, 200, await setup.inspect());\n    }\n    if (request.method === 'POST' && url.pathname === '/api/setup/complete') {\n      if (!setup) return json(response, 503, { error: 'First-run setup service is unavailable' });\n      return json(response, 200, await setup.complete(await body(request)));\n    }\n    if (request.method === 'PUT' && url.pathname === '/api/setup/locale') {\n      if (!setup) return json(response, 503, { error: 'First-run setup service is unavailable' });\n      return json(response, 200, setup.setLocale((await body(request)).locale));\n    }\n    if (request.method === 'PUT' && url.pathname === '/api/setup/master-model') {\n      if (!setup) return json(response, 503, { error: 'First-run setup service is unavailable' });\n      return json(response, 200, setup.setMasterModel((await body(request)).masterModel));\n    }\n    if (request.method === 'GET' && url.pathname === '/api/events') { events.subscribe(response); return; }")
+          replace('server/http-server.mjs',
+          "    if (request.method === 'POST' && url.pathname === '/api/projects') return json(response, 201, await store.addProject(await body(request)));\n    if (request.method === 'POST' && url.pathname === '/api/tasks') return json(response, 201, await store.addTask(await body(request)));",
+          "    if (request.method === 'POST' && url.pathname === '/api/projects') return json(response, 201, await store.addProject(await body(request)));\n    if (request.method === 'POST' && url.pathname === '/api/projects/local') {\n      if (!discovery) return json(response, 503, { error: 'Local Project creation is unavailable' });\n      return json(response, 201, await discovery.createLocalProject(await body(request)));\n    }\n    if (request.method === 'POST' && url.pathname === '/api/tasks') return json(response, 201, await store.addTask(await body(request)));")
+          replace('server/http-server.mjs',
+          "    const projectPatch = url.pathname.match(/^\\/api\\/projects\\/([^/]+)$/);\n    if (request.method === 'PATCH' && projectPatch) return json(response, 200, await store.updateProject(decodeURIComponent(projectPatch[1]), await body(request)));",
+          "    const projectPatch = url.pathname.match(/^\\/api\\/projects\\/([^/]+)$/);\n    if (request.method === 'PATCH' && projectPatch) return json(response, 200, await store.updateProject(decodeURIComponent(projectPatch[1]), await body(request)));\n    const projectUsability = url.pathname.match(/^\\/api\\/projects\\/([^/]+)\\/usability$/);\n    if (request.method === 'GET' && projectUsability) {\n      const project = store.getProject(decodeURIComponent(projectUsability[1]));\n      return json(response, 200, await inspectProjectUsability({ project }));\n    }")
+          replace('server/http-server.mjs',
+          "    if (request.method === 'POST' && masterTurns) {\n      const conversationId = decodeURIComponent(masterTurns[1]);\n      const input = masterUserMessage(await body(request));\n      const user = await store.addMasterMessage({ conversationId, ...input });\n      const assistant = await store.addMasterMessage({\n        conversationId,\n        role: 'assistant',\n        kind: 'conversation',\n        content: masterStubResponse(store, conversationId, input.content),\n      });\n      return json(response, 201, { user, assistant });\n    }",
+          "    if (request.method === 'POST' && masterTurns) {\n      if (!master) return json(response, 503, { error: 'Master model service is unavailable' });\n      const conversationId = decodeURIComponent(masterTurns[1]);\n      const input = masterUserMessage(await body(request));\n      return json(response, 201, await master.turn(conversationId, input.content));\n    }")
+
+          # Inject a deterministic Master double into HTTP persistence tests: production now always passes the real service.
+          replace('test/master-chat.test.mjs',
+          "    research: { listProviders: async () => [], openCodeModels: async () => [] },\n    github: { token: null, baseUrl: 'https://api.github.test' },",
+          "    research: { listProviders: async () => [], openCodeModels: async () => [] },\n    master: {\n      turn: async (conversationId, content) => {\n        const user = await store.addMasterMessage({ conversationId, role: 'user', kind: 'conversation', content });\n        const assistant = await store.addMasterMessage({ conversationId, role: 'assistant', kind: 'conversation', content: 'Test Master response' });\n        return { user, assistant, model: 'test/model' };\n      },\n    },\n    github: { token: null, baseUrl: 'https://api.github.test' },")
+
+          # React/i18n polish for the now-live P0 routes. Do not claim every Project is automation-ready.
+          replace('web/src/App.tsx',
+          "      if (nextSetup?.locale && i18n.language !== nextSetup.locale) await i18n.changeLanguage(nextSetup.locale);",
+          "      if (nextSetup?.locale && i18n.language !== nextSetup.locale) await i18n.changeLanguage(nextSetup.locale);\n      document.documentElement.lang = nextSetup?.locale === 'en' ? 'en' : 'nb';")
+          replace('web/src/App.tsx',
+          "        <Nav active={route.page === 'master'} onClick={() => go('/master')} icon=\"✦\">{t('nav.master')}</Nav>",
+          "        <Nav dataNav=\"master\" active={route.page === 'master'} onClick={() => go('/master')} icon=\"✦\">{t('nav.master')}</Nav>")
+          replace('web/src/App.tsx',
+          "        <span>{health?.integrations?.opencode?.connected ? 'OpenCode' : 'OpenCode offline'}</span></div>",
+          "        <span>{health?.integrations?.opencode?.connected ? 'OpenCode' : t('system.opencodeOffline')}</span></div>")
+          replace('web/src/App.tsx',
+          "      {route.page === 'master' && <MasterView state={state} routeId={route.id} busy={busy} run={run} />}",
+          "      {route.page === 'master' && <MasterView state={state} setup={setup} routeId={route.id} busy={busy} run={run} />}")
+          replace('web/src/App.tsx',
+          "function Nav({ active, icon, children, onClick }: {active:boolean;icon:string;children:any;onClick:()=>void}) {\n  return <button className={active ? 'nav-item active' : 'nav-item'} onClick={onClick}><span>{icon}</span>{children}</button>;\n}",
+          "function Nav({ active, icon, children, onClick, dataNav }: {active:boolean;icon:string;children:any;onClick:()=>void;dataNav?:string}) {\n  return <button data-nav={dataNav} className={active ? 'nav-item active' : 'nav-item'} onClick={onClick}><span>{icon}</span>{children}</button>;\n}")
+          replace('web/src/App.tsx',
+          "function MasterView({ state, routeId, busy, run }: {state:DashboardState;routeId?:string;busy:boolean;run:(fn:()=>Promise<unknown>)=>Promise<void>}) {",
+          "function MasterView({ state, setup, routeId, busy, run }: {state:DashboardState;setup:any;routeId?:string;busy:boolean;run:(fn:()=>Promise<unknown>)=>Promise<void>}) {")
+          replace('web/src/App.tsx',
+          "<strong>{c.title}</strong><small>{state.masterMessages.filter(m=>m.conversationId===c.id).length} meldinger</small>",
+          "<strong>{c.title}</strong><small>{t('master.messageCount', { count: state.masterMessages.filter(m=>m.conversationId===c.id).length })}</small>")
+          replace('web/src/App.tsx',
+          "<section className=\"chat-stage\"><header><p className=\"eyebrow\">{t('master.eyebrow')}</p><h1>{selected?.title || t('master.title')}</h1></header>",
+          "<section className=\"chat-stage\"><header><div><p className=\"eyebrow\">{t('master.eyebrow')}</p><h1>{selected?.title || t('master.title')}</h1></div><span className={`model-chip ${setup.masterModel ? '' : 'warn'}`}>{setup.masterModel || t('master.noModel')}</span></header>")
+          replace('web/src/App.tsx', "{m.role==='user'?'Du':'Master'}", "{m.role==='user'?t('master.you'):'Master'}")
+          replace('web/src/App.tsx', "project.repoPath||'Lokalt prosjekt'", "project.repoPath||t('projects.localProject')")
+          replace('web/src/App.tsx', "<span className=\"pill good\">{t('projects.usable')}</span>", "<span className=\"pill\">{t('projects.managed')}</span>")
+          replace('web/src/App.tsx', "if(!project)return <div className=\"page\"><h1>Project not found</h1></div>;", "if(!project)return <div className=\"page\"><h1>{t('project.notFound')}</h1></div>;")
+          replace('web/src/App.tsx', "<p className=\"eyebrow\">PROJECT</p>", "<p className=\"eyebrow\">{t('project.eyebrow')}</p>")
+          replace('web/src/App.tsx',
+          "<p>{readiness?`${readiness.blockers?.length||0} blocker(e)`:'Kjør kontroll når du skal delegere kode.'}</p><button disabled={busy} onClick={()=>void run(async()=>setReadiness(await api.projectReadiness(project.id)))}>Sjekk autonomi</button>",
+          "<p>{readiness?t('project.blockerCount', { count: readiness.blockers?.length||0 }):t('project.readinessHint')}</p><button disabled={busy} onClick={()=>void run(async()=>setReadiness(await api.projectReadiness(project.id)))}>{t('project.checkReadiness')}</button>")
+          replace('web/src/App.tsx',
+          "    <section className=\"section\"><div className=\"section-head\"><h2>{t('project.tasks')}</h2>",
+          "    <div className=\"flow-grid\"><section className=\"flow-card\"><p className=\"eyebrow\">{t('project.codingLane')}</p><strong>{t('project.codingFlow')}</strong></section><section className=\"flow-card\"><p className=\"eyebrow\">{t('project.researchLane')}</p><strong>{t('project.researchFlow')}</strong><small>{t('project.researchReadOnly')}</small></section></div>\n    <section className=\"section\"><div className=\"section-head\"><h2>{t('project.tasks')}</h2>")
+          replace('web/src/App.tsx', "{!tasks.length&&<p className=\"muted\">Ingen oppgaver ennå.</p>}", "{!tasks.length&&<p className=\"muted\">{t('project.noTasks')}</p>}")
+          replace('web/src/App.tsx',
+          "detail={health?.integrations?.github?.configured?'configured':'optional'}",
+          "detail={health?.integrations?.github?.configured?t('system.configured'):t('system.optional')}")
+          replace('web/src/App.tsx',
+          "<Integration name=\"Workspace Roots\" ok={(state.settings?.workspaceRoots?.length||0)>0} detail={(state.settings?.workspaceRoots||[]).join(', ')||'none'}/>",
+          "<Integration name={t('system.workspaceRoots')} ok={(state.settings?.workspaceRoots?.length||0)>0} detail={(state.settings?.workspaceRoots||[]).join(', ')||t('system.none')}/>")
+
+          replace('web/src/i18n.ts',
+          "      noModel: 'Velg en Master-modell i førstegangsoppsett eller System.'",
+          "      noModel: 'Ingen Master-modell valgt', you: 'Du', messageCount: '{{count}} melding', messageCount_other: '{{count}} meldinger'")
+          replace('web/src/i18n.ts',
+          "      usable: 'Klar til bruk', automation: 'Autonomi må konfigureres', open: 'Åpne', tasks: 'oppgaver',",
+          "      usable: 'Klar til bruk', managed: 'Administrert', localProject: 'Lokalt prosjekt', automation: 'Autonomi må konfigureres', open: 'Åpne', tasks: 'oppgaver',")
+          replace('web/src/i18n.ts',
+          "      title: 'Tittel', description: 'Beskrivelse', criteria: 'Akseptansekriterier', create: 'Opprett oppgave'",
+          "      title: 'Tittel', description: 'Beskrivelse', criteria: 'Akseptansekriterier', create: 'Opprett oppgave',\n      eyebrow: 'PROSJEKT', notFound: 'Prosjektet finnes ikke', blockerCount: '{{count}} blokkering', blockerCount_other: '{{count}} blokkeringer', readinessHint: 'Kjør kontroll når du skal delegere kode.', checkReadiness: 'Sjekk autonomi', noTasks: 'Ingen oppgaver ennå.',\n      codingLane: 'KODEFLYT', codingFlow: 'Oppgave → worker → evidens → PR / CI → supervisor → merge', researchLane: 'RESEARCH', researchFlow: 'Prosjekt → Research Run → provider / modell → lagret rapport', researchReadOnly: 'Separat read-only flyt uten worktree eller merge-loop.'")
+          replace('web/src/i18n.ts',
+          "      opencode: 'OpenCode', github: 'GitHub', persistence: 'Lagring', masterModel: 'Master-modell', codingModel: 'Kodermodell'",
+          "      opencode: 'OpenCode', opencodeOffline: 'OpenCode frakoblet', github: 'GitHub', persistence: 'Lagring', masterModel: 'Master-modell', codingModel: 'Kodermodell', configured: 'konfigurert', optional: 'valgfritt', workspaceRoots: 'Prosjektmapper', none: 'ingen'")
+          replace('web/src/i18n.ts',
+          "noModel: 'Choose a Master model in setup or System.'",
+          "noModel: 'No Master model selected', you: 'You', messageCount: '{{count}} message', messageCount_other: '{{count}} messages'")
+          replace('web/src/i18n.ts',
+          "usable: 'Ready to use', automation: 'Autonomy needs setup', open: 'Open', tasks: 'tasks',",
+          "usable: 'Ready to use', managed: 'Managed', localProject: 'Local project', automation: 'Autonomy needs setup', open: 'Open', tasks: 'tasks',")
+          replace('web/src/i18n.ts',
+          "criteria: 'Acceptance criteria', create: 'Create task' },",
+          "criteria: 'Acceptance criteria', create: 'Create task', eyebrow: 'PROJECT', notFound: 'Project not found', blockerCount: '{{count}} blocker', blockerCount_other: '{{count}} blockers', readinessHint: 'Run the check when you are ready to delegate coding work.', checkReadiness: 'Check autonomy', noTasks: 'No tasks yet.', codingLane: 'CODING LANE', codingFlow: 'Task → worker → evidence → PR / CI → supervisor → merge', researchLane: 'RESEARCH', researchFlow: 'Project → Research Run → provider / model → persisted report', researchReadOnly: 'Separate read-only lane without worktrees or the merge loop.' },")
+          replace('web/src/i18n.ts',
+          "opencode: 'OpenCode', github: 'GitHub', persistence: 'Persistence', masterModel: 'Master model', codingModel: 'Coding model' }",
+          "opencode: 'OpenCode', opencodeOffline: 'OpenCode offline', github: 'GitHub', persistence: 'Persistence', masterModel: 'Master model', codingModel: 'Coding model', configured: 'configured', optional: 'optional', workspaceRoots: 'Workspace roots', none: 'none' }")
+
+          with Path('web/src/styles.css').open('a') as f:
+              f.write("\n/* P0 live-service affordances */\n.model-chip{max-width:min(48vw,34rem);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:.42rem .7rem;border:1px solid var(--line);border-radius:999px;font-size:.76rem;color:var(--muted)}\n.model-chip.warn{border-color:var(--warn);color:var(--warn)}\n.chat-stage>header{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}\n.flow-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin:1rem 0}\n.flow-card{display:grid;gap:.5rem;padding:1rem;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}\n.flow-card small{color:var(--muted)}\n@media(max-width:760px){.flow-grid{grid-template-columns:1fr}.chat-stage>header{align-items:stretch;flex-direction:column}.model-chip{max-width:100%}}\n")
+
+          # Replace legacy static-DOM assertions with contracts against the React source that is actually served.
+          Path('test/ui-contract.test.mjs').write_text("""import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+
+const indexUrl = new URL('../public/index.html', import.meta.url);
+const reactUrl = new URL('../web/src/App.tsx', import.meta.url);
+const i18nUrl = new URL('../web/src/i18n.ts', import.meta.url);
+const screenshotUrl = new URL('../scripts/screenshot.mjs', import.meta.url);
+const workflowUrl = new URL('../.github/workflows/ci.yml', import.meta.url);
+
+test('React dashboard has one CSP-safe root and no legacy inline event boundary', async () => {
+  const [html, app] = await Promise.all([readFile(indexUrl, 'utf8'), readFile(reactUrl, 'utf8')]);
+  assert.match(html, /id=\"root\"/);
+  assert.equal((html.match(/id=\"root\"/g) || []).length, 1);
+  assert.doesNotMatch(html, /\\son[a-z]+=/i);
+  assert.match(app, /function ProjectsView/);
+  assert.match(app, /function ProjectView/);
+  assert.match(app, /function MasterView/);
+});
+
+test('Project import and local creation are first-class React actions', async () => {
+  const app = await readFile(reactUrl, 'utf8');
+  assert.match(app, /api\.discovery\(true\)/);
+  assert.match(app, /api\.importRepo\(item\.local\.path\)/);
+  assert.match(app, /api\.createLocalProject/);
+  assert.doesNotMatch(app, /window\.(?:prompt|alert|confirm)/);
+});
+
+test('Project normal usability is visibly separate from autonomous merge readiness', async () => {
+  const [app, i18n] = await Promise.all([readFile(reactUrl, 'utf8'), readFile(i18nUrl, 'utf8')]);
+  assert.match(app, /api\.projectUsability/);
+  assert.match(app, /api\.projectReadiness/);
+  assert.match(app, /project\.normalUse/);
+  assert.match(app, /project\.strictReadiness/);
+  assert.match(i18n, /Autonom kjøring/);
+});
+
+test('coding and Research remain visibly separate flows in the React Project surface', async () => {
+  const [app, i18n] = await Promise.all([readFile(reactUrl, 'utf8'), readFile(i18nUrl, 'utf8')]);
+  assert.match(app, /project\.codingFlow/);
+  assert.match(app, /project\.researchFlow/);
+  assert.match(i18n, /Oppgave → worker → evidens → PR \/ CI → supervisor → merge/);
+  assert.match(i18n, /Separat read-only flyt uten worktree eller merge-loop/);
+});
+
+test('Norwegian is the default locale with an explicit English alternative', async () => {
+  const i18n = await readFile(i18nUrl, 'utf8');
+  assert.match(i18n, /lng: 'nb'/);
+  assert.match(i18n, /fallbackLng: 'nb'/);
+  assert.match(i18n, /en: \{ translation:/);
+});
+
+test('rendered screenshot smoke fails closed on runtime errors, timeout and horizontal overflow', async () => {
+  const [screenshot, workflow] = await Promise.all([readFile(screenshotUrl, 'utf8'), readFile(workflowUrl, 'utf8')]);
+  assert.match(screenshot, /Runtime\.exceptionThrown/);
+  assert.match(screenshot, /consoleAPICalled/);
+  assert.match(screenshot, /Horizontal page overflow/);
+  assert.match(screenshot, /process\.exit\(1\)/);
+  assert.doesNotMatch(screenshot, /TIMEOUT-RENDER.*process\.exit\(0\)/s);
+  assert.match(workflow, /#\/master\/\$\{MASTER_CONVERSATION_ID\}/);
+});
+""")
+
+          # Keep the strong backend Agent contract while no longer asserting unreachable legacy static markup.
+          p = Path('test/operator-ui-contract.test.mjs')
+          text = p.read_text()
+          old = """test('Agent fleet operator surface is Project-scoped, whitelisted and presentation-constrained', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const index = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(httpServer, /AGENT_MUTATION_FIELDS/);
+  assert.match(httpServer, /function agentMutationPatch/);
+  assert.match(httpServer, /projectAgents/);
+  assert.match(httpServer, /agentPatch/);
+  assert.match(httpServer, /agentFleetView/);
+  assert.match(httpServer, /store\\.addAgent/);
+  assert.match(httpServer, /store\\.updateAgent/);
+  assert.doesNotMatch(httpServer, /agent\\.created.*raw StateStore/i);
+  assert.match(index, /id=\"agent-dialog\"/);
+  assert.match(index, /id=\"agent-form\"/);
+  assert.match(app, /data-action=\"new-agent\"/);
+  assert.match(app, /data-action=\"edit-agent\"/);
+  assert.match(app, /data-action=\"toggle-agent\"/);
+  assert.match(app, /renderAgentsTab\\(project, tasks, runs, agents\\)/);
+  assert.match(app, /Assigned:/);
+  assert.match(app, /Active run:/);
+  assert.match(app, /read-only/);
+});"""
+          new = """test('Agent fleet mutation boundary remains Project-scoped and whitelisted during the React migration', async () => {
+  const react = await readFile(new URL('../web/src/App.tsx', import.meta.url), 'utf8');
+  assert.match(httpServer, /AGENT_MUTATION_FIELDS/);
+  assert.match(httpServer, /function agentMutationPatch/);
+  assert.match(httpServer, /projectAgents/);
+  assert.match(httpServer, /agentPatch/);
+  assert.match(httpServer, /agentFleetView/);
+  assert.match(httpServer, /store\\.addAgent/);
+  assert.match(httpServer, /store\\.updateAgent/);
+  assert.doesNotMatch(httpServer, /agent\\.created.*raw StateStore/i);
+  assert.doesNotMatch(react, /data-operator-action=\"(?:delegate|publish|review|merge)\"/);
+});"""
+          if old not in text: raise SystemExit('operator agent contract block not found')
+          p.write_text(text.replace(old, new))
+
+          p = Path('test/master-chat.test.mjs')
+          text = p.read_text()
+          start = text.index("test('Master UI surface remains first-class and non-bypass (contract)'")
+          text = text[:start] + """test('Master React surface remains first-class and non-bypass (contract)', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const app = await readFile(new URL('../web/src/App.tsx', import.meta.url), 'utf8');
+  const api = await readFile(new URL('../web/src/api.ts', import.meta.url), 'utf8');
+  const service = await readFile(new URL('../server/master/service.mjs', import.meta.url), 'utf8');
+  const store = await readFile(new URL('../server/core/state-store.mjs', import.meta.url), 'utf8');
+  const http = await readFile(new URL('../server/http-server.mjs', import.meta.url), 'utf8');
+  assert.match(app, /dataNav=\"master\"/);
+  assert.match(app, /function MasterView/);
+  assert.match(app, /<PromptInput/);
+  assert.match(app, /setup\.masterModel/);
+  assert.match(api, /masterTurn/);
+  assert.doesNotMatch(app, /window\\.prompt/);
+  assert.match(service, /generateText/);
+  assert.match(service, /createMCPClient/);
+  assert.match(service, /createOpenAICompatible/);
+  assert.match(store, /Master chat cannot directly invoke/);
+  assert.match(http, /master\.turn\(conversationId, input\.content\)/);
+  assert.match(store, /SCHEMA_VERSION = 9/);
+});
+"""
+          p.write_text(text)
+
+          # New regression contracts for the wiring bugs fixed above.
+          Path('test/p0-live-wiring.test.mjs').write_text("""import assert from 'node:assert/strict';
+import test from 'node:test';
+import { buildProjectProposal, detectVerificationCommandsFromScripts } from '../server/discovery/discovery.mjs';
+import { OpenCodeClient } from '../server/integrations/opencode.mjs';
+
+test('discovery proposal carries safe detected verification commands into one-click import', () => {
+  const detected = detectVerificationCommandsFromScripts(['test', 'lint', 'typecheck'], { runner: 'pnpm' });
+  assert.deepEqual(detected.map((item) => item.command), ['pnpm test', 'pnpm run lint', 'pnpm run typecheck']);
+  const proposal = buildProjectProposal({ repo: { path: '/tmp/repo', name: 'repo', branch: 'main', github: null, manifest: null, detectedVerificationCommands: detected, languages: ['JavaScript/TypeScript'] } });
+  assert.deepEqual(proposal.verificationCommands, ['pnpm test', 'pnpm run lint', 'pnpm run typecheck']);
+});
+
+test('OpenCode v1 adapter registers Dashboard MCP through the SDK add endpoint and is idempotent when connected', async () => {
+  const client = new OpenCodeClient({ baseUrl: 'http://127.0.0.1:4096' });
+  const calls = [];
+  let statuses = {};
+  client.client = { mcp: {
+    status: async () => ({ data: statuses }),
+    add: async ({ body }) => { calls.push(body); statuses = { [body.name]: { status: 'connected' } }; return { data: statuses }; },
+  } };
+  const first = await client.ensureMcpServer({ name: 'ai-dashboard-master', url: 'http://127.0.0.1:7331/mcp/master' });
+  const second = await client.ensureMcpServer({ name: 'ai-dashboard-master', url: 'http://127.0.0.1:7331/mcp/master' });
+  assert.equal(first.changed, true);
+  assert.equal(second.changed, false);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], { name: 'ai-dashboard-master', config: { type: 'remote', url: 'http://127.0.0.1:7331/mcp/master', enabled: true } });
+});
+""")
+
+          # Remove this one-shot workflow from the resulting implementation commit.
+          Path('.github/workflows/p0-apply-wiring.yml').unlink()
+      - name: Refresh lockfile
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Install
+        run: npm ci
+      - name: Build React frontend
+        run: npm run build
+      - name: Test
+        run: npm test
+      - name: Commit verified repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "p0: wire first-run setup, Master and plug-and-play projects"
+          git push origin HEAD:bootstrap/control-center-foundation
