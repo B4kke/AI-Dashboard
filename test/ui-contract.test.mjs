@@ -20,7 +20,8 @@ test('React dashboard owns the CSP-safe frontend root', async () => {
 test('Project import and local creation are first-class React actions', async () => {
   const app = await readFile(reactUrl, 'utf8');
   assert.match(app, /api\.discovery\(true\)/);
-  assert.match(app, /api\.importRepo\(item\.local\.path\)/);
+  assert.match(app, /api\.importRepo/);
+  assert.match(app, /api\.importGitHub/);
   assert.match(app, /api\.createLocalProject/);
   assert.doesNotMatch(app, /window\.(?:prompt|alert|confirm)/);
 });
@@ -40,10 +41,23 @@ test('Norwegian is the default locale with explicit English resources', async ()
   assert.match(i18n, /en: \{ translation:/);
 });
 
-test('rendered screenshot smoke fails closed on runtime errors and overflow', async () => {
+test('rendered screenshot smoke waits for the React mount and fails closed on runtime errors and overflow', async () => {
   const screenshot = await readFile(screenshotUrl, 'utf8');
+  assert.match(screenshot, /firstElementChild/);
+  assert.match(screenshot, /value\.ready && value\.mounted/);
+  assert.doesNotMatch(screenshot, /system-label/);
+  assert.doesNotMatch(screenshot, /control plane online/);
   assert.match(screenshot, /Runtime\.exceptionThrown/);
   assert.match(screenshot, /consoleAPICalled/);
   assert.match(screenshot, /Horizontal page overflow/);
   assert.match(screenshot, /process\.exit\(1\)/);
+});
+
+test('Master SOUL and durable memory are operator-visible in the React System surface', async () => {
+  const app = await readFile(reactUrl, 'utf8');
+  assert.match(app, /api\.masterProfile/);
+  assert.match(app, /api\.setMasterSoul/);
+  assert.match(app, /api\.rememberMaster/);
+  assert.match(app, /api\.updateMasterMemory/);
+  assert.match(app, /api\.forgetMasterMemory/);
 });
