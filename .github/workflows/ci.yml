@@ -27,6 +27,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Syntax checks
         run: |
           find server test scripts -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
@@ -56,6 +59,11 @@ jobs:
           }
           throw lastError || new Error('Dashboard did not become healthy');
           NODE
+
+          # First-run is a P0 product surface and must render before any setup state is seeded.
+          for SIZE in 1440x1000 768x1000 390x844; do
+            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" 'http://127.0.0.1:7331/#/master' "setup-${SIZE}" '.setup-card'
+          done
 
           node --input-type=module <<'NODE'
           const response = await fetch('http://127.0.0.1:7331/api/setup/complete', {
