@@ -1,22 +1,40 @@
 {
   "name": "ai-dashboard",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "private": true,
   "type": "module",
-  "description": "Self-hosted control center for AI projects, coding agents and model research",
-  "engines": { "node": ">=22" },
   "scripts": {
-    "dev": "node --env-file-if-exists=.env --watch server/index.mjs",
-    "start": "node --env-file-if-exists=.env server/index.mjs",
+    "build": "vite build --config web/vite.config.ts",
+    "dev": "vite --config web/vite.config.ts",
+    "start": "npm run build --silent && node --enable-source-maps server/index.mjs",
     "test": "node --test",
-    "beta:pc": "node --env-file-if-exists=.env scripts/pc-beta.mjs"
+    "beta": "node scripts/pc-beta.mjs",
+    "screenshots": "npm run build --silent && node scripts/seed-visual-state.mjs && node scripts/screenshot.mjs"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "dependencies": {
+    "@ai-sdk/mcp": "2.0.36",
+    "@ai-sdk/openai-compatible": "3.0.37",
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "@opencode-ai/sdk": "1.18.21",
+    "ai": "7.0.79",
+    "i18next": "26.4.0",
     "octokit": "5.0.5",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-i18next": "17.0.12",
     "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.55.0",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "5.0.4",
+    "typescript": "7.0.2",
+    "vite": "8.2.2"
   }
 }
