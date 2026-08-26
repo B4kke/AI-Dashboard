@@ -6,6 +6,8 @@ export type Project = {
 export type Task = { id: string; projectId: string; title: string; description?: string; state: string; priority?: string };
 export type MasterConversation = { id: string; projectId?: string | null; title: string; updatedAt: string };
 export type MasterMessage = { id: string; conversationId: string; role: 'user'|'assistant'|'system'|'tool'; kind: string; content: string; toolCalls?: Array<{tool:string;status?:string|null}> };
+export type MasterMemoryItem = { id:string; scope:string; kind:string; text:string; confidence:number; source:string; updatedAt:string };
+export type MasterProfile = { soul:string; memory:MasterMemoryItem[]; learning:{enabled:boolean;maxItems:number;contextOnly:boolean} };
 export type DashboardState = { projects: Project[]; tasks: Task[]; masterConversations: MasterConversation[]; masterMessages: MasterMessage[]; settings?: { workspaceRoots?: string[]; projectDefaults?: unknown } };
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -33,10 +35,17 @@ export const api = {
   setMasterModel: (masterModel: string) => json<any>('/api/setup/master-model', 'PUT', { masterModel }),
   discovery: (refresh = false) => request<any>(`/api/discovery${refresh ? '?refresh=1' : ''}`),
   importRepo: (repoPath: string) => json<any>('/api/discovery/import', 'POST', { repoPath }),
+  importGitHub: (repository: string, rootPath?: string) => json<any>('/api/discovery/import', 'POST', { repository, ...(rootPath ? { rootPath } : {}) }),
   createLocalProject: (value: unknown) => json<any>('/api/projects/local', 'POST', value),
   projectUsability: (id: string) => request<any>(`/api/projects/${encodeURIComponent(id)}/usability`),
   projectReadiness: (id: string) => json<any>(`/api/projects/${encodeURIComponent(id)}/preflight`, 'POST', { kind: 'worker' }),
   createTask: (value: unknown) => json<any>('/api/tasks', 'POST', value),
   createConversation: (value: unknown) => json<MasterConversation>('/api/master/conversations', 'POST', value),
   masterTurn: (id: string, content: string) => json<any>(`/api/master/conversations/${encodeURIComponent(id)}/turns`, 'POST', { content }),
+  masterProfile: (projectId?: string) => request<MasterProfile>(`/api/master/profile${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+  setMasterSoul: (content: string) => json<{content:string}>('/api/master/soul', 'PUT', { content }),
+  masterMemory: (projectId?: string) => request<{memory:MasterMemoryItem[]}>(`/api/master/memory${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+  rememberMaster: (value: unknown) => json<MasterMemoryItem>('/api/master/memory', 'POST', value),
+  updateMasterMemory: (id: string, value: unknown) => json<MasterMemoryItem>(`/api/master/memory/${encodeURIComponent(id)}`, 'PATCH', value),
+  forgetMasterMemory: (id: string) => json<MasterMemoryItem>(`/api/master/memory/${encodeURIComponent(id)}`, 'DELETE'),
 };
