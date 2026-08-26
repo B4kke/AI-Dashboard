@@ -18,7 +18,7 @@ test('state store persists task model, verification, exploration and provider/re
     await store.upsertModelProvider({ id: 'lmstudio', name: 'LM Studio', protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:1234/v1', lastModels: [{ id: 'qwen3' }] });
     const research = await store.createResearchRun({ projectId: project.id, prompt: 'Analyze architecture' });
     const reloaded = new StateStore(file); await reloaded.load(); const snapshot = reloaded.snapshot();
-    assert.equal(snapshot.schemaVersion, 8); assert.equal(snapshot.explorations[0].id, exploration.id); assert.equal(snapshot.explorationRuns[0].report, 'Bootstrap brief');
+    assert.equal(snapshot.schemaVersion, 9); assert.equal(snapshot.explorations[0].id, exploration.id); assert.equal(snapshot.explorationRuns[0].report, 'Bootstrap brief');
     assert.equal(snapshot.tasks[0].model, 'lmstudio/qwen3'); assert.deepEqual(snapshot.tasks[0].verificationCommands, ['npm test']); assert.deepEqual(snapshot.tasks[0].workScopes, []); assert.equal(snapshot.tasks[0].agentId, null);
     assert.equal(snapshot.projects[0].autonomy.requireCi, true); assert.equal(snapshot.projects[0].lastPreflight, null); assert.equal(snapshot.researchRuns[0].id, research.id); assert.equal(snapshot.researchRuns[0].model, 'nvidia/meta/llama');
     assert.equal(snapshot.modelProviders[0].id, 'lmstudio'); assert.deepEqual(snapshot.mcpServers, []); assert.equal(task.model, 'lmstudio/qwen3');
@@ -31,7 +31,7 @@ test('schema v3 state migrates forward with MCP and agent-scope collections', as
     const file = join(dir, 'state.json');
     await writeFile(file, JSON.stringify({ schemaVersion: 3, projects: [{ id: 'p1', name: 'Old', autonomy: {} }], tasks: [{ id: 't1', projectId: 'p1', title: 'Old task' }], runs: [], ideas: [], agents: [], integrations: {} }));
     const store = new StateStore(file); await store.load(); const snapshot = store.snapshot();
-    assert.equal(snapshot.schemaVersion, 8); assert.equal(snapshot.tasks[0].id, 't1'); assert.equal(snapshot.tasks[0].model, null); assert.equal(snapshot.tasks[0].agentId, null);
+    assert.equal(snapshot.schemaVersion, 9); assert.equal(snapshot.tasks[0].id, 't1'); assert.equal(snapshot.tasks[0].model, null); assert.equal(snapshot.tasks[0].agentId, null);
     assert.deepEqual(snapshot.tasks[0].workScopes, []); assert.deepEqual(snapshot.tasks[0].verificationCommands, []); assert.equal(snapshot.projects[0].modelPolicy.researchModel, null);
     assert.equal(snapshot.projects[0].status, 'active'); assert.equal(snapshot.projects[0].baseBranch, 'main'); assert.equal(snapshot.projects[0].lastPreflight, null);
     assert.equal(snapshot.projects[0].autonomy.requireCi, true); assert.deepEqual(snapshot.projects[0].verificationCommands, []); assert.equal(snapshot.projects[0].brief, null);
