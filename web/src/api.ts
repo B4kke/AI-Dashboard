@@ -1,3 +1,5 @@
+import i18n from './i18n';
+
 export type Project = {
   id: string; name: string; description?: string | null; repoPath?: string | null; repository?: string | null;
   baseBranch?: string; status?: string; verificationCommands?: string[];
@@ -26,6 +28,12 @@ export const json = <T>(path: string, method: string, body?: unknown) => request
   body: body === undefined ? undefined : JSON.stringify(body),
 });
 
+async function localizedProjectUsability(id: string) {
+  const value = await request<any>(`/api/projects/${encodeURIComponent(id)}/usability`);
+  const key = !value?.usable ? 'project.usabilityRepair' : value?.codingWorkspaceReady ? 'project.usabilityReady' : 'project.usabilityNoRepo';
+  return { ...value, message: i18n.t(key) };
+}
+
 export const api = {
   state: () => request<DashboardState>('/api/state'),
   health: () => request<any>('/api/health'),
@@ -37,7 +45,7 @@ export const api = {
   importRepo: (repoPath: string) => json<any>('/api/discovery/import', 'POST', { repoPath }),
   importGitHub: (repository: string, rootPath?: string) => json<any>('/api/discovery/import', 'POST', { repository, ...(rootPath ? { rootPath } : {}) }),
   createLocalProject: (value: unknown) => json<any>('/api/projects/local', 'POST', value),
-  projectUsability: (id: string) => request<any>(`/api/projects/${encodeURIComponent(id)}/usability`),
+  projectUsability: localizedProjectUsability,
   projectReadiness: (id: string) => json<any>(`/api/projects/${encodeURIComponent(id)}/preflight`, 'POST', { kind: 'worker' }),
   createTask: (value: unknown) => json<any>('/api/tasks', 'POST', value),
   createConversation: (value: unknown) => json<MasterConversation>('/api/master/conversations', 'POST', value),
