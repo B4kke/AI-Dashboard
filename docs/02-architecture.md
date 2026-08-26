@@ -57,7 +57,7 @@ Workspace Roots are durable privileged local configuration. Discovery inspects d
 
 Local ↔ GitHub matching is based on normalized Git remote identity, not folder-name guessing. SSH/HTTPS/`.git` variants of the same GitHub repository normalize to one identity. Ambiguous or unsupported identities remain unbound. A discovered local repository may inherit only a GitHub identity proven by its own origin; an operator-supplied unrelated identity is rejected by discovery import rather than being presented as a discovered match.
 
-Detected verification commands are proposals only. They become executable control-plane configuration only after explicit operator acceptance and remain subject to the shell-free verifier/preflight contract.
+Detected conservative verification commands become normal Project defaults automatically on one-click import and remain subject to the shell-free verifier/preflight contract. Explicit operator overrides are preserved exactly and advanced execution still enters normal readiness/admission gates.
 
 Import is idempotent and creates Project state only: no Task, Run, branch, worktree, PR or autonomous execution starts merely because a repository was discovered/imported.
 
@@ -385,3 +385,8 @@ Claims must stay distinct:
 5. **production-ready remote autonomy** — authentication, authorization, audit, kill switch and distributed side-effect fencing are proven.
 
 A green local MCP loopback or rendered-browser test proves only its defined boundary. Exact-head GitHub Actions is separate level-3 evidence, and none of those prove all external MCP hosts or public exposure. The full real OpenCode + disposable GitHub/Actions PC beta remains a mandatory level-4 gate.
+
+
+## Master SOUL and memory
+
+Master is a real direct-model runtime using AI SDK + Dashboard MCP tools. A local runtime `data/master/SOUL.md` (or `AI_DASHBOARD_MASTER_SOUL`) is loaded into each turn. Durable personal/project memory is stored as control metadata with kind, scope, source and confidence. Post-turn reflection may add high-confidence context only when supported by the operator message. Both surfaces are editable/deletable and reject secret-like content. SOUL, memory and chat remain non-canonical context and cannot modify evidence or authority gates.

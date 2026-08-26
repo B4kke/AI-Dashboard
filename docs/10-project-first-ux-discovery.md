@@ -19,6 +19,7 @@ Implemented on the foundation branch:
 - deterministic local ↔ GitHub matching from normalized origin identity,
 - ambiguity blocking rather than folder-name guessing,
 - idempotent local Project import with no Task/Run/execution authority,
+- conservative detected verification commands applied automatically for the normal import path, with explicit advanced override preserved,
 - discovered local import accepts only a GitHub identity proved by that repository's origin,
 - GitHub repository listing and Clone & Import into a validated Workspace Root,
 - clone retry/read-repair only when an existing destination proves the exact requested origin plus a real HEAD commit; partial/mismatched destinations are preserved and blocked rather than overwritten,

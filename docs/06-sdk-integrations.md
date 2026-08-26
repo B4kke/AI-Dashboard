@@ -117,6 +117,12 @@ OpenCode documentation describes schema-constrained structured output, but the g
 
 The versioned `AI_DASHBOARD_RESULT` contract therefore remains authoritative for planner/worker/supervisor results. Do not add raw HTTP solely to depend on a documentation-only request shape. Revisit only when the pinned published SDK exposes the capability and regression tests prove it.
 
+## AI SDK and Master runtime
+
+Master uses pinned `ai@7.0.79`, `@ai-sdk/openai-compatible@3.0.37` and `@ai-sdk/mcp@2.0.36`. AI SDK owns provider/model invocation, multi-step tool-call mechanics and usage/finish metadata; the Dashboard still owns conversations, SOUL/memory policy, MCP authority, Project/Task state and all irreversible gates. Master memory reflection is a second bounded model pass whose failure never converts an otherwise successful assistant turn into failed project work.
+
+The local `SOUL.md`, remembered context and model-generated reflection are untrusted context. They cannot establish machine evidence, Git/CI truth, supervisor approval or merge authority.
+
 ## GitHub / Octokit
 
 The GitHub adapter uses pinned `octokit@5.0.5` instead of maintaining a second handwritten GitHub REST transport.

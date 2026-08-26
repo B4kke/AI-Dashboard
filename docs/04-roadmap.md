@@ -142,7 +142,7 @@ Deferred breadth: GitHub issue sync, webhooks, review-comment workflow and raw A
 
 ## M3 — Agent, MCP and model platform — ACTIVE EARLY SLICE
 
-### M3A — Master AI foundation — PARTIALLY IMPLEMENTED
+### M3A — Master AI foundation — IMPLEMENTED EARLY SLICE
 
 Implemented foundation:
 
@@ -158,8 +158,6 @@ Implemented foundation:
 
 Still planned:
 
-- persistent Master identity/persona,
-- bounded persistent personal/project memory (Master history is now durable via M3B, but richer memory/persona is separate),
 - automatic multi-step fleet scheduler,
 - capability/performance-based agent selection from verified history,
 - rich explanation of context/action selection.
@@ -176,7 +174,7 @@ Implemented early slice (normal chat environment, inspired by `odysseus-dev/odys
 - persistent global and project-scoped conversations + messages in `StateStore` schema v9 (`masterConversations`/`masterMessages`),
 - `GET/POST /api/master/conversations`, `GET/PATCH /api/master/conversations/:id`, `GET/POST /api/master/conversations/:id/messages` with fail-closed invariants,
 - internal assistant/control-plane message kinds `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT` visibly pill-tagged; ordinary UI/HTTP user input is fixed to `user` + `conversation` and cannot fabricate assistant/tool/verified history,
-- server-generated project-aware stub response with bounded message echo and open-Task count; internal tool-call history remains bounded and rejects `publish/review/merge`, while real provider streaming is still planned,
+- real AI SDK direct-model responses through the configured Master provider/model plus Dashboard `/mcp/master` tools; bounded tool-call history rejects direct publish/review/merge bypass,
 - composer `＋ Task` / `Research` creates via control-plane `POST /api/tasks` + `POST /api/research` — no publish/review/merge bypass, no evidence fabrication,
 - empty state like a normal chat: centered `✦ Master` mark, tip, durably stored history,
 - mobile-first: desktop 300px+1fr grid, tablet/phone stacked, no horizontal overflow, 44px touch targets,
@@ -186,29 +184,27 @@ Exact-head Linux+Windows GitHub Actions verified on commit `a990d75` (push `3299
 
 Still planned:
 
-- real provider streaming (currently stub assistant echo; direct-model streaming to replace),
+- token streaming/progressive tool rendering (current runtime is real model inference but returns the completed turn),
 - richer context attachments (Tasks/Runs/files/reports/evidence) and file references,
 - per-agent persona/memory and automatic fleet scheduler (M3A/M3C).
 
-### M3C — Memory & personal context — PLANNED
+### M3C — Memory & personal context — IMPLEMENTED EARLY SLICE
 
-Memory separates:
+Implemented:
 
-- user preferences,
-- project decisions,
-- historical events,
-- assistant persona/context,
-- reusable conventions.
+- local persistent Master `SOUL.md` loaded on every model turn,
+- global/project-scoped durable memories with profile/preference/goal/convention/lesson kinds, source and confidence,
+- bounded automatic post-turn reflection that only accepts high-confidence durable context supported by the operator message,
+- learned interaction principles appended to a bounded marked section of `SOUL.md`,
+- System UI/API for inspection, explicit memory creation, editing and deletion plus direct SOUL editing,
+- secret-like content rejection and local runtime data excluded from Git,
+- memory/SOUL/chat explicitly context only — never machine evidence or authority.
 
-Requirements:
+Still planned:
 
-- inspectable/editable/deletable,
-- scoped,
-- source-aware where practical,
-- no secrets,
-- context only — never machine evidence.
-
-Potential later extension: per-agent memory/persona/SOUL-style profiles and verified performance history.
+- richer source citations/review queue for low-confidence candidate memories,
+- per-specialist memory/SOUL profiles only when justified by the Agent Registry and without weakening scope ownership,
+- verified performance history kept separate from subjective assistant memory.
 
 ### M3D — MCP capability layer — IMPLEMENTED EARLY SLICE
 

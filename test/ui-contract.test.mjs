@@ -22,6 +22,7 @@ test('Project import and local creation are first-class React actions', async ()
   assert.match(app, /api\.discovery\(true\)/);
   assert.match(app, /api\.importRepo/);
   assert.match(app, /api\.importGitHub/);
+  assert.match(app, /item\.repo/);
   assert.match(app, /api\.createLocalProject/);
   assert.doesNotMatch(app, /window\.(?:prompt|alert|confirm)/);
 });

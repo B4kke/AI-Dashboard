@@ -202,6 +202,28 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       return json(response, 200, await store.updateAgent(decodeURIComponent(agentPatch[1]), agentMutationPatch(await body(request))));
     }
 
+    if (url.pathname === '/api/master/profile' && request.method === 'GET') {
+      if (!master) return json(response, 503, { error: 'Master model service is unavailable' });
+      return json(response, 200, await master.profile(url.searchParams.get('projectId') || null));
+    }
+    if (url.pathname === '/api/master/soul' && request.method === 'PUT') {
+      if (!master) return json(response, 503, { error: 'Master model service is unavailable' });
+      const input = await body(request);
+      return json(response, 200, await master.updateSoul(input.content));
+    }
+    if (url.pathname === '/api/master/memory') {
+      if (!master) return json(response, 503, { error: 'Master model service is unavailable' });
+      if (request.method === 'GET') return json(response, 200, master.listMemory(url.searchParams.get('projectId') || null));
+      if (request.method === 'POST') return json(response, 201, master.remember(await body(request)));
+    }
+    const masterMemory = url.pathname.match(/^\/api\/master\/memory\/([^/]+)$/);
+    if (masterMemory) {
+      if (!master) return json(response, 503, { error: 'Master model service is unavailable' });
+      const memoryId = decodeURIComponent(masterMemory[1]);
+      if (request.method === 'PATCH') return json(response, 200, master.updateMemory(memoryId, await body(request)));
+      if (request.method === 'DELETE') return json(response, 200, master.forgetMemory(memoryId));
+    }
+
     if (url.pathname === '/api/master/conversations' || url.pathname === '/api/master/conversations/') {
       if (request.method === 'GET') {
         const projectId = url.searchParams.get('projectId');

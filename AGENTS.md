@@ -126,6 +126,18 @@ Master AI is the high-level project orchestrator/assistant, not root authority. 
 
 Master AI must never use conversational confidence as evidence and cannot approve its own coding output or bypass independent supervisor/control-plane gates.
 
+### Master SOUL and memory
+
+Master uses a local runtime `SOUL.md` plus bounded durable memory to personalize future conversations. This context is explicitly subordinate to control-plane authority.
+
+- `SOUL.md` contains persona/working principles and is loaded for every Master model turn.
+- runtime `SOUL.md` and personal memory are local data and must not be committed to Git.
+- automatic reflection may store only durable context supported by the operator message; an assistant guess must never become a user fact.
+- memories carry scope, kind, source and confidence and must be inspectable, editable and deletable by the operator.
+- secret-like content is rejected from Master memory/SOUL; credentials belong only in environment variables/references.
+- memory/SOUL/chat are context only, never Git/CI/review/merge evidence and never an authorization source.
+- self-improvement may refine interaction style but must never weaken independent supervisor, CI, scope, recovery or irreversible-action gates.
+
 ### Required Master orchestration procedure
 
 For project work Master should:

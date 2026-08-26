@@ -36,7 +36,7 @@ Planner output is also fail-closed. Generated work Tasks stay in the non-executa
 
 The default UI is Project-first rather than a global control-plane telemetry wall. The Dashboard shows one aggregate card per Project; opening it enters a Project workspace with Overview, Tasks, Agents, GitHub, Evidence, Research and Settings.
 
-Workspace Roots are privileged local configuration. Discovery scans only direct children of configured roots, inspects Git/static metadata read-only and never executes repository scripts. Local/GitHub matching uses normalized remote identity and fails closed on ambiguity. Detected verification commands remain suggestions until the operator explicitly accepts them.
+Workspace Roots are privileged local configuration. Discovery scans only direct children of configured roots, inspects Git/static metadata read-only and never executes repository scripts. Local/GitHub matching uses normalized remote identity and fails closed on ambiguity. Detected conservative verification commands are applied automatically for normal one-click import; an explicit operator override (including an empty command list) remains available for advanced cases.
 
 Import creates managed Project state only: it never creates a Task/Run or grants execution authority. A discovered local repository may inherit only a GitHub identity proven by its own origin; unrelated/unproven binding is rejected during discovery import.
 
@@ -141,7 +141,7 @@ The intended Master AI can inspect Projects/Tasks/Runs/agents/evidence, reason a
 
 It cannot fabricate evidence, approve its own coding work, interpret unavailable CI as green, force-push/reset, merge an unreviewed checkpoint or bypass locks/recovery.
 
-Persistent Master chat is implemented as a **normal chat environment** (global `Master` + project `Master` tab, sidebar conversations + centered bubble stream + rounded `Message Master…` composer, inspired by `odysseus-dev/odysseus@dev` but own implementation — `odysseus` is `AGPL-3.0-or-later`, no substantial reuse). It persists history and renders internal assistant/control-plane turn kinds as `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`. Ordinary HTTP/UI input can create only `user` + `conversation`; it cannot fabricate assistant roles, tool calls or verified-result labels. Task/Research creation still enters the normal control plane. Persona/memory and a full automatic fleet scheduler remain planned; the MCP/Agent/Master-chat foundation is.
+Persistent Master chat is implemented as a **normal chat environment** (global `Master` + project `Master` tab, sidebar conversations + centered bubble stream + rounded `Message Master…` composer, inspired by `odysseus-dev/odysseus@dev` but own implementation — `odysseus` is `AGPL-3.0-or-later`, no substantial reuse). It persists history and renders internal assistant/control-plane turn kinds as `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`. Ordinary HTTP/UI input can create only `user` + `conversation`; it cannot fabricate assistant roles, tool calls or verified-result labels. Task/Research creation still enters the normal control plane. Master now uses real AI SDK model inference + Dashboard MCP tools, a local runtime `SOUL.md`, and bounded inspectable/editable/deletable durable memory with automatic post-turn reflection. A full automatic fleet scheduler remains planned.
 
 ## Project readiness and admission identity
 
