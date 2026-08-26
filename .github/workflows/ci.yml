@@ -35,7 +35,7 @@ jobs:
       - name: Tests
         run: npm test
 
-      - name: Rendered UI smoke
+      - name: Rendered React UI smoke
         shell: bash
         run: |
           set -euo pipefail
@@ -57,11 +57,20 @@ jobs:
           throw lastError || new Error('Dashboard did not become healthy');
           NODE
 
+          node --input-type=module <<'NODE'
+          const response = await fetch('http://127.0.0.1:7331/api/setup/complete', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ locale: 'nb' }),
+          });
+          if (!response.ok) throw new Error(`Setup fixture failed: HTTP ${response.status} ${await response.text()}`);
+          NODE
+
           PROJECT_ID="$(node --input-type=module <<'NODE'
           const response = await fetch('http://127.0.0.1:7331/api/projects', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ name: 'Rendered UI Smoke', description: 'Deterministic Project workspace rendering fixture' }),
+            body: JSON.stringify({ name: 'Rendered UI Smoke', description: 'React Project workspace rendering fixture' }),
           });
           if (!response.ok) throw new Error(`Project fixture creation failed: HTTP ${response.status} ${await response.text()}`);
           const project = await response.json();
@@ -77,40 +86,38 @@ jobs:
             body: JSON.stringify({
               projectId: process.env.PROJECT_ID,
               title: 'Rendered operator Task',
-              description: 'Task fixture for safe repair and mobile navigation rendering.',
-              acceptanceCriteria: ['The operator surface renders without runtime errors.'],
+              description: 'Task fixture for mobile navigation rendering.',
+              acceptanceCriteria: ['The React operator surface renders without runtime errors.'],
               priority: 'P1',
             }),
           });
           if (!response.ok) throw new Error(`Task fixture creation failed: HTTP ${response.status} ${await response.text()}`);
-          const task = await response.json();
-          if (!task?.id) throw new Error('Task fixture response is missing id');
           NODE
 
           MASTER_CONVERSATION_ID="$(PROJECT_ID="$PROJECT_ID" node --input-type=module <<'NODE'
           const base = 'http://127.0.0.1:7331';
           const conversationResponse = await fetch(`${base}/api/master/conversations`, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ projectId: process.env.PROJECT_ID, title: 'Rendered Master conversation' }),
           });
           if (!conversationResponse.ok) throw new Error(`Master fixture creation failed: HTTP ${conversationResponse.status} ${await conversationResponse.text()}`);
           const conversation = await conversationResponse.json();
-          const turnResponse = await fetch(`${base}/api/master/conversations/${conversation.id}/turns`, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ content: 'Summarize the current Project and keep evidence separate from conversation.' }),
+          const messageResponse = await fetch(`${base}/api/master/conversations/${conversation.id}/messages`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ content: 'CI render fixture; no model call is faked here.' }),
           });
-          if (!turnResponse.ok) throw new Error(`Master turn fixture failed: HTTP ${turnResponse.status} ${await turnResponse.text()}`);
+          if (!messageResponse.ok) throw new Error(`Master message fixture failed: HTTP ${messageResponse.status} ${await messageResponse.text()}`);
           console.log(conversation.id);
           NODE
           )"
 
           for SIZE in 1440x1000 768x1000 390x844; do
-            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" 'http://127.0.0.1:7331/#/projects' "home-${SIZE}" '.project-card'
-            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/overview" "project-${SIZE}" '.overview-now'
-            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/tasks" "tasks-${SIZE}" '[data-operator-action="edit-task"]'
-            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/settings" "settings-${SIZE}" '#project-settings-form [name="workerRole"]'
-            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/master/${MASTER_CONVERSATION_ID}" "master-${SIZE}" '.master-chat-panel .master-bubble'
-            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/master" "project-master-${SIZE}" '.master-workspace-split .master-bubble'
+            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" 'http://127.0.0.1:7331/#/projects' "projects-${SIZE}" '.project-card'
+            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}" "project-${SIZE}" '.status-grid'
+            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/master/${MASTER_CONVERSATION_ID}" "master-${SIZE}" '.message-user'
+            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" 'http://127.0.0.1:7331/#/system' "system-${SIZE}" '.integration-list'
           done
 
       - name: Upload UI smoke screenshots
