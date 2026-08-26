@@ -21,7 +21,7 @@ const resources = {
     projects: {
       eyebrow: 'ARBEIDSOMRÅDER', title: 'Prosjekter', discover: 'Importer prosjekt', create: 'Nytt lokalt prosjekt',
       empty: 'Ingen prosjekter ennå.', emptyCopy: 'Importer et eksisterende Git-repo eller opprett et nytt lokalt prosjekt.',
-      usable: 'Klar til bruk', automation: 'Autonomi må konfigureres', open: 'Åpne', tasks: 'oppgaver',
+      usable: 'Klar til bruk', managed: 'Administrert', automation: 'Autonomi må konfigureres', open: 'Åpne', tasks: 'oppgaver',
       createTitle: 'Nytt lokalt prosjekt', name: 'Navn', folder: 'Mappenavn', description: 'Beskrivelse', root: 'Plassering', createAction: 'Opprett prosjekt',
       discoverTitle: 'Importer eksisterende prosjekt', scan: 'Skann prosjektmapper', import: 'Importer', noRepos: 'Ingen nye Git-repoer funnet.'
     },
@@ -44,7 +44,7 @@ const resources = {
       opencodeOk: 'OpenCode detected', opencodeMissing: 'OpenCode is not available yet. Normal chat/project management still works.'
     },
     master: { eyebrow: 'PERSONAL ASSISTANT', title: 'Master', newChat: 'New conversation', emptyTitle: 'What do you want to do?', emptyCopy: 'Ask anything. When you want work started, Master can use Dashboard tools.', placeholder: 'Message Master…', send: 'Send', global: 'General conversation', project: 'Project context', noModel: 'Choose a Master model in setup or System.' },
-    projects: { eyebrow: 'WORKSPACES', title: 'Projects', discover: 'Import project', create: 'New local project', empty: 'No projects yet.', emptyCopy: 'Import an existing Git repository or create a new local project.', usable: 'Ready to use', automation: 'Autonomy needs setup', open: 'Open', tasks: 'tasks', createTitle: 'New local project', name: 'Name', folder: 'Folder name', description: 'Description', root: 'Location', createAction: 'Create project', discoverTitle: 'Import existing project', scan: 'Scan project folders', import: 'Import', noRepos: 'No new Git repositories found.' },
+    projects: { eyebrow: 'WORKSPACES', title: 'Projects', discover: 'Import project', create: 'New local project', empty: 'No projects yet.', emptyCopy: 'Import an existing Git repository or create a new local project.', usable: 'Ready to use', managed: 'Managed', automation: 'Autonomy needs setup', open: 'Open', tasks: 'tasks', createTitle: 'New local project', name: 'Name', folder: 'Folder name', description: 'Description', root: 'Location', createAction: 'Create project', discoverTitle: 'Import existing project', scan: 'Scan project folders', import: 'Import', noRepos: 'No new Git repositories found.' },
     project: { back: 'Back to projects', overview: 'Overview', tasks: 'Tasks', readiness: 'Autonomy', normalUse: 'Normal use', strictReadiness: 'Autonomous execution', createTask: 'New task', title: 'Title', description: 'Description', criteria: 'Acceptance criteria', create: 'Create task' },
     system: { eyebrow: 'CONTROL PLANE', title: 'System', language: 'Language', models: 'Models', integrations: 'Integrations', opencode: 'OpenCode', github: 'GitHub', persistence: 'Persistence', masterModel: 'Master model', codingModel: 'Coding model' }
   } },

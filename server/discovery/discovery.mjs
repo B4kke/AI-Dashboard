@@ -72,6 +72,7 @@ function parsePackageNameManifest(text) {
       name: typeof parsed?.name === 'string' ? parsed.name : null,
       description: typeof parsed?.description === 'string' ? parsed.description : null,
       scripts: parsed?.scripts && typeof parsed.scripts === 'object' ? Object.keys(parsed.scripts) : [],
+      packageManager: typeof parsed?.packageManager === 'string' ? parsed.packageManager : null,
       private: parsed?.private === true,
     };
   } catch {
@@ -98,14 +99,26 @@ function extractReadmeIntroduction(text) {
   return null;
 }
 
-export function detectVerificationCommandsFromScripts(scripts = []) {
+export function detectVerificationCommandsFromScripts(scripts = [], { runner = 'npm' } = {}) {
   const detected = [];
   const known = ['test', 'lint', 'typecheck'];
+  const executable = ['npm', 'pnpm', 'yarn'].includes(runner) ? runner : 'npm';
   for (const script of scripts) {
-    if (script === 'test') detected.push({ command: 'npm test', source: 'package.json#scripts.test' });
-    else if (known.includes(script)) detected.push({ command: `npm run ${script}`, source: `package.json#scripts.${script}` });
+    if (!known.includes(script)) continue;
+    const command = script === 'test'
+      ? `${executable} test`
+      : (executable === 'yarn' ? `yarn ${script}` : `${executable} run ${script}`);
+    detected.push({ command, source: `package.json#scripts.${script}` });
   }
   return detected;
+}
+
+async function packageRunner(repositoryRoot, manifest) {
+  const declared = String(manifest?.packageManager || '').split('@')[0].toLowerCase();
+  if (['npm', 'pnpm', 'yarn'].includes(declared)) return declared;
+  if (await fileExists(join(repositoryRoot, 'pnpm-lock.yaml'))) return 'pnpm';
+  if (await fileExists(join(repositoryRoot, 'yarn.lock'))) return 'yarn';
+  return 'npm';
 }
 
 export async function inspectDiscoveredRepository(directoryPath, { platform = process.platform } = {}) {
@@ -167,14 +180,21 @@ export async function inspectDiscoveredRepository(directoryPath, { platform = pr
     if (cargo !== null) record.manifest = parseTomlName(cargo, 'Cargo.toml');
   }
   if (record.manifest?.type === 'package.json') {
-    record.detectedVerificationCommands = detectVerificationCommandsFromScripts(record.manifest.scripts);
+    const runner = await packageRunner(repositoryRoot, record.manifest);
+    record.detectedVerificationCommands = detectVerificationCommandsFromScripts(record.manifest.scripts, { runner });
     record.languages.push('JavaScript/TypeScript');
   } else if (record.manifest?.type === 'pyproject.toml') {
+    const pyproject = await tryRead(join(repositoryRoot, 'pyproject.toml'), MANIFEST_READ_LIMIT);
+    if (/\bpytest\b|\[tool\.pytest/i.test(pyproject || '')) record.detectedVerificationCommands.push({ command: 'python -m pytest', source: 'pyproject.toml' });
     record.languages.push('Python');
   } else if (record.manifest?.type === 'Cargo.toml') {
+    record.detectedVerificationCommands.push({ command: 'cargo test', source: 'Cargo.toml' });
     record.languages.push('Rust');
   }
-  if (await fileExists(join(repositoryRoot, 'go.mod'))) record.languages.push('Go');
+  if (await fileExists(join(repositoryRoot, 'go.mod'))) {
+    record.languages.push('Go');
+    record.detectedVerificationCommands.push({ command: 'go test ./...', source: 'go.mod' });
+  }
   const readme = record.readmePresent ? await tryRead(join(repositoryRoot, 'README.md'), README_READ_LIMIT) : null;
   record.readmeIntroduction = extractReadmeIntroduction(readme);
   return record;
@@ -209,6 +229,7 @@ export function buildProjectProposal({ repo, githubMeta = null }) {
     repository: repo.github?.fullName || githubMeta?.fullName || null,
     baseBranch: githubMeta?.defaultBranch || repo.branch || 'main',
     detectedVerificationCommands: repo.detectedVerificationCommands,
+    verificationCommands: (repo.detectedVerificationCommands || []).map((item) => item.command),
     detectedLanguages: repo.languages,
     sources: {
       name: githubMeta ? 'github' : (repo.manifest?.name ? 'manifest' : 'folder'),

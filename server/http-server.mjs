@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { repairTaskFromOperator } from './core/operator-task-repair.mjs';
 import { agentFleetView } from './core/agent-fleet-view.mjs';
+import { inspectProjectUsability } from './core/project-usability.mjs';
 
 const AGENT_MUTATION_FIELDS = new Set(['name', 'role', 'harness', 'model', 'instructions', 'capabilities', 'workScopes', 'enabled']);
 const MASTER_USER_MESSAGE_FIELDS = new Set(['content']);
@@ -22,17 +23,6 @@ function masterUserMessage(input) {
     if (!MASTER_USER_MESSAGE_FIELDS.has(key)) throw new Error(`Invalid Master user message field: ${key}`);
   }
   return { role: 'user', kind: 'conversation', content: input.content };
-}
-
-function masterStubResponse(store, conversationId, content) {
-  const snapshot = store.snapshot();
-  const conversation = snapshot.masterConversations.find((item) => item.id === conversationId);
-  const project = conversation?.projectId ? snapshot.projects.find((item) => item.id === conversation.projectId) : null;
-  const openTasks = snapshot.tasks.filter((task) => (!project || task.projectId === project.id) && task.state !== 'done').length;
-  if (project) {
-    return `Master received your message in ${project.name}. This Project has ${openTasks} open Task${openTasks === 1 ? '' : 's'}. I can help shape scoped work or Research, but execution, verification and merge remain in the control plane. Your message was: "${String(content).slice(0, 240)}".`;
-  }
-  return `Master received your message. ${snapshot.projects.length ? `There are ${snapshot.projects.length} Projects and ${openTasks} open Tasks in the Dashboard.` : 'Create a Project to enable project-aware orchestration.'} This early chat slice does not publish, approve or merge work.`;
 }
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
@@ -71,7 +61,7 @@ async function body(request) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-export function createHttpServer({ store, events, orchestrator, autonomy, research, github, mcp = null, mcpClients = null, discovery = null, privateMode = false, publicDir, version = '0.0.6' }) {
+export function createHttpServer({ store, events, orchestrator, autonomy, research, github, mcp = null, mcpClients = null, discovery = null, setup = null, master = null, privateMode = false, publicDir, version = '0.0.7' }) {
   async function api(request, response, url) {
     if (request.method === 'GET' && url.pathname === '/api/health') {
       const [openCode, providers] = await Promise.all([orchestrator.opencodeOverview(), research.listProviders().catch(() => [])]);
@@ -87,6 +77,22 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       });
     }
     if (request.method === 'GET' && url.pathname === '/api/state') return json(response, 200, store.snapshot());
+    if (request.method === 'GET' && url.pathname === '/api/setup') {
+      if (!setup) return json(response, 503, { error: 'First-run setup service is unavailable' });
+      return json(response, 200, await setup.inspect());
+    }
+    if (request.method === 'POST' && url.pathname === '/api/setup/complete') {
+      if (!setup) return json(response, 503, { error: 'First-run setup service is unavailable' });
+      return json(response, 200, await setup.complete(await body(request)));
+    }
+    if (request.method === 'PUT' && url.pathname === '/api/setup/locale') {
+      if (!setup) return json(response, 503, { error: 'First-run setup service is unavailable' });
+      return json(response, 200, setup.setLocale((await body(request)).locale));
+    }
+    if (request.method === 'PUT' && url.pathname === '/api/setup/master-model') {
+      if (!setup) return json(response, 503, { error: 'First-run setup service is unavailable' });
+      return json(response, 200, setup.setMasterModel((await body(request)).masterModel));
+    }
     if (request.method === 'GET' && url.pathname === '/api/events') { events.subscribe(response); return; }
     if (request.method === 'GET' && url.pathname === '/api/workspaces') return json(response, 200, await orchestrator.workspaceInventory());
 
@@ -132,6 +138,10 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
     if (request.method === 'POST' && researchRetry) return json(response, 202, await research.retryResearch(decodeURIComponent(researchRetry[1])));
 
     if (request.method === 'POST' && url.pathname === '/api/projects') return json(response, 201, await store.addProject(await body(request)));
+    if (request.method === 'POST' && url.pathname === '/api/projects/local') {
+      if (!discovery) return json(response, 503, { error: 'Local Project creation is unavailable' });
+      return json(response, 201, await discovery.createLocalProject(await body(request)));
+    }
     if (request.method === 'POST' && url.pathname === '/api/tasks') return json(response, 201, await store.addTask(await body(request)));
     if (request.method === 'POST' && url.pathname === '/api/ideas') return json(response, 201, await store.addIdea(await body(request)));
 
@@ -162,6 +172,11 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
     }
     const projectPatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
     if (request.method === 'PATCH' && projectPatch) return json(response, 200, await store.updateProject(decodeURIComponent(projectPatch[1]), await body(request)));
+    const projectUsability = url.pathname.match(/^\/api\/projects\/([^/]+)\/usability$/);
+    if (request.method === 'GET' && projectUsability) {
+      const project = store.getProject(decodeURIComponent(projectUsability[1]));
+      return json(response, 200, await inspectProjectUsability({ project }));
+    }
     const projectPreflight = url.pathname.match(/^\/api\/projects\/([^/]+)\/preflight$/);
     if (request.method === 'POST' && projectPreflight) {
       const input = await body(request);
@@ -211,16 +226,10 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
     }
     const masterTurns = url.pathname.match(/^\/api\/master\/conversations\/([^/]+)\/turns$/);
     if (request.method === 'POST' && masterTurns) {
+      if (!master) return json(response, 503, { error: 'Master model service is unavailable' });
       const conversationId = decodeURIComponent(masterTurns[1]);
       const input = masterUserMessage(await body(request));
-      const user = await store.addMasterMessage({ conversationId, ...input });
-      const assistant = await store.addMasterMessage({
-        conversationId,
-        role: 'assistant',
-        kind: 'conversation',
-        content: masterStubResponse(store, conversationId, input.content),
-      });
-      return json(response, 201, { user, assistant });
+      return json(response, 201, await master.turn(conversationId, input.content));
     }
 
     const masterMessages = url.pathname.match(/^\/api\/master\/conversations\/([^/]+)\/messages$/);

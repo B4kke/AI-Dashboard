@@ -26,6 +26,13 @@ async function startServer() {
     },
     autonomy: { tick: async () => ({ actions: [] }) },
     research: { listProviders: async () => [], openCodeModels: async () => [] },
+    master: {
+      turn: async (conversationId, content) => {
+        const user = await store.addMasterMessage({ conversationId, role: 'user', kind: 'conversation', content });
+        const assistant = await store.addMasterMessage({ conversationId, role: 'assistant', kind: 'conversation', content: 'Test Master response' });
+        return { user, assistant, model: 'test/model' };
+      },
+    },
     github: { token: null, baseUrl: 'https://api.github.test' },
     privateMode: true,
     publicDir: dir,
@@ -200,31 +207,21 @@ test('Master chat invariants fail closed', async () => {
   }
 });
 
-test('Master UI surface remains first-class and non-bypass (contract)', async () => {
+test('Master React surface remains first-class and real-model wired (contract)', async () => {
   const { readFile } = await import('node:fs/promises');
-  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
-  const index = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../web/src/App.tsx', import.meta.url), 'utf8');
+  const api = await readFile(new URL('../web/src/api.ts', import.meta.url), 'utf8');
+  const service = await readFile(new URL('../server/master/service.mjs', import.meta.url), 'utf8');
   const store = await readFile(new URL('../server/core/state-store.mjs', import.meta.url), 'utf8');
   const http = await readFile(new URL('../server/http-server.mjs', import.meta.url), 'utf8');
-  // UI contract
-  assert.match(index, /data-nav="master"/);
-  assert.match(index, /id="page-master"/);
-  assert.match(app, /renderMasterPage/);
-  assert.match(app, /renderMasterWorkspaceTab/);
-  assert.match(app, /data-action="new-master-conversation"/);
-  assert.match(app, /data-action="open-master-conversation"/);
-  assert.match(app, /Conversation only · evidence stays separate/);
-  assert.doesNotMatch(app, /data-action="master-kind-option"/);
+  assert.match(app, /function MasterView/);
+  assert.match(app, /<PromptInput/);
+  assert.match(api, /masterTurn/);
   assert.doesNotMatch(app, /window\.prompt/);
-  assert.doesNotMatch(app, /delete-master-conversation/);
-  assert.match(app, /master-rename-dialog/);
-  assert.match(app, /\/turns/);
-  // StateStore v9
-  assert.match(store, /masterConversations/);
-  assert.match(store, /masterMessages/);
-  assert.match(store, /MASTER_MESSAGE_KINDS/);
-  // HTTP fail-closed: no publish/review/merge in toolCalls
+  assert.match(service, /generateText/);
+  assert.match(service, /createMCPClient/);
+  assert.match(service, /createOpenAICompatible/);
   assert.match(store, /Master chat cannot directly invoke/);
-  assert.match(http, /\/api\/master\/conversations/);
+  assert.match(http, /master\.turn\(conversationId, input\.content\)/);
   assert.match(store, /SCHEMA_VERSION = 9/);
 });

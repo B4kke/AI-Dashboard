@@ -18,15 +18,18 @@ import { GitHubClient } from './integrations/github.mjs';
 import { createResearchService } from './research/service.mjs';
 import { createOrchestrator } from './orchestrator.mjs';
 import { createDiscoveryService } from './discovery/service.mjs';
+import { createSetupService } from './setup/service.mjs';
+import { createMasterService } from './master/service.mjs';
 import { createHttpServer } from './http-server.mjs';
 import { createDashboardMcp } from './mcp/dashboard-server.mjs';
 import { McpClientManager } from './mcp/client-manager.mjs';
 import { dashboardBindConfiguration } from './core/server-bind.mjs';
 
-const VERSION = '0.0.6';
+const VERSION = '0.0.7';
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PUBLIC = resolve(ROOT, 'public');
 const { host, port, privateMode } = dashboardBindConfiguration(process.env);
+const dashboardBaseUrl = `http://${host === '::1' ? '[::1]' : host}:${port}`;
 const legacyDataFile = resolve(process.env.AI_DASHBOARD_DATA || resolve(ROOT, 'data', 'state.json'));
 const dbFile = resolve(process.env.AI_DASHBOARD_DB || resolve(ROOT, 'data', 'control.sqlite'));
 
@@ -87,6 +90,8 @@ const autonomy = new AutonomyEngine({
 // repositories are surfaced to the operator for explicit import; discovery
 // never auto-imports, starts workers or creates Git side effects.
 const discovery = createDiscoveryService({ store, github });
+const setup = createSetupService({ store, persistence: sqlite, discovery, opencode: rawOpenCode, research, dashboardBaseUrl });
+const master = createMasterService({ store, setup, dashboardBaseUrl });
 discovery.scan().then((report) => {
   if (report.roots.length && report.newCount > 0) console.log(`AI Dashboard discovered ${report.newCount} not-yet-imported repository(ies) in configured Workspace Roots`);
 }).catch(() => {});
@@ -98,7 +103,7 @@ const mcpClients = privateMode ? new McpClientManager({ store, version: VERSION,
 if (!privateMode) console.log('AI Dashboard MCP disabled because the control API is not bound to loopback');
 
 const server = createHttpServer({
-  store, events, orchestrator, autonomy, research, github, mcp, mcpClients, discovery,
+  store, events, orchestrator, autonomy, research, github, mcp, mcpClients, discovery, setup, master,
   publicDir: PUBLIC, version: VERSION, privateMode,
 });
 autonomy.start();

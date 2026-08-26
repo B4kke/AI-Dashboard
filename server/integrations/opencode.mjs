@@ -212,6 +212,20 @@ export class OpenCodeClient {
     return this.call('mcp.status', () => this.client.mcp.status(this.options(directory, 10_000)));
   }
 
+  async ensureMcpServer({ name, url, directory } = {}) {
+    const serverName = String(name || '').trim();
+    if (!/^[A-Za-z0-9._-]{1,120}$/.test(serverName)) throw new Error('OpenCode MCP server name is invalid');
+    const remoteUrl = normalizeOpenCodeUrl(url);
+    const current = await this.mcpStatus(directory).catch(() => ({}));
+    if (current?.[serverName]?.status === 'connected') return { name: serverName, status: 'connected', changed: false };
+    const value = await this.call('mcp.add', () => this.client.mcp.add({
+      ...this.options(directory, 10_000),
+      body: { name: serverName, config: { type: 'remote', url: remoteUrl, enabled: true } },
+    }));
+    const status = value?.[serverName]?.status || (await this.mcpStatus(directory).catch(() => ({})))?.[serverName]?.status || 'unknown';
+    return { name: serverName, status, changed: true };
+  }
+
   lspStatus(directory) {
     return this.call('lsp.status', () => this.client.lsp.status(this.options(directory, 10_000)));
   }

@@ -33,9 +33,8 @@ test('Task PATCH route is guarded by the operator repair boundary instead of raw
   assert.doesNotMatch(httpServer, /request\.method === 'PATCH' && taskPatch[^\n]+store\.updateTask/);
 });
 
-test('Agent fleet operator surface is Project-scoped, whitelisted and presentation-constrained', async () => {
-  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
-  const index = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+test('Agent fleet mutation boundary remains Project-scoped and whitelisted during React migration', async () => {
+  const react = await readFile(new URL('../web/src/App.tsx', import.meta.url), 'utf8');
   assert.match(httpServer, /AGENT_MUTATION_FIELDS/);
   assert.match(httpServer, /function agentMutationPatch/);
   assert.match(httpServer, /projectAgents/);
@@ -44,13 +43,5 @@ test('Agent fleet operator surface is Project-scoped, whitelisted and presentati
   assert.match(httpServer, /store\.addAgent/);
   assert.match(httpServer, /store\.updateAgent/);
   assert.doesNotMatch(httpServer, /agent\.created.*raw StateStore/i);
-  assert.match(index, /id="agent-dialog"/);
-  assert.match(index, /id="agent-form"/);
-  assert.match(app, /data-action="new-agent"/);
-  assert.match(app, /data-action="edit-agent"/);
-  assert.match(app, /data-action="toggle-agent"/);
-  assert.match(app, /renderAgentsTab\(project, tasks, runs, agents\)/);
-  assert.match(app, /Assigned:/);
-  assert.match(app, /Active run:/);
-  assert.match(app, /read-only/);
+  assert.doesNotMatch(react, /data-operator-action="(?:delegate|publish|review|merge)"/);
 });
