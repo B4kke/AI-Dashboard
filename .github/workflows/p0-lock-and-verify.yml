@@ -1,11 +1,11 @@
-name: P0 live repair runner
+name: P0 follow-up repair runner
 
 on:
   push:
     branches:
       - bootstrap/control-center-foundation
     paths:
-      - scripts/p0-live-repair.py
+      - scripts/p0-followup-repair.py
       - .github/workflows/p0-lock-and-verify.yml
   workflow_dispatch:
 
@@ -25,11 +25,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Apply deterministic P0 repair
-        run: |
-          cp .github/workflows/ci.yml /tmp/ai-dashboard-ci.yml
-          python scripts/p0-live-repair.py
-          cp /tmp/ai-dashboard-ci.yml .github/workflows/ci.yml
+      - name: Apply P0 follow-up repair
+        run: python scripts/p0-followup-repair.py
       - name: Refresh dependency lock
         run: npm install --package-lock-only --ignore-scripts
       - name: Install locked dependencies
@@ -38,11 +35,11 @@ jobs:
         run: npm run build
       - name: Test
         run: npm test
-      - name: Commit verified repair
+      - name: Commit verified P0 polish
         run: |
           if git diff --quiet; then exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "p0: wire setup, Master and plug-and-play Projects"
+          git commit -m "p0: reconcile MCP and complete React i18n polish"
           git push origin HEAD:bootstrap/control-center-foundation
