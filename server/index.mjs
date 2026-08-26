@@ -107,7 +107,14 @@ const server = createHttpServer({
   publicDir: PUBLIC, version: VERSION, privateMode,
 });
 autonomy.start();
-server.listen(port, host, () => console.log(`AI Dashboard listening on http://${host}:${port}`));
+server.listen(port, host, () => {
+  console.log(`AI Dashboard listening on http://${host}:${port}`);
+  if (privateMode && setup.preferences().completed) {
+    setup.ensureDashboardMcp().then((result) => {
+      if (!result.configured) console.warn('AI Dashboard could not reconcile its OpenCode MCP registration');
+    }).catch(() => console.warn('AI Dashboard could not reconcile its OpenCode MCP registration'));
+  }
+});
 
 let shuttingDown = false;
 function shutdown(signal) {

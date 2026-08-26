@@ -74,6 +74,16 @@ export function createSetupService({ store, persistence, discovery, opencode, re
     };
   }
 
+  async function ensureDashboardMcp() {
+    try {
+      const url = new URL('/mcp/master', dashboardBaseUrl).toString();
+      const status = await opencode.ensureMcpServer({ name: 'ai-dashboard-master', url });
+      return { configured: status?.status === 'connected', status };
+    } catch (error) {
+      return { configured: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   async function complete(input = {}) {
     const locale = SUPPORTED_LOCALES.has(input.locale) ? input.locale : 'nb';
     if (input.workspaceRoot?.trim()) await discovery.addWorkspaceRoot(input.workspaceRoot);
@@ -90,14 +100,7 @@ export function createSetupService({ store, persistence, discovery, opencode, re
       autonomy: { mode: 'manual', requireCi: true },
     });
 
-    let mcp = { configured: false, reason: 'OpenCode unavailable' };
-    try {
-      const url = new URL('/mcp/master', dashboardBaseUrl).toString();
-      const status = await opencode.ensureMcpServer({ name: 'ai-dashboard-master', url });
-      mcp = { configured: true, status };
-    } catch (error) {
-      mcp = { configured: false, reason: error.message };
-    }
+    const mcp = await ensureDashboardMcp();
 
     const saved = {
       completed: true,
@@ -122,5 +125,5 @@ export function createSetupService({ store, persistence, discovery, opencode, re
     return saved;
   }
 
-  return { inspect, complete, preferences, setLocale, setMasterModel };
+  return { inspect, complete, preferences, setLocale, setMasterModel, ensureDashboardMcp };
 }

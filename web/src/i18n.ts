@@ -16,23 +16,25 @@ const resources = {
       eyebrow: 'PERSONLIG ASSISTENT', title: 'Master', newChat: 'Ny samtale',
       emptyTitle: 'Hva vil du gjøre?', emptyCopy: 'Spør om hva som helst. Når du vil starte arbeid kan Master bruke Dashboard-verktøyene.',
       placeholder: 'Skriv til Master…', send: 'Send', global: 'Generell samtale', project: 'Prosjektkontekst',
-      noModel: 'Velg en Master-modell i førstegangsoppsett eller System.'
+      noModel: 'Ingen Master-modell valgt', you: 'Du', messageCount: '{{count}} melding', messageCount_other: '{{count}} meldinger'
     },
     projects: {
       eyebrow: 'ARBEIDSOMRÅDER', title: 'Prosjekter', discover: 'Importer prosjekt', create: 'Nytt lokalt prosjekt',
       empty: 'Ingen prosjekter ennå.', emptyCopy: 'Importer et eksisterende Git-repo eller opprett et nytt lokalt prosjekt.',
-      usable: 'Klar til bruk', managed: 'Administrert', automation: 'Autonomi må konfigureres', open: 'Åpne', tasks: 'oppgaver',
+      usable: 'Klar til bruk', managed: 'Administrert', localProject: 'Lokalt prosjekt', automation: 'Autonomi må konfigureres', open: 'Åpne', tasks: 'oppgaver',
       createTitle: 'Nytt lokalt prosjekt', name: 'Navn', folder: 'Mappenavn', description: 'Beskrivelse', root: 'Plassering', createAction: 'Opprett prosjekt',
       discoverTitle: 'Importer eksisterende prosjekt', scan: 'Skann prosjektmapper', import: 'Importer', noRepos: 'Ingen nye Git-repoer funnet.'
     },
     project: {
       back: 'Tilbake til prosjekter', overview: 'Oversikt', tasks: 'Oppgaver', readiness: 'Autonomi',
       normalUse: 'Normal bruk', strictReadiness: 'Autonom kjøring', createTask: 'Ny oppgave',
-      title: 'Tittel', description: 'Beskrivelse', criteria: 'Akseptansekriterier', create: 'Opprett oppgave'
+      title: 'Tittel', description: 'Beskrivelse', criteria: 'Akseptansekriterier', create: 'Opprett oppgave',
+      eyebrow: 'PROSJEKT', notFound: 'Prosjektet finnes ikke', blockerCount: '{{count}} blokkering', blockerCount_other: '{{count}} blokkeringer', readinessHint: 'Kjør kontroll når du skal delegere kode.', checkReadiness: 'Sjekk autonomi', noTasks: 'Ingen oppgaver ennå.',
+      codingLane: 'KODEFLYT', codingFlow: 'Oppgave → worker → evidens → PR / CI → supervisor → merge', researchLane: 'RESEARCH', researchFlow: 'Prosjekt → Research Run → provider / modell → lagret rapport', researchReadOnly: 'Separat read-only flyt uten worktree eller merge-loop.'
     },
     system: {
       eyebrow: 'KONTROLLPLAN', title: 'System', language: 'Språk', models: 'Modeller', integrations: 'Integrasjoner',
-      opencode: 'OpenCode', github: 'GitHub', persistence: 'Lagring', masterModel: 'Master-modell', codingModel: 'Kodermodell'
+      opencode: 'OpenCode', opencodeOffline: 'OpenCode frakoblet', github: 'GitHub', persistence: 'Lagring', masterModel: 'Master-modell', codingModel: 'Kodermodell', configured: 'konfigurert', optional: 'valgfritt', workspaceRoots: 'Prosjektmapper', none: 'ingen'
     }
   } },
   en: { translation: {
@@ -43,10 +45,10 @@ const resources = {
       language: 'Language', root: 'Projects folder', rootHint: 'For example C:\\Projects or /home/me/Projects', coding: 'Default coding model', master: 'Master model', finish: 'Finish setup',
       opencodeOk: 'OpenCode detected', opencodeMissing: 'OpenCode is not available yet. Normal chat/project management still works.'
     },
-    master: { eyebrow: 'PERSONAL ASSISTANT', title: 'Master', newChat: 'New conversation', emptyTitle: 'What do you want to do?', emptyCopy: 'Ask anything. When you want work started, Master can use Dashboard tools.', placeholder: 'Message Master…', send: 'Send', global: 'General conversation', project: 'Project context', noModel: 'Choose a Master model in setup or System.' },
-    projects: { eyebrow: 'WORKSPACES', title: 'Projects', discover: 'Import project', create: 'New local project', empty: 'No projects yet.', emptyCopy: 'Import an existing Git repository or create a new local project.', usable: 'Ready to use', managed: 'Managed', automation: 'Autonomy needs setup', open: 'Open', tasks: 'tasks', createTitle: 'New local project', name: 'Name', folder: 'Folder name', description: 'Description', root: 'Location', createAction: 'Create project', discoverTitle: 'Import existing project', scan: 'Scan project folders', import: 'Import', noRepos: 'No new Git repositories found.' },
-    project: { back: 'Back to projects', overview: 'Overview', tasks: 'Tasks', readiness: 'Autonomy', normalUse: 'Normal use', strictReadiness: 'Autonomous execution', createTask: 'New task', title: 'Title', description: 'Description', criteria: 'Acceptance criteria', create: 'Create task' },
-    system: { eyebrow: 'CONTROL PLANE', title: 'System', language: 'Language', models: 'Models', integrations: 'Integrations', opencode: 'OpenCode', github: 'GitHub', persistence: 'Persistence', masterModel: 'Master model', codingModel: 'Coding model' }
+    master: { eyebrow: 'PERSONAL ASSISTANT', title: 'Master', newChat: 'New conversation', emptyTitle: 'What do you want to do?', emptyCopy: 'Ask anything. When you want work started, Master can use Dashboard tools.', placeholder: 'Message Master…', send: 'Send', global: 'General conversation', project: 'Project context', noModel: 'No Master model selected', you: 'You', messageCount: '{{count}} message', messageCount_other: '{{count}} messages' },
+    projects: { eyebrow: 'WORKSPACES', title: 'Projects', discover: 'Import project', create: 'New local project', empty: 'No projects yet.', emptyCopy: 'Import an existing Git repository or create a new local project.', usable: 'Ready to use', managed: 'Managed', localProject: 'Local project', automation: 'Autonomy needs setup', open: 'Open', tasks: 'tasks', createTitle: 'New local project', name: 'Name', folder: 'Folder name', description: 'Description', root: 'Location', createAction: 'Create project', discoverTitle: 'Import existing project', scan: 'Scan project folders', import: 'Import', noRepos: 'No new Git repositories found.' },
+    project: { back: 'Back to projects', overview: 'Overview', tasks: 'Tasks', readiness: 'Autonomy', normalUse: 'Normal use', strictReadiness: 'Autonomous execution', createTask: 'New task', title: 'Title', description: 'Description', criteria: 'Acceptance criteria', create: 'Create task', eyebrow: 'PROJECT', notFound: 'Project not found', blockerCount: '{{count}} blocker', blockerCount_other: '{{count}} blockers', readinessHint: 'Run the check when you are ready to delegate coding work.', checkReadiness: 'Check autonomy', noTasks: 'No tasks yet.', codingLane: 'CODING LANE', codingFlow: 'Task → worker → evidence → PR / CI → supervisor → merge', researchLane: 'RESEARCH', researchFlow: 'Project → Research Run → provider / model → persisted report', researchReadOnly: 'Separate read-only lane without worktrees or the merge loop.' },
+    system: { eyebrow: 'CONTROL PLANE', title: 'System', language: 'Language', models: 'Models', integrations: 'Integrations', opencode: 'OpenCode', opencodeOffline: 'OpenCode offline', github: 'GitHub', persistence: 'Persistence', masterModel: 'Master model', codingModel: 'Coding model', configured: 'configured', optional: 'optional', workspaceRoots: 'Workspace roots', none: 'none' }
   } },
 } as const;
 

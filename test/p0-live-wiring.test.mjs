@@ -24,3 +24,25 @@ test('OpenCode v1 adapter registers Dashboard MCP through the SDK and is idempot
   assert.equal(second.changed, false);
   assert.equal(calls.length, 1);
 });
+
+
+test('first-run setup exposes a reusable MCP reconciliation hook', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const setup = await readFile(new URL('../server/setup/service.mjs', import.meta.url), 'utf8');
+  const entry = await readFile(new URL('../server/index.mjs', import.meta.url), 'utf8');
+  assert.match(setup, /async function ensureDashboardMcp/);
+  assert.match(setup, /const mcp = await ensureDashboardMcp\(\)/);
+  assert.match(entry, /setup\.preferences\(\)\.completed/);
+  assert.match(entry, /setup\.ensureDashboardMcp\(\)/);
+});
+
+test('P0 React copy is locale-backed and shows Master model state', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const app = await readFile(new URL('../web/src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /setup\.masterModel/);
+  assert.match(app, /master\.messageCount/);
+  assert.match(app, /project\.codingFlow/);
+  assert.match(app, /project\.researchFlow/);
+  assert.doesNotMatch(app, />Project not found</);
+  assert.doesNotMatch(app, />Sjekk autonomi</);
+});
