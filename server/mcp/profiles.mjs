@@ -34,6 +34,7 @@ export const MCP_PROFILES = Object.freeze({
     description: 'Master-agent orchestration tools. Mutations still pass through AI Dashboard control-plane invariants.',
     tools: Object.freeze([
       ...READ_TOOLS,
+      'project_create',
       'agent_create',
       'agent_update',
       'task_create',
