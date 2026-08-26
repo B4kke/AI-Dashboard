@@ -39,6 +39,11 @@ export class SqliteControlStore {
         expires_at INTEGER NOT NULL,
         updated_at TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS app_meta (
+        meta_key TEXT PRIMARY KEY,
+        payload TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
     `);
     const columns = this.db.prepare("PRAGMA table_info('control_state')").all().map((row) => row.name);
     if (!columns.includes('revision')) this.db.exec('ALTER TABLE control_state ADD COLUMN revision INTEGER NOT NULL DEFAULT 0');
@@ -115,6 +120,20 @@ export class SqliteControlStore {
       if (error.code === 'ENOENT') return false;
       throw error;
     }
+  }
+
+  getMeta(key, fallback = null) {
+    const row = this.db.prepare('SELECT payload FROM app_meta WHERE meta_key = ?').get(String(key));
+    if (!row?.payload) return fallback;
+    try { return JSON.parse(row.payload); } catch { return fallback; }
+  }
+
+  setMeta(key, value) {
+    this.db.prepare(`
+      INSERT INTO app_meta (meta_key, payload, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(meta_key) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(String(key), JSON.stringify(value ?? null), nowIso());
+    return value;
   }
 
   acquire(lockKey, owner, ttlMs = this.lockTtlMs) {
