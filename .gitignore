@@ -1,4 +1,6 @@
 .env
+.env.bak*
+*.bak
 data/*.json
 data/*.sqlite
 data/*.sqlite-wal
@@ -8,6 +10,8 @@ data/master/
 .ai-dashboard-beta/
 .ai-dashboard-beta-archive*/
 .ai-dashboard-beta*.pid
+.tmp/
+.tmp
 node_modules/
 .DS_Store
 *.log
