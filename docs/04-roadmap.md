@@ -2,7 +2,7 @@
 
 > Current focus: prove and harden the autonomous control plane against real OpenCode/GitHub/MCP use. Project-first discovery/UX is implemented as the operator layer over the same fail-closed control plane. Reliability and evidence still outrank feature breadth.
 
-> Evidence boundary: implementation, deterministic tests, exact-head GitHub Actions and real external dogfood are separate levels. Project-first implementation head `5af53aed0bc14847f2618db7162f81ac60a7b3d1` passed GitHub Actions run #451 on Ubuntu + Windows, including rendered browser acceptance. The current branch head must be reverified after any later commit. Full current-stack OpenCode + disposable GitHub/Actions PC beta remains mandatory before calling the foundation ready.
+> Evidence boundary: implementation, deterministic tests, exact-head GitHub Actions and real external dogfood are separate levels. P0 head `f959a7a64781cacc08c3b110c1ec3dfc334fa9c5` passed GitHub Actions push `33020151327` + PR `33020241708` (Linux + Windows + rendered 1440/768/390); Master head `a990d75` passed push `32995600890` + PR `32995605683`, fleet head `36b94c2` passed `32988127729`, Project-first head `5af53aed0bc14847f2618db7162f81ac60a7b3d1` passed run #451 — all on Ubuntu + Windows including rendered browser acceptance. The current branch head must be reverified after any later commit. Full current-stack OpenCode + disposable GitHub/Actions PC beta remains mandatory before calling the foundation ready.
 
 ## Project-first UX & repository discovery — IMPLEMENTED / BETA-CANDIDATE
 
@@ -180,7 +180,7 @@ Implemented early slice (normal chat environment, inspired by `odysseus-dev/odys
 - mobile-first: desktop 300px+1fr grid, tablet/phone stacked, no horizontal overflow, 44px touch targets,
 - deterministic coverage `test/master-chat.test.mjs` + rendered smoke 1440/768/390 for `/#/master` and `/project/:id/master` (see hardening checkpoint).
 
-Exact-head Linux+Windows GitHub Actions verified on commit `a990d75` (push `32995600890` + PR `32995605683`).
+Exact-head Linux+Windows GitHub Actions verified on commit `a990d75` (push `32995600890` + PR `32995605683`) and re-verified on P0 head `f959a7a` (push `33020151327` + PR `33020241708`) together with first-run setup, MCP reconciliation and React i18n.
 
 Still planned:
 
@@ -199,6 +199,8 @@ Implemented:
 - System UI/API for inspection, explicit memory creation, editing and deletion plus direct SOUL editing,
 - secret-like content rejection and local runtime data excluded from Git,
 - memory/SOUL/chat explicitly context only — never machine evidence or authority.
+
+Exact-head re-verified on P0 head `f959a7a` (push `33020151327` + PR `33020241708`) together with first-run setup and MCP reconciliation.
 
 Still planned:
 
@@ -269,7 +271,7 @@ Implemented/tested:
 - disjoint scopes can run concurrently when dependencies/concurrency allow.
 - Project-scoped Agent fleet operator surface: whitelisted `POST /api/projects/:id/agents`, `PATCH /api/agents/:id`, `GET /api/projects/:id/agents` (fleet view with assigned Task/active Run) and rendered Agents tab at 1440/768/390 showing name/role/enabled/harness/model/capabilities/workScopes/assigned Task/active Run.
 
-Exact-head Linux+Windows GitHub Actions verified on commit `36b94c2` (PR run `32988127729`) and re-verified on `a990d75` (PR `32995605683`).
+Exact-head Linux+Windows GitHub Actions verified on commit `36b94c2` (PR run `32988127729`), re-verified on `a990d75` (PR `32995605683`) and re-verified on P0 head `f959a7a` (push `33020151327` + PR `33020241708`).
 
 Still planned:
 
@@ -296,6 +298,29 @@ Already present:
 
 Planned: hardware-aware model cookbook, richer local endpoint discovery, role recommendations, usage/cost accounting and degraded-state management.
 
+## P0 — Product Foundation — IMPLEMENTED / LEVEL-3 VERIFIED
+
+Implemented and level-3 verified on P0 head `f959a7a` (push `33020151327` + PR `33020241708`):
+
+- first-run setup with `locale=nb` default + explicit `en` option, persisted in `setup.preferences.v1` and applied as `setLocale`/`setMasterModel`,
+- React + Vite + TypeScript frontend (`web/`) replaces legacy hand-written DOM layer as the canonical operator surface; legacy `public/app.js` removed, React is now the CSP-safe root and readiness signal for rendered smoke,
+- conservative verification-command detection becomes normal Project default on one-click import; explicit operator override (including empty list) remains advanced,
+- Project discovery/import is normal one-click flow; GitHub-only `Clone & Import` into validated Workspace Root,
+- new local Project creates folder, Git repo, `README`/`.gitignore` and initial commit,
+- normal Project usability (`server/core/project-usability.mjs`) is separate from strict autonomous readiness (`needs_sync` preflight),
+- default Coding/Planner/Supervisor/Research/Master models are recommended/inherited automatically when providers are available (`server/setup/service.mjs` `selectCodingModel`/`discoverDirectDefault`),
+- Dashboard reconciles `/mcp/master` into the stable OpenCode v1 SDK via `mcp.status`/`mcp.add` (`server/integrations/opencode.mjs` `ensureMcpServer` — idempotent, fail-closed without fabricating success),
+- Master is real AI SDK model chat with Dashboard MCP tools and general personal-assistant role (`server/master/service.mjs`),
+- Master has local `SOUL.md` + bounded persistent memory with scope/kind/source/confidence (`server/master/memory.mjs`),
+- bounded post-turn reflection can learn explicit preferences/goals/working modes from operator message + own answer,
+- `SOUL.md`/memory is inspectable, editable and deletable in System; secret-like content is rejected and runtime personal data stays out of Git,
+- normal and publish-less memory/chat is context only, never Git/CI/review/merge evidence or authorization,
+- `nb`/`en` i18n covers the central React surfaces and Project-usability copy (`web/src/i18n.ts`, `server/core/project-usability.mjs`),
+- mobile width-contract is fail-closed; rendered smoke covers `/#/master` (setup card), `/#/projects`, `/#/project/:id`, `/#/master/:id` and `/#/system` on 1440/768/390,
+- production `npm audit --omit=dev --audit-level=high` is gated in CI; lockfile is pinned and refreshed via `p0-lock-and-verify.yml`.
+
+Still planned: richer Master streaming/progressive tool rendering, per-agent persona/memory, automatic fleet scheduler (M3A/M3C/M3E), broader provider/harness breadth and remote/public topology. See Issue #1 for the remaining real PC-beta E2E gate.
+
 ## Immediate verification gates
 
 On one clean exact final commit:
@@ -313,7 +338,7 @@ On one clean exact final commit:
 11. deterministic beta harness/resume proves stable IDs/contracts/evidence/idempotence,
 12. full real OpenCode + disposable GitHub Actions campaign including failure/repair/rejection/correction/merge.
 
-Gates 1–4 were proven on Project-first implementation head `5af53ae` / Actions `#451` before the documentation truth-sync. They were re-verified on fleet head `36b94c2` / PR run `32988127729` and on Master head `a990d75` / PR run `32995605683`. They must be green again on the final branch head after any subsequent commit.
+Gates 1–4 were proven on Project-first implementation head `5af53ae` / Actions `#451` before the documentation truth-sync. They were re-verified on fleet head `36b94c2` / PR run `32988127729`, on Master head `a990d75` / PR run `32995605683` and on P0 head `f959a7a` / push `33020151327` + PR `33020241708`. They must be green again on the final branch head after any subsequent commit.
 
 A failed external scenario is evidence to harden the control plane, never permission to weaken a gate.
 

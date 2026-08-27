@@ -1,12 +1,12 @@
 # Hardening review checkpoint
 
-Status date: 2026-08-26  
+Status date: 2026-08-27  
 Branch: `bootstrap/control-center-foundation`  
 PR: #2
 
 This is the current adversarial-review checkpoint. `docs/04-roadmap.md` owns priority; `AGENTS.md` owns binding agent/safety rules; `docs/10-project-first-ux-discovery.md` and `docs/11-design-principles.md` own the Project-first UX/design contract.
 
-A feature is not promoted beyond its evidence level merely because source code exists. The fleet slice head `36b94c2bd978be3e358957cf06b23adae0f1bd5c` passed exact-head GitHub Actions PR run `32988127729` (Linux `test` success 16:24:45Z + Windows `Windows portability` success 16:30:07Z) after Project-first head `5af53aed0bc14847f2618db7162f81ac60a7b3d1` (`#451`/`32897981754`). Master head `a990d75285e021a7e235f0c2b8f144211debbb23` passed exact-head GitHub Actions push run `32995600890` and PR run `32995605683` (Linux `test` + Windows `Windows portability` both success). Any later commit becomes a new head and must be green again before level-3 is current.
+A feature is not promoted beyond its evidence level merely because source code exists. The fleet slice head `36b94c2bd978be3e358957cf06b23adae0f1bd5c` passed exact-head GitHub Actions PR run `32988127729` (Linux `test` success 16:24:45Z + Windows `Windows portability` success 16:30:07Z) after Project-first head `5af53aed0bc14847f2618db7162f81ac60a7b3d1` (`#451`/`32897981754`). Master head `a990d75285e021a7e235f0c2b8f144211debbb23` passed exact-head GitHub Actions push run `32995600890` and PR run `32995605683` (Linux `test` + Windows `Windows portability` both success). P0 head `f959a7a64781cacc08c3b110c1ec3dfc334fa9c5` passed exact-head push `33020151327` + PR `33020241708` (Linux + Windows + rendered 1440/768/390). Any later commit becomes a new head and must be green again before level-3 is current.
 
 The full real OpenCode + disposable GitHub/Actions PC-beta campaign remains a separate level-4 external gate.
 
@@ -58,15 +58,23 @@ Master head (level 3 verified on exact-head Actions):
 - Local deterministic: `test/master-chat.test.mjs` 3/3 + `agent-fleet` 2/2 + `operator-ui-contract` 4/4; syntax `node --check` clean
 - Local rendered smoke (isolated `control.sqlite`): `/#/master` + `/#/master/:id` + `/#/project/:id/master` at 1440×1000, 768×1000, 390×844 — all **RENDERED**, no overflow/runtime errors, `.master-chat-panel`/`.master-bubble` found (re-tried 390 once). Screenshots in `.tmp/ui-master/` (not committed; CI uploads `ui-smoke-<sha>.png`).
 
-This proves deterministic + exact-head Actions for both fleet and Master heads. Neither proves real OpenCode/GitHub interoperability (level 4).
+P0 Product Foundation head (level 3 verified on exact-head Actions — includes first-run, MCP reconciliation and React i18n/polish):
+
+- Commit: `f959a7a64781cacc08c3b110c1ec3dfc334fa9c5`
+- GitHub Actions push `33020151327`: `test` Linux success + `Windows portability` success (incl. audit + rendered 1440/768/390)
+- GitHub Actions PR `33020241708`: `test` Linux success + `Windows portability` success (incl. audit + rendered 1440/768/390)
+- Local deterministic: 389 tests pass (incl. `test/setup-service.test.mjs` 2/2 + `test/p0-live-wiring.test.mjs` 4/4 + `test/master-memory.test.mjs` 2/2 + `test/mobile-layout.test.mjs` + `test/ui-contract.test.mjs`); `node --check` clean
+- Rendered smoke covers `/#/master` (setup card), `/#/projects`, `/#/project/:id`, `/#/master/:id` and `/#/system` at 1440/768/390 without overflow/runtime errors
+
+This proves deterministic + exact-head Actions for fleet, Master and P0 heads. None proves real OpenCode/GitHub interoperability (level 4).
 
 ## Project-level autonomy / M3 foundation
 
 11. **Open:** explicit Project objective / definition-of-done model with durable project-level completion criteria and evidence.
 12. **Open:** automatic bounded Master/fleet scheduler above ordinary Task delegation. It must re-evaluate canonical state, create only scoped Tasks and never self-certify completion.
-13. **Implemented + deterministic + level-3 verified on `a990d75`:** persistent Master AI conversation/session context (global + project-aware). `masterConversations`/`masterMessages` StateStore v9, `GET/POST /api/master/conversations`, `GET/PATCH /api/master/conversations/:id`, `GET/POST /api/master/conversations/:id/messages` whitelisted over StateStore (projectId validated, durable history). Internal assistant/control-plane messages retain `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT` kinds and bounded tool-call metadata; ordinary UI/HTTP user messages are constrained to `user` + `conversation` so they cannot fabricate assistant, tool or verified-result history. Normal chat UI: global `Master` (`#/master`) + project `Master` tab (`#/project/:id/master`) — sidebar conversation list + centered bubble stream (user right / assistant left) + rounded composer (`Message Master…`, `＋ Task`/`Research` via control plane). Looks like a normal chat (inspired by `odysseus-dev/odysseus@dev` browser layout, `AGPL-3.0-or-later` — own CSS/JS, no substantial reuse) and stays subordinate to control-plane evidence/authority. The current workflow now includes both global and Project Master routes in the rendered 1440/768/390 smoke; this later working-tree change still requires fresh exact-head Actions before inheriting level 3. Bounded inspectable memory remains open (history is durable, richer memory/persona separate).
+13. **Implemented + deterministic + level-3 verified on `a990d75` + re-verified on `f959a7a`:** persistent Master AI conversation/session context (global + project-aware). `masterConversations`/`masterMessages` StateStore v9, `GET/POST /api/master/conversations`, `GET/PATCH /api/master/conversations/:id`, `GET/POST /api/master/conversations/:id/messages` whitelisted over StateStore (projectId validated, durable history). Internal assistant/control-plane messages retain `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT` kinds and bounded tool-call metadata; ordinary UI/HTTP user messages are constrained to `user` + `conversation` so they cannot fabricate assistant, tool or verified-result history. Normal chat UI: global `Master` (`#/master`) + project `Master` tab (`#/project/:id/master`) — sidebar conversation list + centered bubble stream (user right / assistant left) + rounded composer (`Message Master…`, `＋ Task`/`Research` via control plane). Looks like a normal chat (inspired by `odysseus-dev/odysseus@dev` browser layout, `AGPL-3.0-or-later` — own CSS/JS, no substantial reuse) and stays subordinate to control-plane evidence/authority. Verified on push `32995600890`/`32995605683` (Master) and push `33020151327` + PR `33020241708` (P0). Bounded inspectable memory is now implemented via M3C (SOUL.md + durable memory) — richer per-agent memory remains open.
 14. **Implemented:** structured diff/scope/verification/CI/supervisor/merge evidence is primary; raw evidence JSON remains Advanced.
-15. **Implemented + deterministic coverage + level-3 verified on `36b94c2` + `a990d75` + local rendered:** Project-scoped Agent fleet operator surface. `GET /api/projects/:id/agents` (fleet view with assigned Task/active Run), `POST /api/projects/:id/agents` and `PATCH /api/agents/:id` are whitelisted over `StateStore` (`addAgent`/`updateAgent`) as canonical truth — same guards as MCP `agent_create`/`agent_update` (unique name, no overlapping mutating scopes, read-only roles cannot execute work, identity/scopes lock after execution history, active work retains ownership, disable fail-closed with unfinished assigned work, no raw field bypass, no alternate execution motor). Rendered Agents tab at 1440/768/390 shows name/role/enabled/harness/model/capabilities/workScopes/assigned Task/active Run/ownership and exposes create/edit/enable/disable through dialogs/toasts (no native alert/prompt/confirm). No publish/review/merge bypass. `docs/04-roadmap.md` M3E is now the implemented early slice for fleet controls. Verified on PR run `32988127729` (fleet head `36b94c2`) and PR run `32995605683` (Master head `a990d75`).
+15. **Implemented + deterministic coverage + level-3 verified on `36b94c2` + `a990d75` + `f959a7a` + local rendered:** Project-scoped Agent fleet operator surface. `GET /api/projects/:id/agents` (fleet view with assigned Task/active Run), `POST /api/projects/:id/agents` and `PATCH /api/agents/:id` are whitelisted over `StateStore` (`addAgent`/`updateAgent`) as canonical truth — same guards as MCP `agent_create`/`agent_update` (unique name, no overlapping mutating scopes, read-only roles cannot execute work, identity/scopes lock after execution history, active work retains ownership, disable fail-closed with unfinished assigned work, no raw field bypass, no alternate execution motor). Rendered Agents tab at 1440/768/390 shows name/role/enabled/harness/model/capabilities/workScopes/assigned Task/active Run/ownership and exposes create/edit/enable/disable through dialogs/toasts (no native alert/prompt/confirm). No publish/review/merge bypass. `docs/04-roadmap.md` M3E is now the implemented early slice for fleet controls. Verified on PR run `32988127729` (fleet head `36b94c2`), PR run `32995605683` (Master head `a990d75`) and push `33020151327` + PR `33020241708` (P0 head `f959a7a`).
 
 ## Master AI / chat direction — implemented + level-3 verified (normal chat)
 
@@ -81,9 +89,11 @@ Implemented as a normal chat environment, inspired by current `odysseus-dev/odys
 - centered `✦ Master` empty state like a normal chat, tip, durable history,
 - mobile-first: `300px+1fr` → single column on tablet/phone, no overflow, rounded `Message Master…` composer with `↑` send.
 
-Exact-head Linux+Windows GitHub Actions verified on `a990d75` (push `32995600890` + PR `32995605683`).
+Exact-head Linux+Windows GitHub Actions verified on `a990d75` (push `32995600890` + PR `32995605683`) and re-verified on `f959a7a` (push `33020151327` + PR `33020241708`).
 
-Still open: real provider streaming (currently stub echo), richer Task/Run/file/evidence attachments, per-agent persona/memory and fleet scheduler (see `docs/04-roadmap.md` M3A/M3C).
+Master now uses real AI SDK direct-model inference + Dashboard `/mcp/master` tools, local `SOUL.md` and bounded durable memory with reflection (see M3C). Token streaming/progressive tool rendering and richer file/evidence attachments remain open.
+
+Still open: token streaming, richer Task/Run/file/evidence attachments, per-agent persona/memory and fleet scheduler (see `docs/04-roadmap.md` M3A/M3C).
 
 ## Review invariants
 
