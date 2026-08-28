@@ -4,7 +4,7 @@ Self-hosted control center for AI-assisted and progressively autonomous project 
 
 AI Dashboard connects existing projects/repositories, direct Tasks, optional Ideas/Explorations, specialist agents, AI coding harnesses, model providers, MCP capabilities, read-only Research Runs, isolated Git worktrees and GitHub/CI evidence behind one fail-closed control plane.
 
-> Status: pre-alpha / PC-beta candidate with Project-first discovery + MCP/Agent Registry + **Master chat** (normal chat environment) + **P0 Product Foundation (norsk-default + React + Master memory + plug-and-play Project import)** early slices. P0 head `f959a7a` is Linux+Windows Actions green on exact head (push `33020151327` + PR `33020241708`); Master head `a990d75` (push `32995600890` + PR `32995605683`), fleet head `36b94c2` (`#32988127729`) and Project-first head `5af53ae` (`#451`) were prior level-3 milestones. A beta claim still requires Linux + Windows green on the exact final commit and the complete current-stack OpenCode/GitHub PC beta.
+> Status: pre-alpha / PC-beta candidate. The published branch head `2464549` passed Linux, Windows and rendered-UI Actions in run `33071272602`. Any later head must earn that evidence again. A beta claim still requires the complete current-stack OpenCode/GitHub PC beta; deterministic tests and green Actions are necessary but not sufficient.
 
 ## Product model
 
@@ -57,6 +57,8 @@ See `docs/10-project-first-ux-discovery.md` and `docs/11-design-principles.md`.
 - **ACP** is a future generic coding-agent control boundary.
 
 OpenCode SDK, MCP and Octokit are adapters around external protocols. They do not own Project/Task/Run truth or irreversible decisions.
+
+The System UI can add or edit custom OpenAI-compatible providers by `baseUrl`, discover their models, and set global Coding/Planner/Supervisor/Research defaults plus the direct Master model. Projects can override all four role models, and specialist agents can select their own coding model. API-key values are never persisted in Dashboard state: providers reference an environment-variable name only. Coding roles still execute through the configured harness (OpenCode first); Master and Research use direct providers.
 
 ## MCP — August 2026 architecture
 
@@ -141,7 +143,7 @@ The intended Master AI can inspect Projects/Tasks/Runs/agents/evidence, reason a
 
 It cannot fabricate evidence, approve its own coding work, interpret unavailable CI as green, force-push/reset, merge an unreviewed checkpoint or bypass locks/recovery.
 
-Persistent Master chat is implemented as a **normal chat environment** (global `Master` + project `Master` tab, sidebar conversations + centered bubble stream + rounded `Message Master…` composer, inspired by `odysseus-dev/odysseus@dev` but own implementation — `odysseus` is `AGPL-3.0-or-later`, no substantial reuse). It persists history and renders internal assistant/control-plane turn kinds as `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`. Ordinary HTTP/UI input can create only `user` + `conversation`; it cannot fabricate assistant roles, tool calls or verified-result labels. Task/Research creation still enters the normal control plane. Master now uses real AI SDK model inference + Dashboard MCP tools, a local runtime `SOUL.md`, and bounded inspectable/editable/deletable durable memory with automatic post-turn reflection. A full automatic fleet scheduler remains planned.
+Persistent Master chat is implemented as a **normal global chat environment** with a conversation sidebar, centered message stream and composer. Project-scoped conversations are durable in StateStore/API, but the canonical React UI does not yet expose a Project Master destination. History persists and ordinary HTTP/UI input can create only `user` + `conversation`; it cannot fabricate assistant roles, tool calls or verified-result labels. Task/Research creation still enters the normal control plane. Master uses real AI SDK model inference + Dashboard MCP tools, a local runtime `SOUL.md`, and bounded inspectable/editable/deletable durable memory with automatic post-turn reflection. A full automatic fleet scheduler remains planned.
 
 ## Project readiness and admission identity
 
@@ -301,10 +303,10 @@ MCP server endpoints:
 - recoverable Clone & Import for complete matching clones,
 - human-readable state/next-action presentation with dependency-aware readiness,
 - structured evidence as the primary operator view with raw JSON under Advanced,
-- contextual toasts/dialogs instead of native alert/prompt/confirm flows,
+- contextual banners/dialogs instead of native alert/prompt/confirm flows,
 - responsive local control UI + SSE,
 - SQLite/WAL state/journal/leases,
-- Exploration -> optional Project promotion,
+- Exploration -> optional Project promotion in the control plane (canonical React surface still pending),
 - direct Tasks + optional Idea/planner,
 - read-only direct-model Research,
 - official OpenCode SDK adapter,
@@ -315,8 +317,8 @@ MCP server endpoints:
 - native `input_required` operator round-trip,
 - optional external MCP elicitation bridge,
 - default-deny external tool policy,
-- durable specialist Agent Registry (v9) + persistent Master chat (normal chat UI, 1440/768/390, no publish/merge bypass),
-- Project-scoped Agent fleet operator surface (Registry as canonical truth, fleet view with assigned Task/active Run, whitelisted HTTP create/edit/enable/disable, rendered Agents tab at 1440/768/390),
+- durable specialist Agent Registry (v9) + persistent Master chat (no publish/merge bypass),
+- Project-scoped Agent fleet operator surface (Registry as canonical truth, fleet view with assigned Task/active Run, whitelisted HTTP create/enable/disable; richer editing remains open),
 - global + project-aware Master conversations/messages (`POST/GET /api/master/*`, kind-tagged, toolCalls capped),
 - Task assignment/workScopes,
 - static + runtime anti-overlap,

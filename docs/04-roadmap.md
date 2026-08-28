@@ -2,7 +2,7 @@
 
 > Current focus: prove and harden the autonomous control plane against real OpenCode/GitHub/MCP use. Project-first discovery/UX is implemented as the operator layer over the same fail-closed control plane. Reliability and evidence still outrank feature breadth.
 
-> Evidence boundary: implementation, deterministic tests, exact-head GitHub Actions and real external dogfood are separate levels. P0 head `f959a7a64781cacc08c3b110c1ec3dfc334fa9c5` passed GitHub Actions push `33020151327` + PR `33020241708` (Linux + Windows + rendered 1440/768/390); Master head `a990d75` passed push `32995600890` + PR `32995605683`, fleet head `36b94c2` passed `32988127729`, Project-first head `5af53aed0bc14847f2618db7162f81ac60a7b3d1` passed run #451 — all on Ubuntu + Windows including rendered browser acceptance. The current branch head must be reverified after any later commit. Full current-stack OpenCode + disposable GitHub/Actions PC beta remains mandatory before calling the foundation ready.
+> Evidence boundary: implementation, deterministic tests, exact-head GitHub Actions and real external dogfood are separate levels. Published head `2464549fdb1c43d61e443da8035e06e7f5c67e2b` passed Actions run `33071272602` on Linux and Windows with the then-current rendered UI. Any later head, including a UI repair, must be reverified. Full current-stack OpenCode + disposable GitHub/Actions PC beta remains mandatory before calling the foundation ready.
 
 ## Project-first UX & repository discovery — IMPLEMENTED / BETA-CANDIDATE
 
@@ -23,13 +23,13 @@ Implemented/tested:
 - argument-array Clone & Import into validated Workspace Roots,
 - safe clone recovery only for a complete exact-origin repository with a real HEAD,
 - structured evidence as primary operator view; raw JSON under Advanced,
-- contextual dialogs/toasts rather than native alert/prompt/confirm,
-- first-class Task repair for `backlog`/`needs_input`,
+- contextual dialogs/banners rather than native alert/prompt/confirm,
+- safe Task lifecycle actions plus ordinary `needs_input` response/requeue,
 - first-class ordinary `needs_input` response + explicit requeue path,
-- Project Settings covering the existing Project/autonomy contract,
+- Project Settings for description, base branch, verification commands and all four role-model overrides,
 - existing Windows path aliases canonicalized before Workspace Root identity comparison,
-- mobile Project navigation with Overview / Tasks / Agents / GitHub primary and Evidence / Research / Settings under `More`,
-- fail-closed rendered Chrome/Chromium acceptance at 1440 / 768 / 390 for Dashboard, Project Overview, Tasks and full Project Settings.
+- responsive two-column Project tab navigation on narrow screens,
+- deep-linkable Project tabs and a fail-closed Chrome/Chromium workflow configured at 1440 / 768 / 390 for every Project destination.
 
 Rendered acceptance fails on missing expected UI state, uncaught runtime/console errors, timeout or required horizontal overflow.
 
@@ -37,7 +37,9 @@ Intentionally partial:
 
 - global Project defaults currently cover role-model defaults plus autonomy mode/CI requirement; broader harness/verification/concurrency defaults stay deferred,
 - discovery remains depth-one and informational; it never auto-imports or starts execution,
-- richer Agent Registry/fleet management UI remains open,
+- Project autonomy-policy editing, full Task repair, richer Agent Registry editing, MCP registry and Exploration UI remain open in canonical React,
+- Project-scoped Master conversations exist in StateStore/API but do not yet have a canonical React destination,
+- the expanded rendered workflow must pass on the exact new head before the UI repair is level-3 evidence,
 - real OpenCode/GitHub usability and autonomous dogfood remain project-wide external gates.
 
 See `docs/09-hardening-review-checkpoint.md`, `docs/10-project-first-ux-discovery.md` and `docs/11-design-principles.md`.
@@ -166,24 +168,25 @@ Implemented via M3B:
 
 - first-class Master conversation/session history (global + project-scoped, `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`).
 
-### M3B — Master conversational workspace / chat — IMPLEMENTED / LEVEL-3 VERIFIED
+### M3B — Master conversational workspace / chat — CONTROL PLANE IMPLEMENTED / REACT PARTIAL
 
 Implemented early slice (normal chat environment, inspired by `odysseus-dev/odysseus@dev` but own implementation — `odysseus` is `AGPL-3.0-or-later`, no substantial code reuse):
 
-- global Master page (`#/master`) + project-aware `Master` tab (`#/project/:id/master`) with normal chat look: sidebar conversation list + centered bubble stream + rounded composer (inspired by Odysseus browser layout, own CSS/JS),
+- global Master page (`#/master`) with normal chat look: sidebar conversation list + centered bubble stream + rounded composer,
 - persistent global and project-scoped conversations + messages in `StateStore` schema v9 (`masterConversations`/`masterMessages`),
 - `GET/POST /api/master/conversations`, `GET/PATCH /api/master/conversations/:id`, `GET/POST /api/master/conversations/:id/messages` with fail-closed invariants,
-- internal assistant/control-plane message kinds `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT` visibly pill-tagged; ordinary UI/HTTP user input is fixed to `user` + `conversation` and cannot fabricate assistant/tool/verified history,
+- internal assistant/control-plane message kinds remain durable and ordinary UI/HTTP user input is fixed to `user` + `conversation`, so it cannot fabricate assistant/tool/verified history,
 - real AI SDK direct-model responses through the configured Master provider/model plus Dashboard `/mcp/master` tools; bounded tool-call history rejects direct publish/review/merge bypass,
-- composer `＋ Task` / `Research` creates via control-plane `POST /api/tasks` + `POST /api/research` — no publish/review/merge bypass, no evidence fabrication,
 - empty state like a normal chat: centered `✦ Master` mark, tip, durably stored history,
 - mobile-first: desktop 300px+1fr grid, tablet/phone stacked, no horizontal overflow, 44px touch targets,
-- deterministic coverage `test/master-chat.test.mjs` + rendered smoke 1440/768/390 for `/#/master` and `/project/:id/master` (see hardening checkpoint).
+- deterministic coverage in `test/master-chat.test.mjs`; published heads historically rendered global Master at 1440/768/390.
 
 Exact-head Linux+Windows GitHub Actions verified on commit `a990d75` (push `32995600890` + PR `32995605683`) and re-verified on P0 head `f959a7a` (push `33020151327` + PR `33020241708`) together with first-run setup, MCP reconciliation and React i18n.
 
 Still planned:
 
+- canonical React destination for Project-scoped Master conversations,
+- visible turn-kind labels and contextual Task/Research shortcuts,
 - token streaming/progressive tool rendering (current runtime is real model inference but returns the completed turn),
 - richer context attachments (Tasks/Runs/files/reports/evidence) and file references,
 - per-agent persona/memory and automatic fleet scheduler (M3A/M3C).

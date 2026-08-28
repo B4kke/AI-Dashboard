@@ -6,7 +6,7 @@ PR: #2
 
 This is the current adversarial-review checkpoint. `docs/04-roadmap.md` owns priority; `AGENTS.md` owns binding agent/safety rules; `docs/10-project-first-ux-discovery.md` and `docs/11-design-principles.md` own the Project-first UX/design contract.
 
-A feature is not promoted beyond its evidence level merely because source code exists. The fleet slice head `36b94c2bd978be3e358957cf06b23adae0f1bd5c` passed exact-head GitHub Actions PR run `32988127729` (Linux `test` success 16:24:45Z + Windows `Windows portability` success 16:30:07Z) after Project-first head `5af53aed0bc14847f2618db7162f81ac60a7b3d1` (`#451`/`32897981754`). Master head `a990d75285e021a7e235f0c2b8f144211debbb23` passed exact-head GitHub Actions push run `32995600890` and PR run `32995605683` (Linux `test` + Windows `Windows portability` both success). P0 head `f959a7a64781cacc08c3b110c1ec3dfc334fa9c5` passed exact-head push `33020151327` + PR `33020241708` (Linux + Windows + rendered 1440/768/390). Any later commit becomes a new head and must be green again before level-3 is current.
+A feature is not promoted beyond its evidence level merely because source code exists. Published branch head `2464549fdb1c43d61e443da8035e06e7f5c67e2b` passed exact-head Actions run `33071272602` on Linux and Windows with rendered smoke. The canonical React re-audit after that head found that historical documentation described several legacy-browser surfaces that the Vite root did not actually load. The current repair restores the seven Project destinations, provider/model controls and SSE refresh in React, but remains level 1/2 until the exact repaired head passes the expanded rendered workflow.
 
 The full real OpenCode + disposable GitHub/Actions PC-beta campaign remains a separate level-4 external gate.
 
@@ -18,28 +18,31 @@ The full real OpenCode + disposable GitHub/Actions PC-beta campaign remains a se
 4. **Implemented + deterministic coverage:** Project preflight/admission binds readiness-relevant identities, concrete model and exact base SHA.
 5. **Implemented + level-3 verified on `5af53ae`:** ordinary Dashboard Task repair exists for `backlog`/`needs_input`. The HTTP boundary is whitelisted and cannot edit Task state, iteration, publication or machine evidence. Structural dependency/model/role/scope/assignment fields lock after execution history.
 6. **Implemented + level-3 verified on `5af53ae`:** ordinary `needs_input` operator flow can record context and optionally use the normal requeue transition. It cannot bypass preflight, admission, evidence, CI, supervisor or merge gates.
-7. **Implemented + level-3 verified on `5af53ae`:** Project Settings exposes the existing Project identity/repository/verification/model contract plus all current autonomy fields. Saving settings never proves readiness by itself.
+7. **Partially exposed in canonical React:** Project Settings covers description, base branch, verification commands and role-model overrides. Repository binding and the full autonomy policy remain API/control-plane capabilities and need a safer operator UI. Saving settings never proves readiness by itself.
 8. **Implemented + level-3 verified on `5af53ae`:** Windows Workspace Root identity canonicalizes existing real-host aliases before durable comparison, covering long/short path and junction-style lexical aliases without executing repository code.
 9. **Implemented + deterministic coverage:** regression coverage includes planner recovery, scope ownership, cumulative diff-vs-scope, safe Task repair, operator-input authority and Project-first UI contracts.
 10. **External execution still open:** the complete current-stack OpenCode + disposable GitHub Actions campaign must prove real worker/repair/supervisor/merge/restart behavior on one exact clean commit.
 
 ## Project-first operator UX status
 
-The Project-first usability slice is implemented and reached level 3 on `5af53ae`:
+Current canonical React implementation:
 
-- Project cards are the Dashboard visual root.
-- Dedicated Project workspace: Overview / Tasks / Agents / GitHub / Evidence / Research / Settings.
-- Human-readable canonical state and deterministic `projectNextAction`.
-- Dependency-aware readiness; invalid/missing dependency IDs are repair-required attention.
-- Privileged Workspace Roots, read-only local/GitHub discovery and conservative remote matching.
-- One-click local import and safe Clone & Import with no execution authority.
+- Project cards are the Dashboard visual root and show current attention/next work.
+- Dedicated deep-linkable Project workspace: Overview / Tasks / Agents / GitHub / Evidence / Research / Settings.
+- Human-readable Task and Project status, ordinary lifecycle actions and SSE-backed refresh.
+- Privileged Workspace Roots, read-only discovery, one-click import and safe Clone & Import remain first-class.
 - Structured evidence is primary; raw JSON remains Advanced/debug detail.
-- Task repair and `needs_input` have normal Dashboard flows.
-- Project Settings covers the existing Project/autonomy contract.
-- Mobile primary Project navigation is Overview / Tasks / Agents / GitHub; Evidence / Research / Settings move under `More` on small widths.
-- Empty Overview has one primary Create Task action.
-- A Project without a local repository exposes one clear Connect repository path.
-- Rendered browser acceptance covers Dashboard, Project Overview, Tasks, Agents (fleet) and full Project Settings at 1440 / 768 / 390 — local deterministic isolation smoke for the new fleet slice verified at all three widths without overflow/runtime errors; CI rendered smoke on the exact final head must also stay green (previous fleet-less head `5af53ae` was run #451). Missing expected render state, uncaught runtime/console errors, timeout or required horizontal overflow fails CI.
+- Task creation requires at least one acceptance criterion; `needs_input` keeps response and explicit resume separate.
+- System exposes custom OpenAI-compatible provider endpoints, model discovery, Master model, all four global role defaults and per-Project overrides. Secrets remain environment-variable references only.
+- Responsive Project tabs remain visible in a two-column mobile layout.
+- The expanded workflow now targets every Project destination at 1440 / 768 / 390 and fails on timeout, runtime/console error or required horizontal overflow.
+
+Open UX/product gaps:
+
+- Project-scoped Master destination, Exploration inbox and MCP registry are absent from canonical React.
+- Full autonomy-policy editing, repository connection/repair, structural Task editing and richer Agent editing remain incomplete.
+- The evidence view is useful but still thin for CI diagnostics, checkpoint diffs and recovery guidance.
+- The expanded rendered workflow has not yet passed on the exact repaired head.
 
 ## Verification evidence
 
@@ -63,7 +66,7 @@ P0 Product Foundation head (level 3 verified on exact-head Actions — includes 
 - Commit: `f959a7a64781cacc08c3b110c1ec3dfc334fa9c5`
 - GitHub Actions push `33020151327`: `test` Linux success + `Windows portability` success (incl. audit + rendered 1440/768/390)
 - GitHub Actions PR `33020241708`: `test` Linux success + `Windows portability` success (incl. audit + rendered 1440/768/390)
-- Local deterministic: 389 tests pass (incl. `test/setup-service.test.mjs` 2/2 + `test/p0-live-wiring.test.mjs` 4/4 + `test/master-memory.test.mjs` 2/2 + `test/mobile-layout.test.mjs` + `test/ui-contract.test.mjs`); `node --check` clean
+- Current local deterministic suite: 393 tests pass; `git diff --check` and the production build are clean. Exact-head rendered/Actions evidence remains pending for the repaired UI.
 - Rendered smoke covers `/#/master` (setup card), `/#/projects`, `/#/project/:id`, `/#/master/:id` and `/#/system` at 1440/768/390 without overflow/runtime errors
 
 This proves deterministic + exact-head Actions for fleet, Master and P0 heads. None proves real OpenCode/GitHub interoperability (level 4).
@@ -72,20 +75,19 @@ This proves deterministic + exact-head Actions for fleet, Master and P0 heads. N
 
 11. **Open:** explicit Project objective / definition-of-done model with durable project-level completion criteria and evidence.
 12. **Open:** automatic bounded Master/fleet scheduler above ordinary Task delegation. It must re-evaluate canonical state, create only scoped Tasks and never self-certify completion.
-13. **Implemented + deterministic + level-3 verified on `a990d75` + re-verified on `f959a7a`:** persistent Master AI conversation/session context (global + project-aware). `masterConversations`/`masterMessages` StateStore v9, `GET/POST /api/master/conversations`, `GET/PATCH /api/master/conversations/:id`, `GET/POST /api/master/conversations/:id/messages` whitelisted over StateStore (projectId validated, durable history). Internal assistant/control-plane messages retain `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT` kinds and bounded tool-call metadata; ordinary UI/HTTP user messages are constrained to `user` + `conversation` so they cannot fabricate assistant, tool or verified-result history. Normal chat UI: global `Master` (`#/master`) + project `Master` tab (`#/project/:id/master`) — sidebar conversation list + centered bubble stream (user right / assistant left) + rounded composer (`Message Master…`, `＋ Task`/`Research` via control plane). Looks like a normal chat (inspired by `odysseus-dev/odysseus@dev` browser layout, `AGPL-3.0-or-later` — own CSS/JS, no substantial reuse) and stays subordinate to control-plane evidence/authority. Verified on push `32995600890`/`32995605683` (Master) and push `33020151327` + PR `33020241708` (P0). Bounded inspectable memory is now implemented via M3C (SOUL.md + durable memory) — richer per-agent memory remains open.
+13. **Control plane implemented; canonical React partial:** persistent Master conversation/session context is global + project-aware in StateStore/API and ordinary user messages cannot fabricate assistant/tool/verified-result history. The React chat currently exposes global Master only; a Project Master destination and contextual Task/Research shortcuts remain open. SOUL.md and bounded inspectable/editable/deletable memory are implemented; richer per-agent memory remains open.
 14. **Implemented:** structured diff/scope/verification/CI/supervisor/merge evidence is primary; raw evidence JSON remains Advanced.
-15. **Implemented + deterministic coverage + level-3 verified on `36b94c2` + `a990d75` + `f959a7a` + local rendered:** Project-scoped Agent fleet operator surface. `GET /api/projects/:id/agents` (fleet view with assigned Task/active Run), `POST /api/projects/:id/agents` and `PATCH /api/agents/:id` are whitelisted over `StateStore` (`addAgent`/`updateAgent`) as canonical truth — same guards as MCP `agent_create`/`agent_update` (unique name, no overlapping mutating scopes, read-only roles cannot execute work, identity/scopes lock after execution history, active work retains ownership, disable fail-closed with unfinished assigned work, no raw field bypass, no alternate execution motor). Rendered Agents tab at 1440/768/390 shows name/role/enabled/harness/model/capabilities/workScopes/assigned Task/active Run/ownership and exposes create/edit/enable/disable through dialogs/toasts (no native alert/prompt/confirm). No publish/review/merge bypass. `docs/04-roadmap.md` M3E is now the implemented early slice for fleet controls. Verified on PR run `32988127729` (fleet head `36b94c2`), PR run `32995605683` (Master head `a990d75`) and push `33020151327` + PR `33020241708` (P0 head `f959a7a`).
+15. **Control plane implemented; canonical React early slice:** Project-scoped Agent fleet APIs retain the full registry invariants and no alternate execution motor. The React Agents tab lists fleet/active state and exposes create/enable/disable. Editing identity, capabilities, instructions and scopes is not yet exposed after creation. No publish/review/merge bypass exists.
 
-## Master AI / chat direction — implemented + level-3 verified (normal chat)
+## Master AI / chat direction — control plane implemented, React partial
 
 Implemented as a normal chat environment, inspired by current `odysseus-dev/odysseus@dev` browser layout (verified `AGPL-3.0-or-later` — no substantial code/assets reused; AI Dashboard stays its own product/visual system):
 
-- first-class global `Master` (`#/master`) + project `Master` tab (`#/project/:id/master`),
+- first-class global `Master` (`#/master`); Project-scoped conversations exist in StateStore/API but lack a React destination,
 - persistent global/project-aware conversations + messages (`StateStore` v9, whitelisted `POST/GET /api/master/*`),
-- receives Project context through a server-generated bounded stub response with open-Task count; real provider reasoning and richer attachments remain planned,
-- bubble stream `user` (right) vs `assistant` (left), `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT` pill-tagged,
+- real direct-provider reasoning through AI SDK + bounded Dashboard MCP tools,
+- bubble stream `user` (right) vs `assistant` (left); richer turn-kind and progressive tool rendering remain open,
 - internal tool-call history is capped and `publish/review/merge` fail-closed; ordinary UI/HTTP user turns cannot submit tool-call records,
-- `＋ Task` / `Research` inside composer create via control-plane `POST /api/tasks` / `POST /api/research` — never direct publish/review/merge,
 - centered `✦ Master` empty state like a normal chat, tip, durable history,
 - mobile-first: `300px+1fr` → single column on tablet/phone, no overflow, rounded `Message Master…` composer with `↑` send.
 
