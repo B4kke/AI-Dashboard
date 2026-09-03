@@ -34,7 +34,7 @@ Planner output is also fail-closed. Generated work Tasks stay in the non-executa
 
 ## Project-first discovery and onboarding
 
-The default UI is Project-first rather than a global control-plane telemetry wall. The Dashboard shows one aggregate card per Project; opening it enters a Project workspace with Overview, Tasks, Agents, GitHub, Evidence, Research and Settings.
+The default UI is Project-first rather than a global control-plane telemetry wall. The Dashboard shows one aggregate card per Project; opening it enters a Project workspace with Overview, Tasks, Agents, Master, GitHub, Evidence, Research and Settings.
 
 Workspace Roots are privileged local configuration. Discovery scans only direct children of configured roots, inspects Git/static metadata read-only and never executes repository scripts. Local/GitHub matching uses normalized remote identity and fails closed on ambiguity. Detected conservative verification commands are applied automatically for normal one-click import; an explicit operator override (including an empty command list) remains available for advanced cases.
 
@@ -58,7 +58,7 @@ See `docs/10-project-first-ux-discovery.md` and `docs/11-design-principles.md`.
 
 OpenCode SDK, MCP and Octokit are adapters around external protocols. They do not own Project/Task/Run truth or irreversible decisions.
 
-The System UI can add or edit custom OpenAI-compatible providers by `baseUrl`, discover their models, and set global Coding/Planner/Supervisor/Research defaults plus the direct Master model. Projects can override all four role models, and specialist agents can select their own coding model. API-key values are never persisted in Dashboard state: providers reference an environment-variable name only. Coding roles still execute through the configured harness (OpenCode first); Master and Research use direct providers.
+The first-run and System UI can add or edit custom OpenAI-compatible providers by `baseUrl`, discover their models, and set global Coding/Planner/Supervisor/Research defaults plus the direct Master model. Projects can override all four role models, and specialist agents can select their own coding model. The selectors intentionally keep two catalogs separate: Coding/Planner/Supervisor/agents may select only models actually exposed by OpenCode, while Master/Research/Exploration may select only configured direct-provider models. API-key values are never persisted in Dashboard state: providers reference an environment-variable name only.
 
 ## MCP — August 2026 architecture
 
@@ -115,6 +115,8 @@ AI Dashboard's durable domain `Task` objects remain separate from any MCP Tasks 
 
 AI Dashboard can register external MCP servers over Streamable HTTP or stdio while operating in loopback/private mode. External tools are **default deny**: an empty `allowedTools` means no execution; tools not asserted read-only must also be explicitly listed in `mutatingTools`.
 
+The System UI exposes this registry, discovery and removal flow. HTTP bearer configuration stores only an environment-variable name; stdio commands and arguments remain structured fields rather than shell command strings.
+
 The host advertises MCP elicitation only when a trusted higher-level `elicitationHandler` actually exists. Without one, external `input_required` calls fail closed. With one, bounded requests can be presented by a future Master-chat/UI and normalized to accept/decline/cancel.
 
 MCP annotations are metadata, not authorization. Third-party tool/resource/prompt/input-request content is bounded and treated as untrusted/prompt-injection-capable data. Bearer secrets are referenced by environment-variable name only.
@@ -143,7 +145,7 @@ The intended Master AI can inspect Projects/Tasks/Runs/agents/evidence, reason a
 
 It cannot fabricate evidence, approve its own coding work, interpret unavailable CI as green, force-push/reset, merge an unreviewed checkpoint or bypass locks/recovery.
 
-Persistent Master chat is implemented as a **normal global chat environment** with a conversation sidebar, centered message stream and composer. Project-scoped conversations are durable in StateStore/API, but the canonical React UI does not yet expose a Project Master destination. History persists and ordinary HTTP/UI input can create only `user` + `conversation`; it cannot fabricate assistant roles, tool calls or verified-result labels. Task/Research creation still enters the normal control plane. Master uses real AI SDK model inference + Dashboard MCP tools, a local runtime `SOUL.md`, and bounded inspectable/editable/deletable durable memory with automatic post-turn reflection. A full automatic fleet scheduler remains planned.
+Persistent Master chat is implemented as a **normal global and Project-scoped chat environment** with a conversation sidebar, centered message stream and composer. Project conversations stay isolated inside the owning Project workspace. History persists and ordinary HTTP/UI input can create only `user` + `conversation`; it cannot fabricate assistant roles, tool calls or verified-result labels. Task/Research creation still enters the normal control plane. Master uses real AI SDK model inference + Dashboard MCP tools, a local runtime `SOUL.md`, and bounded inspectable/editable/deletable durable memory. Post-turn reflection is scheduled after the visible answer so learning does not hold the chat response open. A full automatic fleet scheduler remains planned.
 
 ## Project readiness and admission identity
 
@@ -306,20 +308,20 @@ MCP server endpoints:
 - contextual banners/dialogs instead of native alert/prompt/confirm flows,
 - responsive local control UI + SSE,
 - SQLite/WAL state/journal/leases,
-- Exploration -> optional Project promotion in the control plane (canonical React surface still pending),
+- Exploration inbox with direct-model analysis/retry and explicit optional Project promotion,
 - direct Tasks + optional Idea/planner,
 - read-only direct-model Research,
 - official OpenCode SDK adapter,
 - official Octokit GitHub adapter,
 - MCP 2026-07-28 server profiles,
-- external MCP client/host manager,
+- external MCP client/host manager + default-deny System registry/discovery UI,
 - tools/resources/prompts discovery/calls,
 - native `input_required` operator round-trip,
 - optional external MCP elicitation bridge,
 - default-deny external tool policy,
 - durable specialist Agent Registry (v9) + persistent Master chat (no publish/merge bypass),
-- Project-scoped Agent fleet operator surface (Registry as canonical truth, fleet view with assigned Task/active Run, whitelisted HTTP create/enable/disable; richer editing remains open),
-- global + project-aware Master conversations/messages (`POST/GET /api/master/*`, kind-tagged, toolCalls capped),
+- Project-scoped Agent fleet operator surface (Registry as canonical truth, fleet view with assigned Task/active Run and guarded create/edit/enable/disable),
+- global + Project-scoped Master conversations/messages (`POST/GET /api/master/*`, kind-tagged, toolCalls capped),
 - Task assignment/workScopes,
 - static + runtime anti-overlap,
 - fail-closed Project preflight, `needs_sync` repair state and exact-base admission,

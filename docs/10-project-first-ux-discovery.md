@@ -12,7 +12,7 @@
 Implemented on the foundation branch:
 
 - Project cards as the Dashboard visual root,
-- dedicated Project workspace with Overview / Tasks / Agents / GitHub / Evidence / Research / Settings,
+- dedicated Project workspace with Overview / Tasks / Agents / Master / GitHub / Evidence / Research / Settings,
 - durable privileged Workspace Roots,
 - depth-one local Git discovery with static manifest/README inspection only,
 - no repository-script execution during discovery,
@@ -28,6 +28,9 @@ Implemented on the foundation branch:
 - contextual dialogs/toasts instead of native alert/prompt/confirm in normal flows,
 - responsive Project-first layout,
 - fail-closed rendered Chrome acceptance smoke at 1440 / 768 / 390 for Dashboard and Project Overview; timeout, runtime/console errors and horizontal page overflow fail CI.
+- Project Settings exposes repository binding and bounded autonomy controls without treating a save as readiness proof,
+- model selectors separate OpenCode execution models from direct-provider Master/Research models,
+- Project-scoped Master conversations remain inside the owning Project context.
 
 Intentionally partial rather than over-abstracted:
 

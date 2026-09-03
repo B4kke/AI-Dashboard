@@ -9,7 +9,7 @@
 Implemented/tested:
 
 - Project cards as the Dashboard visual root,
-- dedicated Project workspace: Overview / Tasks / Agents / GitHub / Evidence / Research / Settings,
+- dedicated Project workspace: Overview / Tasks / Agents / Master / GitHub / Evidence / Research / Settings,
 - human-readable canonical state plus deterministic `projectNextAction`,
 - dependency-aware presentation and repair-required handling for invalid dependencies,
 - privileged durable Workspace Roots,
@@ -26,7 +26,12 @@ Implemented/tested:
 - contextual dialogs/banners rather than native alert/prompt/confirm,
 - safe Task lifecycle actions plus ordinary `needs_input` response/requeue,
 - first-class ordinary `needs_input` response + explicit requeue path,
-- Project Settings for description, base branch, verification commands and all four role-model overrides,
+- Project Settings for description, repository binding, base branch, verification commands, autonomy policy and all four role-model overrides,
+- separate OpenCode execution-model and direct-provider model catalogs in every role selector,
+- guarded Agent Registry create/edit/enable/disable UI,
+- global Exploration inbox with direct-model analysis/retry and explicit Project promotion,
+- default-deny external MCP registry/discovery/removal UI,
+- Project-scoped Master conversations inside the Project workspace,
 - existing Windows path aliases canonicalized before Workspace Root identity comparison,
 - responsive two-column Project tab navigation on narrow screens,
 - deep-linkable Project tabs and a fail-closed Chrome/Chromium workflow configured at 1440 / 768 / 390 for every Project destination.
@@ -37,8 +42,7 @@ Intentionally partial:
 
 - global Project defaults currently cover role-model defaults plus autonomy mode/CI requirement; broader harness/verification/concurrency defaults stay deferred,
 - discovery remains depth-one and informational; it never auto-imports or starts execution,
-- Project autonomy-policy editing, full Task repair, richer Agent Registry editing, MCP registry and Exploration UI remain open in canonical React,
-- Project-scoped Master conversations exist in StateStore/API but do not yet have a canonical React destination,
+- structural Task editing after execution history remains intentionally restricted; richer CI/checkpoint recovery guidance remains open,
 - the expanded rendered workflow must pass on the exact new head before the UI repair is level-3 evidence,
 - real OpenCode/GitHub usability and autonomous dogfood remain project-wide external gates.
 
@@ -168,11 +172,12 @@ Implemented via M3B:
 
 - first-class Master conversation/session history (global + project-scoped, `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`).
 
-### M3B — Master conversational workspace / chat — CONTROL PLANE IMPLEMENTED / REACT PARTIAL
+### M3B — Master conversational workspace / chat — IMPLEMENTED EARLY SLICE
 
 Implemented early slice (normal chat environment, inspired by `odysseus-dev/odysseus@dev` but own implementation — `odysseus` is `AGPL-3.0-or-later`, no substantial code reuse):
 
 - global Master page (`#/master`) with normal chat look: sidebar conversation list + centered bubble stream + rounded composer,
+- Project-scoped Master destination with conversations isolated to the owning Project,
 - persistent global and project-scoped conversations + messages in `StateStore` schema v9 (`masterConversations`/`masterMessages`),
 - `GET/POST /api/master/conversations`, `GET/PATCH /api/master/conversations/:id`, `GET/POST /api/master/conversations/:id/messages` with fail-closed invariants,
 - internal assistant/control-plane message kinds remain durable and ordinary UI/HTTP user input is fixed to `user` + `conversation`, so it cannot fabricate assistant/tool/verified history,
@@ -185,7 +190,6 @@ Exact-head Linux+Windows GitHub Actions verified on commit `a990d75` (push `3299
 
 Still planned:
 
-- canonical React destination for Project-scoped Master conversations,
 - visible turn-kind labels and contextual Task/Research shortcuts,
 - token streaming/progressive tool rendering (current runtime is real model inference but returns the completed turn),
 - richer context attachments (Tasks/Runs/files/reports/evidence) and file references,
@@ -237,10 +241,10 @@ Implemented/tested:
 - bearer secrets referenced by env-var name only,
 - bounded external MCP outputs/input requests,
 - loopback administration API.
+- default-deny React registry for Streamable HTTP/stdio registration, discovery and explicit removal.
 
 Still planned:
 
-- MCP registry UI,
 - authenticated/authorized remote MCP,
 - richer per-project/per-agent external MCP allowlists,
 - durable long-lived connections where justified,
@@ -272,7 +276,7 @@ Implemented/tested:
 - only active/uncertain worker Runs own mutation scopes,
 - uncertain OpenCode dispatch retains ownership,
 - disjoint scopes can run concurrently when dependencies/concurrency allow.
-- Project-scoped Agent fleet operator surface: whitelisted `POST /api/projects/:id/agents`, `PATCH /api/agents/:id`, `GET /api/projects/:id/agents` (fleet view with assigned Task/active Run) and rendered Agents tab at 1440/768/390 showing name/role/enabled/harness/model/capabilities/workScopes/assigned Task/active Run.
+- Project-scoped Agent fleet operator surface: whitelisted `POST /api/projects/:id/agents`, `PATCH /api/agents/:id`, `GET /api/projects/:id/agents` (fleet view with assigned Task/active Run plus guarded identity/role/model/scope/capability/instruction editing) and rendered Agents tab at 1440/768/390.
 
 Exact-head Linux+Windows GitHub Actions verified on commit `36b94c2` (PR run `32988127729`), re-verified on `a990d75` (PR `32995605683`) and re-verified on P0 head `f959a7a` (push `33020151327` + PR `33020241708`).
 
@@ -296,6 +300,7 @@ Already present:
 - preflight-bound concrete execution model,
 - OpenCode model/agent/tool/reasoning/context discovery,
 - configured role names forwarded only when present in live OpenCode catalog,
+- React selectors keep OpenCode execution models separate from direct Master/Research/Exploration provider models,
 - provider URL/secret validation,
 - read-only Project Research.
 

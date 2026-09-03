@@ -123,14 +123,16 @@ jobs:
 
           for SIZE in 1440x1000 768x1000 390x844; do
             node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" 'http://127.0.0.1:7331/#/projects' "projects-${SIZE}" '.project-card'
+            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" 'http://127.0.0.1:7331/#/explorations' "explorations-${SIZE}" '.exploration-list'
             node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/overview" "project-overview-${SIZE}" '.status-grid'
             node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/tasks" "project-tasks-${SIZE}" '.operator-list'
             node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/agents" "project-agents-${SIZE}" '.workspace-section'
+            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/master/${MASTER_CONVERSATION_ID}" "project-master-${SIZE}" '.message-user'
             node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/github" "project-github-${SIZE}" '.workspace-section'
             node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/evidence" "project-evidence-${SIZE}" '.workspace-section'
             node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/research" "project-research-${SIZE}" '.workspace-section'
             node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/project/${PROJECT_ID}/settings" "project-settings-${SIZE}" '.role-model-grid'
-            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" "http://127.0.0.1:7331/#/master/${MASTER_CONVERSATION_ID}" "master-${SIZE}" '.message-user'
+            node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" 'http://127.0.0.1:7331/#/master' "master-${SIZE}" '.master-empty'
             node scripts/screenshot.mjs .tmp/ui-smoke "$SIZE" 'http://127.0.0.1:7331/#/system' "system-${SIZE}" '.integration-list'
           done
 

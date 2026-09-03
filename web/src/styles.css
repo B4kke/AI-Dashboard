@@ -14,3 +14,14 @@
 /* Operator attention and provider-edit additions. */
 .project-card.attention{border-left:3px solid var(--amber);padding-left:15px}.project-next{display:grid;gap:3px;margin-top:14px;padding-top:11px;border-top:1px solid rgba(130,176,199,.1)}.project-next span{color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase}.project-next strong{color:#cfe0e9;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.provider-actions{display:flex;gap:8px;align-items:center}
 @media(max-width:620px){.provider-actions{grid-column:2;width:100%;min-height:44px}.provider-actions button{flex:1;min-height:44px}}
+
+/* Eight Project destinations plus explicit autonomy controls. */
+.project-tabs{grid-template-columns:repeat(8,minmax(0,1fr))}.autonomy-settings{margin-top:18px;padding-top:8px;border-top:1px solid var(--line)}.autonomy-settings h3{margin:8px 0 4px;color:var(--bright);font-size:15px}
+.row-actions{display:flex;gap:8px;align-items:center}
+.mcp-discovery{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}.mcp-discovery summary{cursor:pointer;color:var(--bright);font-weight:650}.mcp-discovery pre{max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#06121c;border:1px solid #142b3b;border-radius:8px;padding:13px;color:#a9c2d0;font-size:12px}
+.exploration-list{display:grid;gap:12px}.exploration-card{margin-top:0}.exploration-card>header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}.exploration-card h2{margin:0 0 7px}.exploration-card header p{margin:0;color:var(--muted);line-height:1.55}.exploration-report{white-space:pre-wrap;line-height:1.65;color:var(--text);max-width:920px;border-top:1px solid var(--line);padding-top:16px}
+.project-master-layout{height:min(760px,calc(100vh - 210px));min-height:560px;border:1px solid rgba(130,176,199,.13);border-radius:14px;overflow:hidden}.project-master-layout .chat-stage{height:100%}
+@media(max-width:980px){.project-tabs{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(max-width:820px){.project-master-layout{height:calc(100vh - 190px);min-height:500px}.project-master-layout .chat-stage{height:100%}}
+@media(max-width:620px){.project-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}.row-actions{grid-column:2;width:100%}.row-actions button{flex:1;min-height:44px}}
+@media(max-width:820px){.rail nav{grid-template-columns:repeat(4,1fr)}.nav-item{font-size:12px;gap:7px}}

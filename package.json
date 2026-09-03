@@ -9,6 +9,7 @@
     "start": "npm run build --silent && node --enable-source-maps server/index.mjs",
     "test": "node --test",
     "beta": "node scripts/pc-beta.mjs",
+    "beta:pc": "node scripts/pc-beta.mjs",
     "screenshots": "npm run build --silent && node scripts/seed-visual-state.mjs && node scripts/screenshot.mjs"
   },
   "engines": {

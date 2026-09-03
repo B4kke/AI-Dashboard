@@ -1,12 +1,12 @@
 # Hardening review checkpoint
 
-Status date: 2026-08-27  
+Status date: 2026-08-29
 Branch: `bootstrap/control-center-foundation`  
 PR: #2
 
 This is the current adversarial-review checkpoint. `docs/04-roadmap.md` owns priority; `AGENTS.md` owns binding agent/safety rules; `docs/10-project-first-ux-discovery.md` and `docs/11-design-principles.md` own the Project-first UX/design contract.
 
-A feature is not promoted beyond its evidence level merely because source code exists. Published branch head `2464549fdb1c43d61e443da8035e06e7f5c67e2b` passed exact-head Actions run `33071272602` on Linux and Windows with rendered smoke. The canonical React re-audit after that head found that historical documentation described several legacy-browser surfaces that the Vite root did not actually load. The current repair restores the seven Project destinations, provider/model controls and SSE refresh in React, but remains level 1/2 until the exact repaired head passes the expanded rendered workflow.
+A feature is not promoted beyond its evidence level merely because source code exists. Published branch head `2464549fdb1c43d61e443da8035e06e7f5c67e2b` passed exact-head Actions run `33071272602` on Linux and Windows with rendered smoke. The canonical React re-audit after that head found that historical documentation described several legacy-browser surfaces that the Vite root did not actually load. The current repair restores the complete Project workspace, provider/model controls, Exploration, MCP registry and SSE refresh in React, but remains level 1/2 until the exact repaired head passes the expanded rendered workflow.
 
 The full real OpenCode + disposable GitHub/Actions PC-beta campaign remains a separate level-4 external gate.
 
@@ -18,7 +18,7 @@ The full real OpenCode + disposable GitHub/Actions PC-beta campaign remains a se
 4. **Implemented + deterministic coverage:** Project preflight/admission binds readiness-relevant identities, concrete model and exact base SHA.
 5. **Implemented + level-3 verified on `5af53ae`:** ordinary Dashboard Task repair exists for `backlog`/`needs_input`. The HTTP boundary is whitelisted and cannot edit Task state, iteration, publication or machine evidence. Structural dependency/model/role/scope/assignment fields lock after execution history.
 6. **Implemented + level-3 verified on `5af53ae`:** ordinary `needs_input` operator flow can record context and optionally use the normal requeue transition. It cannot bypass preflight, admission, evidence, CI, supervisor or merge gates.
-7. **Partially exposed in canonical React:** Project Settings covers description, base branch, verification commands and role-model overrides. Repository binding and the full autonomy policy remain API/control-plane capabilities and need a safer operator UI. Saving settings never proves readiness by itself.
+7. **Implemented in canonical React, exact-head render pending:** Project Settings covers description, repository binding, base branch, verification commands, role-model overrides and the bounded autonomy policy. Saving settings never proves readiness by itself; normal preflight remains authoritative.
 8. **Implemented + level-3 verified on `5af53ae`:** Windows Workspace Root identity canonicalizes existing real-host aliases before durable comparison, covering long/short path and junction-style lexical aliases without executing repository code.
 9. **Implemented + deterministic coverage:** regression coverage includes planner recovery, scope ownership, cumulative diff-vs-scope, safe Task repair, operator-input authority and Project-first UI contracts.
 10. **External execution still open:** the complete current-stack OpenCode + disposable GitHub Actions campaign must prove real worker/repair/supervisor/merge/restart behavior on one exact clean commit.
@@ -28,19 +28,21 @@ The full real OpenCode + disposable GitHub/Actions PC-beta campaign remains a se
 Current canonical React implementation:
 
 - Project cards are the Dashboard visual root and show current attention/next work.
-- Dedicated deep-linkable Project workspace: Overview / Tasks / Agents / GitHub / Evidence / Research / Settings.
+- Dedicated deep-linkable Project workspace: Overview / Tasks / Agents / Master / GitHub / Evidence / Research / Settings.
 - Human-readable Task and Project status, ordinary lifecycle actions and SSE-backed refresh.
 - Privileged Workspace Roots, read-only discovery, one-click import and safe Clone & Import remain first-class.
 - Structured evidence is primary; raw JSON remains Advanced/debug detail.
 - Task creation requires at least one acceptance criterion; `needs_input` keeps response and explicit resume separate.
 - System exposes custom OpenAI-compatible provider endpoints, model discovery, Master model, all four global role defaults and per-Project overrides. Secrets remain environment-variable references only.
+- Coding/Planner/Supervisor/agent selectors use the OpenCode catalog; Master/Research/Exploration selectors use direct-provider catalogs, preventing a configured but non-executable direct model from blocking coding preflight.
+- System exposes a default-deny external MCP registry and discovery/removal flow; Exploration has a first-class global inbox and explicit Project promotion.
+- Agent Registry entries can be edited through the same guarded backend invariants used by create/enable/disable.
 - Responsive Project tabs remain visible in a two-column mobile layout.
 - The expanded workflow now targets every Project destination at 1440 / 768 / 390 and fails on timeout, runtime/console error or required horizontal overflow.
 
 Open UX/product gaps:
 
-- Project-scoped Master destination, Exploration inbox and MCP registry are absent from canonical React.
-- Full autonomy-policy editing, repository connection/repair, structural Task editing and richer Agent editing remain incomplete.
+- Structural Task editing after execution remains intentionally restricted; repository repair and CI/checkpoint recovery guidance can be richer.
 - The evidence view is useful but still thin for CI diagnostics, checkpoint diffs and recovery guidance.
 - The expanded rendered workflow has not yet passed on the exact repaired head.
 
@@ -75,15 +77,15 @@ This proves deterministic + exact-head Actions for fleet, Master and P0 heads. N
 
 11. **Open:** explicit Project objective / definition-of-done model with durable project-level completion criteria and evidence.
 12. **Open:** automatic bounded Master/fleet scheduler above ordinary Task delegation. It must re-evaluate canonical state, create only scoped Tasks and never self-certify completion.
-13. **Control plane implemented; canonical React partial:** persistent Master conversation/session context is global + project-aware in StateStore/API and ordinary user messages cannot fabricate assistant/tool/verified-result history. The React chat currently exposes global Master only; a Project Master destination and contextual Task/Research shortcuts remain open. SOUL.md and bounded inspectable/editable/deletable memory are implemented; richer per-agent memory remains open.
+13. **Control plane + canonical React implemented, exact-head render pending:** persistent Master conversation/session context is global + Project-aware in StateStore/API and ordinary user messages cannot fabricate assistant/tool/verified-result history. Global and Project Master destinations are exposed; contextual Task/Research shortcuts remain open. SOUL.md and bounded inspectable/editable/deletable memory are implemented; richer per-agent memory remains open.
 14. **Implemented:** structured diff/scope/verification/CI/supervisor/merge evidence is primary; raw evidence JSON remains Advanced.
-15. **Control plane implemented; canonical React early slice:** Project-scoped Agent fleet APIs retain the full registry invariants and no alternate execution motor. The React Agents tab lists fleet/active state and exposes create/enable/disable. Editing identity, capabilities, instructions and scopes is not yet exposed after creation. No publish/review/merge bypass exists.
+15. **Control plane + canonical React implemented, exact-head render pending:** Project-scoped Agent fleet APIs retain the full registry invariants and no alternate execution motor. The React Agents tab lists fleet/active state and exposes guarded create/edit/enable/disable. No publish/review/merge bypass exists.
 
 ## Master AI / chat direction — control plane implemented, React partial
 
 Implemented as a normal chat environment, inspired by current `odysseus-dev/odysseus@dev` browser layout (verified `AGPL-3.0-or-later` — no substantial code/assets reused; AI Dashboard stays its own product/visual system):
 
-- first-class global `Master` (`#/master`); Project-scoped conversations exist in StateStore/API but lack a React destination,
+- first-class global `Master` (`#/master`) plus Project-scoped Master destination,
 - persistent global/project-aware conversations + messages (`StateStore` v9, whitelisted `POST/GET /api/master/*`),
 - real direct-provider reasoning through AI SDK + bounded Dashboard MCP tools,
 - bubble stream `user` (right) vs `assistant` (left); richer turn-kind and progressive tool rendering remain open,
@@ -93,7 +95,7 @@ Implemented as a normal chat environment, inspired by current `odysseus-dev/odys
 
 Exact-head Linux+Windows GitHub Actions verified on `a990d75` (push `32995600890` + PR `32995605683`) and re-verified on `f959a7a` (push `33020151327` + PR `33020241708`).
 
-Master now uses real AI SDK direct-model inference + Dashboard `/mcp/master` tools, local `SOUL.md` and bounded durable memory with reflection (see M3C). Token streaming/progressive tool rendering and richer file/evidence attachments remain open.
+Master now uses real AI SDK direct-model inference + Dashboard `/mcp/master` tools, local `SOUL.md` and bounded durable memory with post-response reflection (see M3C). The visible answer no longer waits for the second learning call. Token streaming/progressive tool rendering and richer file/evidence attachments remain open.
 
 Still open: token streaming, richer Task/Run/file/evidence attachments, per-agent persona/memory and fleet scheduler (see `docs/04-roadmap.md` M3A/M3C).
 

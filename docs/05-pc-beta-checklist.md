@@ -4,7 +4,7 @@ This checklist is the first real end-to-end dogfood gate for AI Dashboard.
 
 It is intentionally stricter than "the UI opened". The goal is to prove that the real OpenCode + Git + GitHub/Actions control loop behaves like the deterministic tests claim.
 
-Current status (2026-08-24): the harness and its fail-closed resume/evidence contract are implemented and deterministically tested. The complete full campaign has **not** yet been rerun on the exact final hardening commit, and fresh Linux + Windows GitHub Actions for that same commit are also open. This checklist records the required proof; it is not a claim that the proof already exists.
+Current status (2026-08-29): the harness and its fail-closed resume/evidence contract are implemented and deterministically tested. The complete full campaign has **not** yet been rerun on the exact final hardening commit, and fresh Linux + Windows GitHub Actions for that same commit are also open. This checklist records the required proof; it is not a claim that the proof already exists.
 
 ## Automated harness
 
@@ -12,8 +12,9 @@ The preferred beta entrypoint is now the outer harness in `scripts/pc-beta.mjs`:
 
 ```bash
 npm run beta:pc -- --smoke
-npm run beta:pc -- --full --manage-opencode
-npm run beta:pc -- --resume --manage-opencode
+npm run beta:pc -- --full
+npm run beta:pc -- --full --chaos
+npm run beta:pc -- --resume
 ```
 
 The harness is the test controller. OpenCode remains the real worker/supervisor dependency; it does not grade its own beta.
@@ -30,7 +31,7 @@ The harness:
 - deliberately exercises CI failure/repair in full mode
 - deliberately exercises supervisor rejection/rework in full mode
 - restarts the isolated dashboard during an active worker run
-- can stop/restart a harness-owned OpenCode server to test runner outage handling
+- only with explicit `--chaos`, starts and stop/restarts a harness-owned OpenCode server on a dedicated loopback port to test runner outage handling
 - advances the disposable beta base branch to test stale-base rejection
 - creates an unowned `ai/*` worktree to test abandoned-worktree detection
 - temporarily points the isolated dashboard at an unreachable GitHub API endpoint to verify fail-closed outage behavior
@@ -76,27 +77,32 @@ AI_DASHBOARD_BETA_DIRECT_MODEL=provider/model
 
 # Optional. Defaults to 5000 ms to avoid spending GitHub API budget on a 1-second autonomy loop.
 AI_DASHBOARD_BETA_AUTONOMY_INTERVAL_MS=5000
+
+# Only for the explicit chaos campaign. Must differ by port from OPENCODE_URL.
+AI_DASHBOARD_BETA_CHAOS_OPENCODE_URL=http://127.0.0.1:4196
 ```
 
 The exact repository confirmation is intentional. If `AI_DASHBOARD_BETA_CONFIRM_DISPOSABLE` does not exactly equal `AI_DASHBOARD_BETA_REPOSITORY`, the harness refuses Git mutations.
 
-For the full OpenCode-outage test, stop any separately managed OpenCode server on the beta port and use:
+Normal `--smoke` and `--full` use the configured `OPENCODE_URL` and never stop that OpenCode process. The destructive outage/recovery scenario requires explicit chaos mode:
 
 ```bash
-npm run beta:pc -- --full --manage-opencode
+npm run beta:pc -- --full --chaos
 ```
 
-The harness then starts OpenCode using the equivalent of:
+Chaos mode implies managed OpenCode and refuses to use the same loopback origin/port as normal `OPENCODE_URL`. By default it starts the disposable instance using the equivalent of:
 
 ```text
-opencode serve --hostname 127.0.0.1 --port 4096
+opencode serve --hostname 127.0.0.1 --port 4196
 ```
 
 If a custom launch command is required, provide an argument array rather than a shell command string:
 
 ```text
-AI_DASHBOARD_BETA_OPENCODE_COMMAND_JSON=["opencode","serve","--hostname","127.0.0.1","--port","4096"]
+AI_DASHBOARD_BETA_OPENCODE_COMMAND_JSON=["opencode","serve","--hostname","127.0.0.1","--port","4196"]
 ```
+
+The harness stops only the child process it started for the dedicated chaos endpoint. Do not point the chaos endpoint at an OpenCode instance used by an active agent.
 
 ### Smoke versus full
 
@@ -117,12 +123,13 @@ AI_DASHBOARD_BETA_OPENCODE_COMMAND_JSON=["opencode","serve","--hostname","127.0.
 1. deliberate CI failure -> repair -> new checkpoint -> green CI
 2. deliberate supervisor rejection -> worker correction -> re-review
 3. dashboard restart during an active worker
-4. OpenCode outage/recovery without duplicate worker Run
-5. moved base-branch rejection
-6. abandoned worktree detection
-7. GitHub API outage fail-closed behavior
+4. moved base-branch rejection
+5. abandoned worktree detection
+6. GitHub API outage fail-closed behavior
 
-A full run is `blocked`, not `passed`, if a scenario cannot actually be exercised. For example, the OpenCode-outage scenario is blocked if the harness does not own the OpenCode process, and Exploration is blocked if no direct model is configured.
+`--full --chaos` adds OpenCode outage/recovery without a duplicate worker Run, using the dedicated managed endpoint described above.
+
+A full run is `blocked`, not `passed`, if a required scenario cannot actually be exercised. For example, Exploration is blocked if no direct model is configured. A chaos run is additionally blocked if its dedicated OpenCode child cannot be started and controlled safely.
 
 “Full” is a fixed contract, not “run whichever scenarios happened to be available.” Every required scenario must produce `passed`; a deliberately unavailable scenario produces `blocked`, and any identity/idempotency violation produces `failed`.
 
@@ -139,7 +146,7 @@ It contains the isolated SQLite database, process logs, persisted `session.json`
 A fresh run refuses to overwrite an existing session. Continue it with:
 
 ```bash
-npm run beta:pc -- --resume --manage-opencode
+npm run beta:pc -- --resume
 ```
 
 or choose a new evidence directory:
@@ -148,7 +155,7 @@ or choose a new evidence directory:
 AI_DASHBOARD_BETA_DIR=.ai-dashboard-beta/run-2
 ```
 
-Resume reuses the same SQLite/session evidence while rechecking OpenCode health. It requires the same clean Dashboard commit, repository/path/base branch and persisted Project ID, and rejects replacement refs or legacy graft metadata that could relabel Git history. The stored Project must still match the complete beta contract: name, status, repository/path/base, verification command, all model-policy fields and the autonomy values used by the harness.
+Resume reuses the same SQLite/session evidence while rechecking OpenCode health. It preserves whether the original session was a chaos campaign; `--chaos` is therefore not repeated on resume. It requires the same clean Dashboard commit, repository/path/base branch and persisted Project ID, and rejects replacement refs or legacy graft metadata that could relabel Git history. The stored Project must still match the complete beta contract: name, status, repository/path/base, verification command, all model-policy fields and the autonomy values used by the harness.
 
 Each autonomous scenario has a stable evidence key and persisted Task ID. The Task must still match Project, title, description, priority, kind, runner, concrete model, acceptance criteria, verification commands, `workScopes`, dependencies and `allowNoChange=false`. A legacy session without the ID may adopt exactly one full-contract match; it may not guess from a title. Missing IDs, contract drift, multiple active/done matches, `needs_input`, incomplete done evidence or a canonical Task coexisting with a duplicate all stop without creating another Task.
 
@@ -302,7 +309,7 @@ Expected:
 
 ## 6. OpenCode outage
 
-Start a coding Task, then make the harness-owned OpenCode process unavailable during the active worker run.
+Run `--full --chaos`. The harness starts a coding Task against its dedicated OpenCode child, then makes only that child unavailable during the active worker run. This scenario is not part of ordinary smoke/full operation.
 
 Expected:
 
@@ -389,7 +396,7 @@ PC beta passes only when:
 - deliberate CI failure repairs correctly in full mode
 - supervisor rejection cannot merge the rejected checkpoint in full mode
 - dashboard restart does not duplicate worker Runs
-- managed OpenCode outage fails closed in full mode
+- managed OpenCode outage fails closed when the separate chaos campaign is required/run
 - GitHub evidence outage fails closed
 - moved base cannot merge stale work
 - abandoned worktree is detectable

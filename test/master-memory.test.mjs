@@ -100,15 +100,51 @@ test('Master reflection learns explicit user preferences and feeds them back int
   try {
     await master.initialize();
     const first = await master.turn(conversation.id, 'Viktig: svar meg på norsk og vær teknisk konkret.');
-    assert.equal(first.learning.stored, 1);
-    assert.equal(first.learning.soulUpdated, true);
+    assert.deepEqual(first.learning, { scheduled: true });
+    await master.drainLearning();
     assert.equal((await master.listMemory()).memory.length, 1);
 
     await master.turn(conversation.id, 'Hva husker du om hvordan jeg vil ha svar?');
+    await master.drainLearning();
     const secondAnswerCall = calls.filter((call) => Array.isArray(call.messages))[1];
     assert.match(secondAnswerCall.system, /Bruk norsk som standardspråk/);
     assert.match(secondAnswerCall.system, /skill mellom implementert, testet og ende-til-ende-verifisert/i);
     assert.match(secondAnswerCall.system, /NON-NEGOTIABLE AUTHORITY RULES/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Master returns the visible answer without waiting for private reflection', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-master-latency-'));
+  const store = new StateStore(join(dir, 'state.json'));
+  const persistence = metadataPersistence();
+  await store.load();
+  await store.upsertModelProvider({
+    id: 'local', name: 'Local', baseUrl: 'http://127.0.0.1:1234/v1', enabled: true, configured: true, local: true, apiKeyEnv: null,
+  });
+  const conversation = await store.createMasterConversation({ title: 'Latency' });
+  let releaseReflection;
+  const reflection = new Promise((resolve) => { releaseReflection = resolve; });
+  const master = createMasterService({
+    store,
+    setup: { preferences: () => ({ locale: 'nb', masterModel: 'local/test-model' }) },
+    dashboardBaseUrl: 'http://127.0.0.1:7331',
+    persistence,
+    soulPath: join(dir, 'master', 'SOUL.md'),
+    generate: async (options) => options.prompt
+      ? reflection
+      : { text: 'Synlig svar', steps: [], finishReason: 'stop' },
+    createMcp: async () => ({ tools: async () => ({}), close: async () => {} }),
+  });
+  try {
+    await master.initialize();
+    const turn = await master.turn(conversation.id, 'Svar nå.');
+    assert.equal(turn.assistant.content, 'Synlig svar');
+    assert.deepEqual(turn.learning, { scheduled: true });
+    assert.equal((await master.listMemory()).memory.length, 0);
+    releaseReflection({ text: JSON.stringify({ memories: [], soulLesson: null }) });
+    await master.drainLearning();
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -84,17 +84,36 @@ function shortId(value) {
 function isoCompact() { return new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14); }
 
 export function parseBetaArgs(argv = process.argv.slice(2)) {
-  const out = { mode: 'smoke', manageOpenCode: false, keepProcesses: false };
+  const out = { mode: 'smoke', chaos: false, manageOpenCode: false, keepProcesses: false };
   for (const arg of argv) {
     if (arg === '--smoke') out.mode = 'smoke';
     else if (arg === '--full') out.mode = 'full';
     else if (arg === '--resume') out.mode = 'resume';
+    else if (arg === '--chaos') out.chaos = true;
     else if (arg === '--manage-opencode') out.manageOpenCode = true;
     else if (arg === '--keep-processes') out.keepProcesses = true;
     else if (arg.startsWith('--timeout-minutes=')) out.timeoutMs = Math.max(1, Number(arg.split('=')[1])) * 60_000;
     else throw new Error(`Unknown beta argument: ${arg}`);
   }
+  if (out.chaos && out.mode !== 'full') throw new Error('--chaos is only available with --full; resume preserves the original session mode');
   return out;
+}
+
+export function betaOpenCodeUrl({ chaos = false, normalUrl, chaosUrl } = {}) {
+  const normal = new URL(normalUrl || process.env.OPENCODE_URL || 'http://127.0.0.1:4096');
+  const selected = chaos
+    ? new URL(chaosUrl || process.env.AI_DASHBOARD_BETA_CHAOS_OPENCODE_URL || 'http://127.0.0.1:4196')
+    : normal;
+  for (const [label, url] of [['OpenCode', selected], ...(chaos ? [['normal OpenCode', normal]] : [])]) {
+    if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname) || (url.pathname && url.pathname !== '/') || url.username || url.password || url.search || url.hash) {
+      throw new Error(`${label} beta URL must be a credential-free loopback http origin`);
+    }
+  }
+  const loopbackOrigin = (url) => `${url.protocol}//loopback:${url.port || '80'}`;
+  if (chaos && loopbackOrigin(selected) === loopbackOrigin(normal)) {
+    throw new Error('Chaos OpenCode must use a dedicated origin that differs from the normal OPENCODE_URL');
+  }
+  return selected.toString().replace(/\/$/, '');
 }
 
 export function parseGitHubRemote(value) {
@@ -174,7 +193,7 @@ export function buildBetaTaskSpecs(sessionId) {
 
 export function renderBetaReport(session) {
   const rows = Object.entries(session.scenarios || {}).map(([name, item]) => `| ${name} | ${item.status} | ${String(item.summary || '').replaceAll('|', '\\|')} |`);
-  return `# AI Dashboard PC beta report\n\n- Result: **${calculateOverallResult(session.scenarios)}**\n- Session: \`${session.id}\`\n- Mode: \`${session.mode}\`\n- Dashboard commit: \`${session.dashboardCommit || 'unknown'}\`\n- Repository: \`${session.repository}\`\n- Base branch: \`${session.baseBranch}\`\n- Started: ${session.startedAt}\n- Updated: ${session.updatedAt}\n\n| Scenario | Status | Summary |\n|---|---|---|\n${rows.join('\n')}\n\n## Evidence\n\n\`\`\`json\n${JSON.stringify(session.evidence || {}, null, 2)}\n\`\`\`\n`;
+  return `# AI Dashboard PC beta report\n\n- Result: **${calculateOverallResult(session.scenarios)}**\n- Session: \`${session.id}\`\n- Mode: \`${session.mode}\`\n- Chaos: \`${session.chaos === true ? 'enabled' : 'disabled'}\`\n- Dashboard commit: \`${session.dashboardCommit || 'unknown'}\`\n- Repository: \`${session.repository}\`\n- Base branch: \`${session.baseBranch}\`\n- Started: ${session.startedAt}\n- Updated: ${session.updatedAt}\n\n| Scenario | Status | Summary |\n|---|---|---|\n${rows.join('\n')}\n\n## Evidence\n\n\`\`\`json\n${JSON.stringify(session.evidence || {}, null, 2)}\n\`\`\`\n`;
 }
 
 async function git(cwd, args, timeoutMs = 120_000) {
@@ -343,6 +362,7 @@ export class BetaHarness {
       AI_DASHBOARD_DB: this.config.dbFile,
       AI_DASHBOARD_DATA: this.config.legacyFile,
       AI_DASHBOARD_AUTONOMY_INTERVAL_MS: String(this.config.autonomyIntervalMs),
+      OPENCODE_URL: this.config.openCodeUrl,
       ...overrides,
     };
     for (const [key, value] of Object.entries(env)) if (value === undefined || value === null) delete env[key];
@@ -376,8 +396,8 @@ export class BetaHarness {
       if (!Array.isArray(parsed) || !parsed.length || parsed.some((item) => typeof item !== 'string')) throw new Error('AI_DASHBOARD_BETA_OPENCODE_COMMAND_JSON must be a JSON string array');
       return { command: parsed[0], args: parsed.slice(1) };
     }
-    const url = new URL(process.env.OPENCODE_URL || 'http://127.0.0.1:4096');
-    if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(url.hostname) || (url.pathname && url.pathname !== '/')) {
+    const url = new URL(this.config.openCodeUrl || process.env.OPENCODE_URL || 'http://127.0.0.1:4096');
+    if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname) || (url.pathname && url.pathname !== '/')) {
       throw new Error('Managed OpenCode beta requires a loopback http OPENCODE_URL or an explicit AI_DASHBOARD_BETA_OPENCODE_COMMAND_JSON');
     }
     return { command: process.env.AI_DASHBOARD_BETA_OPENCODE_BIN || 'opencode', args: ['serve', '--hostname', '127.0.0.1', '--port', url.port || '4096'] };
@@ -1010,35 +1030,37 @@ export class BetaHarness {
       return { summary: `restart preserved worker identity; resulting task state ${recovered.task.state}`, taskId: task.id, workerRunIds: afterRunIds, taskState: recovered.task.state };
     });
 
-    await this.scenario('opencode_outage', async () => {
-      if (!this.openCodeOwned) {
-        const error = new Error('Full outage test requires --manage-opencode and no pre-existing OpenCode server on the beta port');
-        error.blocked = true;
-        throw error;
-      }
-      await this.patchProject({ mode: 'autonomous', autoMerge: false });
-      const task = await this.createTask(specs.outage);
-      const active = await this.waitFor('active worker before OpenCode outage', async () => {
+    if (this.config.chaos) {
+      await this.scenario('opencode_outage', async () => {
+        if (!this.openCodeOwned) {
+          const error = new Error('Chaos outage requires the harness to own the dedicated OpenCode process');
+          error.blocked = true;
+          throw error;
+        }
+        await this.patchProject({ mode: 'autonomous', autoMerge: false });
+        const task = await this.createTask(specs.outage);
+        const active = await this.waitFor('active worker before OpenCode outage', async () => {
+          await this.tick().catch(() => {});
+          const state = await this.state();
+          const evidence = this.taskEvidence(state, task.id);
+          return evidence.workers.some((run) => ACTIVE_RUN_STATES.has(run.status)) ? evidence : null;
+        }, { timeoutMs: 90_000 });
+        const workerIds = active.workers.map((run) => run.id);
+        await this.stopChild(this.openCode, 'dedicated chaos OpenCode');
+        this.openCode = null;
+        await sleep(2_000);
         await this.tick().catch(() => {});
-        const state = await this.state();
-        const evidence = this.taskEvidence(state, task.id);
-        return evidence.workers.some((run) => ACTIVE_RUN_STATES.has(run.status)) ? evidence : null;
-      }, { timeoutMs: 90_000 });
-      const workerIds = active.workers.map((run) => run.id);
-      await this.stopChild(this.openCode, 'OpenCode');
-      this.openCode = null;
-      await sleep(2_000);
-      await this.tick().catch(() => {});
-      const during = this.taskEvidence(await this.state(), task.id);
-      if (during.task.state === 'done') throw new Error('Task became done while OpenCode was unavailable');
-      if (during.workers.some((run) => !workerIds.includes(run.id))) throw new Error('OpenCode outage created a duplicate worker Run');
-      this.openCodeOwned = false;
-      await this.ensureOpenCode();
-      await this.patchProject({ mode: 'manual', autoMerge: false });
-      const settled = await this.waitTaskRunsIdle(task.id, this.config.timeoutMs);
-      if (settled.workers.some((run) => !workerIds.includes(run.id))) throw new Error('OpenCode recovery created a duplicate worker Run');
-      return { summary: `runner outage failed closed and preserved worker identity; task=${settled.task.state}`, taskId: task.id, workerRunIds: workerIds, taskState: settled.task.state };
-    }, { required: false });
+        const during = this.taskEvidence(await this.state(), task.id);
+        if (during.task.state === 'done') throw new Error('Task became done while OpenCode was unavailable');
+        if (during.workers.some((run) => !workerIds.includes(run.id))) throw new Error('OpenCode outage created a duplicate worker Run');
+        this.openCodeOwned = false;
+        await this.ensureOpenCode();
+        await this.patchProject({ mode: 'manual', autoMerge: false });
+        const settled = await this.waitTaskRunsIdle(task.id, this.config.timeoutMs);
+        if (settled.workers.some((run) => !workerIds.includes(run.id))) throw new Error('OpenCode recovery created a duplicate worker Run');
+        return { summary: `isolated runner outage failed closed and preserved worker identity; task=${settled.task.state}`, taskId: task.id, workerRunIds: workerIds, taskState: settled.task.state };
+      });
+    }
 
     await this.scenario('moved_base_branch', async () => {
       const evidence = await this.manualWorkerToPublish(specs.baseMove);
@@ -1088,6 +1110,7 @@ async function loadOrCreateSession(config) {
     schemaVersion: 1,
     id,
     mode: config.mode,
+    chaos: config.chaos === true,
     repository: config.repository,
     repoPath: config.repoPath,
     baseBranch: `beta/pc-${shortId(id)}`,
@@ -1118,7 +1141,8 @@ async function main() {
   const config = {
     mode: args.mode === 'resume' ? 'full' : args.mode,
     resume: args.mode === 'resume',
-    manageOpenCode: args.manageOpenCode || process.env.AI_DASHBOARD_BETA_MANAGE_OPENCODE === '1',
+    chaos: args.chaos || process.env.AI_DASHBOARD_BETA_CHAOS === '1',
+    manageOpenCode: args.manageOpenCode || args.chaos || process.env.AI_DASHBOARD_BETA_MANAGE_OPENCODE === '1' || process.env.AI_DASHBOARD_BETA_CHAOS === '1',
     keepProcesses: args.keepProcesses,
     timeoutMs: args.timeoutMs || Number(process.env.AI_DASHBOARD_BETA_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
     codingModel: clean(process.env.AI_DASHBOARD_BETA_CODING_MODEL) || null,
@@ -1140,6 +1164,9 @@ async function main() {
     throw new Error(`Resume configuration mismatch: session targets ${session.repository} at ${session.repoPath}; current environment targets ${repository} at ${repoPath}`);
   }
   config.mode = session.mode;
+  config.chaos = session.chaos === true;
+  config.manageOpenCode = config.manageOpenCode || config.chaos;
+  config.openCodeUrl = betaOpenCodeUrl({ chaos: config.chaos });
   const harness = new BetaHarness(config, session);
   process.once('SIGINT', () => harness.cleanupProcesses().finally(() => process.exit(130)));
   process.once('SIGTERM', () => harness.cleanupProcesses().finally(() => process.exit(143)));

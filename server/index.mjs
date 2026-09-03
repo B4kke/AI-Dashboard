@@ -124,7 +124,7 @@ function shutdown(signal) {
   shuttingDown = true;
   console.log(`AI Dashboard received ${signal}; stopping control loop`);
   autonomy.stop();
-  Promise.resolve(mcp?.close?.()).catch(() => {}).finally(() => {
+  Promise.allSettled([Promise.resolve(mcp?.close?.()), master.drainLearning()]).finally(() => {
     server.close(() => { sqlite.close(); process.exit(0); });
   });
   setTimeout(() => { try { sqlite.close(); } catch {} process.exit(1); }, 5_000).unref();

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import {
   BetaHarness,
+  betaOpenCodeUrl,
   buildBetaTaskSpecs,
   calculateOverallResult,
   fetchDashboardWithRetry,
@@ -174,11 +175,27 @@ function mergedTaskState(task) {
 }
 
 test('PC beta CLI modes are explicit and reject unknown switches', () => {
-  assert.deepEqual(parseBetaArgs(['--smoke']), { mode: 'smoke', manageOpenCode: false, keepProcesses: false });
-  assert.deepEqual(parseBetaArgs(['--full', '--manage-opencode', '--keep-processes']), { mode: 'full', manageOpenCode: true, keepProcesses: true });
+  assert.deepEqual(parseBetaArgs(['--smoke']), { mode: 'smoke', chaos: false, manageOpenCode: false, keepProcesses: false });
+  assert.deepEqual(parseBetaArgs(['--full', '--manage-opencode', '--keep-processes']), { mode: 'full', chaos: false, manageOpenCode: true, keepProcesses: true });
+  assert.deepEqual(parseBetaArgs(['--full', '--chaos']), { mode: 'full', chaos: true, manageOpenCode: false, keepProcesses: false });
+  assert.throws(() => parseBetaArgs(['--smoke', '--chaos']), /only available with --full/);
   assert.equal(parseBetaArgs(['--resume']).mode, 'resume');
   assert.equal(parseBetaArgs(['--timeout-minutes=3']).timeoutMs, 180_000);
   assert.throws(() => parseBetaArgs(['--destroy-everything']), /Unknown beta argument/);
+});
+
+test('PC beta chaos uses a dedicated loopback OpenCode origin', () => {
+  assert.equal(betaOpenCodeUrl({ normalUrl: 'http://127.0.0.1:4096' }), 'http://127.0.0.1:4096');
+  assert.equal(betaOpenCodeUrl({ chaos: true, normalUrl: 'http://127.0.0.1:4096', chaosUrl: 'http://127.0.0.1:4196' }), 'http://127.0.0.1:4196');
+  assert.throws(
+    () => betaOpenCodeUrl({ chaos: true, normalUrl: 'http://127.0.0.1:4096', chaosUrl: 'http://127.0.0.1:4096' }),
+    /dedicated origin/,
+  );
+  assert.throws(
+    () => betaOpenCodeUrl({ chaos: true, normalUrl: 'http://127.0.0.1:4096', chaosUrl: 'http://localhost:4096' }),
+    /dedicated origin/,
+  );
+  assert.throws(() => betaOpenCodeUrl({ chaos: true, chaosUrl: 'https://example.com' }), /loopback http origin/);
 });
 
 test('PC beta autonomy interval is slower by default and explicitly configurable', () => {

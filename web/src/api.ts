@@ -24,16 +24,22 @@ export type ResearchRun = {
   id: string; projectId: string; prompt: string; model?: string; resolvedModel?: string | null; status: string;
   report?: string | null; reasoning?: string | null; error?: string | null; createdAt?: string; finishedAt?: string | null;
 };
+export type Exploration = { id:string;title:string;notes?:string;model?:string|null;state:string;promotedProjectId?:string|null;updatedAt?:string };
+export type ExplorationRun = { id:string;explorationId:string;kind:'analysis'|'research';model:string;resolvedModel?:string|null;status:string;report?:string|null;error?:string|null;updatedAt?:string };
 export type ModelProvider = {
   id: string; name: string; baseUrl: string; apiKeyEnv?: string | null; enabled?: boolean; configured?: boolean; local?: boolean;
   lastModels?: Array<{ id: string; ownedBy?: string | null }>; lastError?: string | null; lastDiscoveryAt?: string | null; source?: string;
+};
+export type McpServer = {
+  id:string;name:string;transport:'http'|'stdio';enabled?:boolean;url?:string|null;command?:string|null;args?:string[];cwd?:string|null;
+  allowedTools?:string[];mutatingTools?:string[];bearerTokenEnv?:string|null;
 };
 export type MasterConversation = { id: string; projectId?: string | null; title: string; updatedAt: string };
 export type MasterMessage = { id: string; conversationId: string; role: 'user'|'assistant'|'system'|'tool'; kind: string; content: string; toolCalls?: Array<{tool:string;status?:string|null}> };
 export type MasterMemoryItem = { id:string; scope:string; kind:string; text:string; confidence:number; source:string; updatedAt:string };
 export type MasterProfile = { soul:string; memory:MasterMemoryItem[]; learning:{enabled:boolean;maxItems:number;contextOnly:boolean} };
 export type DashboardState = {
-  projects: Project[]; tasks: Task[]; agents?: Agent[]; runs?: Run[]; researchRuns?: ResearchRun[];
+  explorations?:Exploration[];explorationRuns?:ExplorationRun[];projects: Project[]; tasks: Task[]; agents?: Agent[]; runs?: Run[]; researchRuns?: ResearchRun[];
   masterConversations: MasterConversation[]; masterMessages: MasterMessage[];
   settings?: { workspaceRoots?: string[]; projectDefaults?: { modelPolicy?: Project['modelPolicy']; autonomy?: Record<string, unknown> } };
 };
@@ -69,6 +75,10 @@ export const api = {
   setMasterModel: (masterModel: string) => json<any>('/api/setup/master-model', 'PUT', { masterModel }),
   upsertProvider: (value: unknown) => json<ModelProvider>('/api/model-providers', 'POST', value),
   discoverProvider: (id: string) => json<ModelProvider>(`/api/model-providers/${encodeURIComponent(id)}/discover`, 'POST'),
+  mcpServers: () => request<McpServer[]>('/api/mcp/servers'),
+  registerMcpServer: (value: unknown) => json<McpServer>('/api/mcp/servers', 'POST', value),
+  removeMcpServer: (id: string) => request<McpServer>(`/api/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  discoverMcpServer: (id: string) => json<any>(`/api/mcp/servers/${encodeURIComponent(id)}/discover`, 'POST'),
   setProjectDefaults: (value: unknown) => json<any>('/api/settings/project-defaults', 'PUT', value),
   addWorkspaceRoot: (path: string) => json<any>('/api/settings/workspace-roots', 'POST', { path }),
   removeWorkspaceRoot: (path: string) => request<any>(`/api/settings/workspace-roots/${encodeURIComponent(path)}`, { method: 'DELETE' }),
@@ -76,6 +86,10 @@ export const api = {
   importRepo: (repoPath: string) => json<any>('/api/discovery/import', 'POST', { repoPath }),
   importGitHub: (repository: string, rootPath?: string) => json<any>('/api/discovery/import', 'POST', { repository, ...(rootPath ? { rootPath } : {}) }),
   createLocalProject: (value: unknown) => json<any>('/api/projects/local', 'POST', value),
+  createExploration: (value: unknown) => json<Exploration>('/api/explorations', 'POST', value),
+  analyzeExploration: (id:string, value:unknown) => json<ExplorationRun>(`/api/explorations/${encodeURIComponent(id)}/analyze`, 'POST', value),
+  retryExploration: (id:string) => json<ExplorationRun>(`/api/exploration-runs/${encodeURIComponent(id)}/retry`, 'POST'),
+  promoteExploration: (id:string, value:unknown) => json<Project>(`/api/explorations/${encodeURIComponent(id)}/promote`, 'POST', value),
   projectUsability: localizedProjectUsability,
   projectReadiness: (id: string) => json<any>(`/api/projects/${encodeURIComponent(id)}/preflight`, 'POST', { kind: 'worker' }),
   updateProject: (id: string, value: unknown) => json<Project>(`/api/projects/${encodeURIComponent(id)}`, 'PATCH', value),

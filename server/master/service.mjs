@@ -89,6 +89,7 @@ export function createMasterService({
   generate = generateText, createMcp = createMCPClient,
 }) {
   const memory = createMasterMemory({ persistence, soulPath });
+  const pendingLearning = new Set();
 
   async function initialize() {
     return memory.initialize();
@@ -135,6 +136,19 @@ export function createMasterService({
       // Reflection must never turn a successful user-facing answer into a failed turn.
       return { stored: 0, soulUpdated: false };
     }
+  }
+
+  function scheduleLearning(input) {
+    let pending;
+    pending = Promise.resolve()
+      .then(() => learnFromTurn(input))
+      .finally(() => pendingLearning.delete(pending));
+    pendingLearning.add(pending);
+    return { scheduled: true };
+  }
+
+  async function drainLearning() {
+    while (pendingLearning.size) await Promise.allSettled([...pendingLearning]);
   }
 
   async function turn(conversationId, content) {
@@ -187,7 +201,7 @@ export function createMasterService({
         content: assistantText,
         toolCalls: toolHistory(result),
       });
-      const learning = await learnFromTurn({
+      const learning = scheduleLearning({
         modelClient,
         locale: preferences.locale || 'nb',
         project,
@@ -249,5 +263,5 @@ export function createMasterService({
     return memory.forget(id);
   }
 
-  return { initialize, turn, profile, updateSoul, listMemory, remember, updateMemory, forgetMemory };
+  return { initialize, turn, profile, updateSoul, listMemory, remember, updateMemory, forgetMemory, drainLearning };
 }
