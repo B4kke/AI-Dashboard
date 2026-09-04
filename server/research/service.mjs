@@ -1,0 +1,220 @@
+import { builtinProviderDefinitions, formatModelRef, normalizeModelRef, normalizeProviderDefinition, OpenAICompatibleProvider } from '../integrations/model-provider.mjs';
+import { buildExplorationMessages, buildResearchMessages, collectProjectContext } from './context.mjs';
+
+function providerView(provider) {
+  return {
+    ...provider,
+    configured: !provider.apiKeyEnv || Boolean(process.env[provider.apiKeyEnv]),
+  };
+}
+
+class InProcessKeyLocks {
+  constructor() { this.held = new Set(); }
+  async withLock(key, fn) {
+    if (this.held.has(key)) throw new Error(`Operation already in progress for ${key}`);
+    this.held.add(key);
+    try { return await fn(); } finally { this.held.delete(key); }
+  }
+}
+
+export function createResearchService({ store, opencode, locks = new InProcessKeyLocks() }) {
+  const explorationLock = (id, fn) => locks.withLock(`exploration:${id}:lifecycle`, fn);
+
+  async function recoverInterruptedDirectModelRuns() {
+    const snapshot = store.snapshot();
+    const now = new Date().toISOString();
+    const message = 'Direct-model request was interrupted by a control-plane restart. The prior provider outcome is unknown; automatic replay is blocked to avoid duplicate model calls/cost. Retry explicitly.';
+    for (const run of snapshot.explorationRuns || []) {
+      if (!['queued', 'running'].includes(run.status)) continue;
+      await store.updateExplorationRun(run.id, { status: 'failed', error: message, finishedAt: now });
+    }
+    for (const run of snapshot.researchRuns || []) {
+      if (!['queued', 'running'].includes(run.status)) continue;
+      await store.updateResearchRun(run.id, { status: 'failed', error: message, finishedAt: now });
+    }
+  }
+
+  async function initialize() {
+    await recoverInterruptedDirectModelRuns();
+    for (const definition of builtinProviderDefinitions()) {
+      if (!store.getModelProvider(definition.id)) {
+        await store.upsertModelProvider({ ...definition, lastModels: [], lastError: null, lastDiscoveryAt: null, source: 'builtin' });
+      }
+    }
+  }
+
+  function client(providerId) {
+    const provider = store.getModelProvider(providerId);
+    if (!provider) throw new Error(`Model provider not found: ${providerId}`);
+    if (provider.enabled === false) throw new Error(`Model provider is disabled: ${providerId}`);
+    return new OpenAICompatibleProvider(provider);
+  }
+
+  async function listProviders() {
+    return store.snapshot().modelProviders.map(providerView);
+  }
+
+  async function upsertProvider(input) {
+    const definition = normalizeProviderDefinition(input);
+    return store.upsertModelProvider({
+      ...definition,
+      lastModels: store.getModelProvider(definition.id)?.lastModels || [],
+      lastError: null,
+      source: input?.source || 'custom',
+    });
+  }
+
+  async function discoverProvider(providerId) {
+    const providerClient = client(providerId);
+    try {
+      const lastModels = await providerClient.models();
+      const value = await store.upsertModelProvider({
+        ...store.getModelProvider(providerId),
+        lastModels,
+        lastError: null,
+        lastDiscoveryAt: new Date().toISOString(),
+      });
+      return providerView(value);
+    } catch (error) {
+      await store.upsertModelProvider({
+        ...store.getModelProvider(providerId),
+        lastError: error.message,
+        lastDiscoveryAt: new Date().toISOString(),
+      });
+      throw error;
+    }
+  }
+
+  async function executeExplorationRun(runId) {
+    let run = store.getExplorationRun(runId);
+    if (!run) return;
+    const exploration = store.getExploration(run.explorationId);
+    try {
+      if (!exploration) throw new Error('Exploration not found');
+      const model = normalizeModelRef(run.model);
+      if (!model) throw new Error('Exploration model is required');
+      const providerClient = client(model.providerID);
+      run = await store.updateExplorationRun(run.id, { status: 'running', startedAt: new Date().toISOString(), error: null });
+      const response = await providerClient.chat({
+        model: model.modelID,
+        messages: buildExplorationMessages({ exploration, kind: run.kind }),
+        temperature: run.kind === 'research' ? 0.15 : 0.25,
+        maxTokens: 6144,
+      });
+      await store.updateExplorationRun(run.id, {
+        status: 'completed',
+        report: response.text,
+        reasoning: response.reasoning,
+        usage: response.usage,
+        resolvedModel: `${model.providerID}/${response.rawModel || model.modelID}`,
+        finishedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      await store.updateExplorationRun(run.id, { status: 'failed', error: error.message, finishedAt: new Date().toISOString() }).catch(() => {});
+    }
+  }
+
+  async function startExplorationRun(input) {
+    const explorationId = input?.explorationId;
+    if (!explorationId) throw new Error('Valid explorationId is required');
+    return explorationLock(explorationId, async () => {
+      const exploration = store.getExploration(explorationId);
+      if (!exploration) throw new Error('Valid explorationId is required');
+      if (exploration.promotedProjectId) throw new Error('Exploration is already promoted; use project research for further analysis');
+      const active = store.explorationRunsFor(exploration.id).find((run) => ['queued', 'running'].includes(run.status));
+      if (active) throw new Error(`Exploration already has an active ${active.kind} run (${active.id})`);
+      const model = input?.model?.trim?.() || exploration.model;
+      if (!model) throw new Error('Choose an exploration model in provider/model format');
+      formatModelRef(model);
+      if (model !== exploration.model) await store.updateExploration(exploration.id, { model });
+      const run = await store.createExplorationRun({ explorationId: exploration.id, kind: input.kind, model, prompt: exploration.notes || exploration.title });
+      queueMicrotask(() => executeExplorationRun(run.id));
+      return run;
+    });
+  }
+
+  async function retryExplorationRun(id) {
+    const previous = store.getExplorationRun(id);
+    if (!previous) throw new Error('Exploration run not found');
+    return startExplorationRun({ explorationId: previous.explorationId, kind: previous.kind, model: previous.model });
+  }
+
+  async function promoteExploration(id, input = {}) {
+    return explorationLock(id, async () => {
+      const exploration = store.getExploration(id);
+      if (!exploration) throw new Error('Exploration not found');
+      if (!exploration.promotedProjectId) {
+        const active = store.explorationRunsFor(id).find((run) => ['queued', 'running'].includes(run.status));
+        if (active) throw new Error(`Exploration cannot be promoted while ${active.kind} run ${active.id} is active`);
+      }
+      return store.promoteExploration(id, input);
+    });
+  }
+
+  async function executeResearch(runId) {
+    let run = store.getResearchRun(runId);
+    if (!run) return;
+    const project = store.getProject(run.projectId);
+    try {
+      if (!project?.repoPath) throw new Error('Research requires a project with a local repoPath');
+      const model = normalizeModelRef(run.model);
+      if (!model) throw new Error('Research model is required');
+      const providerClient = client(model.providerID);
+      run = await store.updateResearchRun(run.id, { status: 'running', startedAt: new Date().toISOString(), error: null });
+      const context = await collectProjectContext({ repoPath: project.repoPath, query: run.prompt });
+      const response = await providerClient.chat({
+        model: model.modelID,
+        messages: buildResearchMessages({ project, query: run.prompt, context }),
+        temperature: 0.2,
+        maxTokens: 6144,
+      });
+      await store.updateResearchRun(run.id, {
+        status: 'completed',
+        report: response.text,
+        reasoning: response.reasoning,
+        usage: response.usage,
+        resolvedModel: `${model.providerID}/${response.rawModel || model.modelID}`,
+        contextFiles: context.files.map((file) => ({ path: file.path, truncated: file.truncated })),
+        contextStats: { scannedFiles: context.scannedFiles, selectedFiles: context.files.length, totalChars: context.totalChars },
+        finishedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      await store.updateResearchRun(run.id, { status: 'failed', error: error.message, finishedAt: new Date().toISOString() }).catch(() => {});
+    }
+  }
+
+  async function startResearch(input) {
+    const project = store.getProject(input?.projectId);
+    if (!project) throw new Error('Valid projectId is required');
+    const model = input?.model?.trim?.() || project.modelPolicy?.researchModel;
+    if (!model) throw new Error('Choose a research model in provider/model format');
+    formatModelRef(model);
+    const run = await store.createResearchRun({ ...input, model });
+    queueMicrotask(() => executeResearch(run.id));
+    return run;
+  }
+
+  async function retryResearch(id) {
+    const previous = store.getResearchRun(id);
+    if (!previous) throw new Error('Research run not found');
+    return startResearch({ projectId: previous.projectId, prompt: previous.prompt, model: previous.model });
+  }
+
+  async function openCodeModels(projectId = null) {
+    const directory = projectId ? store.getProject(projectId)?.repoPath : undefined;
+    return opencode.availableModels(directory);
+  }
+
+  return {
+    initialize,
+    listProviders,
+    upsertProvider,
+    discoverProvider,
+    startExplorationRun,
+    retryExplorationRun,
+    promoteExploration,
+    startResearch,
+    retryResearch,
+    openCodeModels,
+  };
+}

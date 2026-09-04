@@ -1,0 +1,53 @@
+name: P0 dependency lock and verify
+
+on:
+  push:
+    branches:
+      - bootstrap/control-center-foundation
+    paths:
+      - package.json
+      - package-lock.json
+      - web/**
+      - server/**
+      - test/**
+      - .github/workflows/ci.yml
+      - .github/workflows/p0-lock-and-verify.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  lock-and-verify:
+    if: ${{ !contains(github.event.head_commit.message || '', '[p0-lock]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: bootstrap/control-center-foundation
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Refresh dependency lock
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax checks
+        run: |
+          find server test scripts -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
+          find public -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Build React frontend
+        run: npm run build
+      - name: Tests
+        run: npm test
+      - name: Commit refreshed lock when needed
+        run: |
+          if git diff --quiet -- package-lock.json; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "build: refresh P0 dependency lock [p0-lock]"
+          git push origin HEAD:bootstrap/control-center-foundation
