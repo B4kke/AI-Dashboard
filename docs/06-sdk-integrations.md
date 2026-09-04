@@ -119,7 +119,7 @@ The versioned `AI_DASHBOARD_RESULT` contract therefore remains authoritative for
 
 ## AI SDK and Master runtime
 
-Master uses pinned `ai@7.0.79`, `@ai-sdk/openai-compatible@3.0.37` and `@ai-sdk/mcp@2.0.36`. AI SDK owns provider/model invocation, multi-step tool-call mechanics and usage/finish metadata; the Dashboard still owns conversations, SOUL/memory policy, MCP authority, Project/Task state and all irreversible gates. Master memory reflection is a second bounded model pass whose failure never converts an otherwise successful assistant turn into failed project work.
+Master uses pinned `ai@7.0.79`, `@ai-sdk/openai-compatible@3.0.37` and `@ai-sdk/mcp@2.0.36`. AI SDK owns provider/model invocation, multi-step tool-call mechanics, tool-execution callbacks and usage/finish metadata; the Dashboard still owns conversations, SOUL/memory policy, MCP authority, Project/Task state and all irreversible gates. Tool start/end callbacks update one durable assistant placeholder so SSE can show progressive tool status without claiming token streaming. Automated Project planning filters the discovered MCP tool set to canonical reads plus atomic `task_batch_create`; prompt wording is not used as an authorization control. Master memory reflection is a second bounded model pass whose failure never converts an otherwise successful assistant turn into failed project work.
 
 The local `SOUL.md`, remembered context and model-generated reflection are untrusted context. They cannot establish machine evidence, Git/CI truth, supervisor approval or merge authority.
 

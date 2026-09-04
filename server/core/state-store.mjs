@@ -5,8 +5,9 @@ import { normalizeWorkScopes, scopeSetsOverlap, scopeSubset, taskWorkScopes } fr
 import { projectAdmissionIdentity, taskAdmissionIdentity } from './admission-identity.mjs';
 import { resolveWorkspaceRoot, workspacePathKey } from './workspace-paths.mjs';
 
-const SCHEMA_VERSION = 9;
-const PROJECT_STATUSES = new Set(['active', 'needs_sync', 'blocked']);
+const SCHEMA_VERSION = 10;
+const PROJECT_STATUSES = new Set(['active', 'paused', 'needs_sync', 'blocked', 'archived']);
+const ORCHESTRATION_STATUSES = new Set(['idle', 'ready', 'planning', 'working', 'needs_input', 'complete']);
 const MASTER_MESSAGE_ROLES = new Set(['user', 'assistant', 'system', 'tool']);
 const MASTER_MESSAGE_KINDS = new Set(['conversation', 'proposal', 'executing', 'needs_input', 'verified_result']);
 const DEFAULT_AUTONOMY = Object.freeze({
@@ -16,6 +17,16 @@ const DEFAULT_AUTONOMY = Object.freeze({
   ciDiscoverySeconds: 30, requireCi: true, mergeMethod: 'squash', deleteRemoteBranch: true,
 });
 const DEFAULT_MODEL_POLICY = Object.freeze({ codingModel: null, planningModel: null, supervisorModel: null, researchModel: null });
+const DEFAULT_PROJECT_ORCHESTRATION = Object.freeze({
+  enabled: false,
+  status: 'idle',
+  cycle: 0,
+  conversationId: null,
+  lastRunAt: null,
+  lastSummary: null,
+  lastError: null,
+  completedAt: null,
+});
 const DEFAULT_PROJECT_DEFAULTS = Object.freeze({
   modelPolicy: structuredClone(DEFAULT_MODEL_POLICY),
   autonomy: { mode: 'manual', requireCi: true },
@@ -45,10 +56,28 @@ const EMPTY_STATE = Object.freeze({
 function cloneEmpty() { return structuredClone(EMPTY_STATE); }
 function stringList(value) { return Array.isArray(value) ? [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))] : []; }
 function boundedText(value, maxChars = 40_000) { return String(value || '').trim().slice(0, maxChars); }
+function boundedStringList(value, maxItems = 100, maxChars = 2_000) {
+  return [...new Set(stringList(value).map((item) => boundedText(item, maxChars)).filter(Boolean))].slice(0, maxItems);
+}
 function modelPolicy(input = {}) {
   const out = { ...structuredClone(DEFAULT_MODEL_POLICY) };
   for (const key of Object.keys(out)) out[key] = input?.[key]?.trim?.() || null;
   return out;
+}
+function projectOrchestration(input = {}) {
+  const status = ORCHESTRATION_STATUSES.has(input.status) ? input.status : 'idle';
+  return {
+    ...structuredClone(DEFAULT_PROJECT_ORCHESTRATION),
+    ...input,
+    enabled: input.enabled === true,
+    status,
+    cycle: Math.max(0, Number(input.cycle || 0)),
+    conversationId: input.conversationId?.trim?.() || null,
+    lastRunAt: input.lastRunAt || null,
+    lastSummary: boundedText(input.lastSummary, 20_000) || null,
+    lastError: boundedText(input.lastError, 4_000) || null,
+    completedAt: input.completedAt || null,
+  };
 }
 function autonomy(input = {}) {
   const mode = ['manual', 'assisted', 'autonomous'].includes(input.mode) ? input.mode : 'manual';
@@ -71,10 +100,12 @@ function projectRecord(input, now = new Date().toISOString()) {
   if (!input?.name?.trim()) throw new Error('Project name is required');
   const status = input.status || 'active';
   if (!PROJECT_STATUSES.has(status)) throw new Error('Invalid Project status');
-  return {
+  const record = {
     id: input.id || randomUUID(),
     name: input.name.trim(),
     description: boundedText(input.description, 2_000) || null,
+    objective: boundedText(input.objective, 20_000) || null,
+    definitionOfDone: boundedStringList(input.definitionOfDone),
     repoPath: input.repoPath?.trim() || null,
     repository: input.repository?.trim() || null,
     baseBranch: input.baseBranch?.trim() || 'main',
@@ -83,12 +114,20 @@ function projectRecord(input, now = new Date().toISOString()) {
     sourceExplorationId: input.sourceExplorationId || null,
     sourceExplorationRunId: input.sourceExplorationRunId || null,
     autonomy: autonomy(input.autonomy),
+    orchestration: projectOrchestration(input.orchestration),
     modelPolicy: modelPolicy(input.modelPolicy),
     verificationCommands: stringList(input.verificationCommands),
     lastPreflight: null,
     createdAt: input.createdAt || now,
     updatedAt: now,
   };
+  if (record.orchestration.enabled && (!record.objective || !record.definitionOfDone.length)) {
+    throw new Error('Automatic Master planning requires a Project objective and at least one definition-of-done criterion');
+  }
+  if (record.orchestration.enabled && record.autonomy.mode !== 'autonomous') {
+    throw new Error('Automatic Master planning requires autonomous Project mode');
+  }
+  return record;
 }
 function agentRecord(input, project, now = new Date().toISOString()) {
   if (!project) throw new Error('Valid projectId is required');
@@ -228,6 +267,16 @@ function taskRecord(input, project, agent = null, now = new Date().toISOString()
   };
 }
 
+function assertNewTaskDependencies(state, task) {
+  for (const dependencyId of task.blockedBy) {
+    if (dependencyId === task.id) throw new Error('Invalid Task dependency: a Task cannot depend on itself');
+    const dependency = state.tasks.find((candidate) => candidate.id === dependencyId);
+    if (!dependency) throw new Error(`Invalid Task dependency: ${dependencyId} was not found in this Project`);
+    if (dependency.projectId !== task.projectId) throw new Error(`Invalid Task dependency: ${dependencyId} belongs to a different Project`);
+    if (dependency.kind === 'planning') throw new Error('Invalid Task dependency: ordinary work cannot depend on an internal planner Task');
+  }
+}
+
 function sameStrings(left, right) {
   return JSON.stringify(stringList(left)) === JSON.stringify(stringList(right));
 }
@@ -319,8 +368,17 @@ function normalizeState(parsed) {
     if (!Array.isArray(state[key])) state[key] = [];
   }
   if (!state.integrations || typeof state.integrations !== 'object' || Array.isArray(state.integrations)) state.integrations = {};
-  state.projects = state.projects.map((project) => ({ repoPath: null, repository: null, baseBranch: 'main', status: 'active', brief: null, description: null, sourceExplorationId: null, sourceExplorationRunId: null, lastPreflight: null, ...project,
-    autonomy: autonomy(project.autonomy), modelPolicy: modelPolicy(project.modelPolicy), verificationCommands: stringList(project.verificationCommands) }));
+  state.projects = state.projects.map((project) => {
+    const orchestration = projectOrchestration(project.orchestration);
+    if (orchestration.status === 'planning') {
+      orchestration.status = 'needs_input';
+      orchestration.lastError = 'Dashboard restarted during a Master planning round. Automatic replay is blocked; review and restart the round explicitly.';
+    }
+    return { repoPath: null, repository: null, baseBranch: 'main', status: 'active', brief: null, description: null, objective: null,
+      definitionOfDone: [], sourceExplorationId: null, sourceExplorationRunId: null, lastPreflight: null, ...project,
+      objective: boundedText(project.objective, 20_000) || null, definitionOfDone: boundedStringList(project.definitionOfDone), orchestration,
+      autonomy: autonomy(project.autonomy), modelPolicy: modelPolicy(project.modelPolicy), verificationCommands: stringList(project.verificationCommands) };
+  });
   if (!state.settings || typeof state.settings !== 'object' || Array.isArray(state.settings)) state.settings = { workspaceRoots: [], projectDefaults: structuredClone(DEFAULT_PROJECT_DEFAULTS) };
   if (!Array.isArray(state.settings.workspaceRoots)) state.settings.workspaceRoots = [];
   const defaults = state.settings.projectDefaults && typeof state.settings.projectDefaults === 'object' ? state.settings.projectDefaults : {};
@@ -495,14 +553,86 @@ export class StateStore {
     const project = state.projects.find((item) => item.id === id); if (!project) throw new Error('Project not found');
     if (patch.status !== undefined && !PROJECT_STATUSES.has(patch.status)) throw new Error('Invalid Project status');
     const invalidatesPreflight = ['repoPath', 'repository', 'baseBranch', 'verificationCommands', 'modelPolicy'].some((key) => patch[key] !== undefined);
+    const nextObjective = patch.objective !== undefined ? boundedText(patch.objective, 20_000) || null : project.objective;
+    const nextDefinitionOfDone = patch.definitionOfDone !== undefined ? boundedStringList(patch.definitionOfDone) : project.definitionOfDone;
+    const completionContractChanged = nextObjective !== project.objective || !sameStrings(nextDefinitionOfDone, project.definitionOfDone);
     if (patch.autonomy) project.autonomy = autonomy({ ...project.autonomy, ...patch.autonomy });
     if (patch.modelPolicy) project.modelPolicy = modelPolicy({ ...project.modelPolicy, ...patch.modelPolicy });
     if (patch.verificationCommands !== undefined) project.verificationCommands = stringList(patch.verificationCommands);
     if (patch.brief !== undefined) project.brief = boundedText(patch.brief, 60_000) || null;
     if (patch.description !== undefined) project.description = boundedText(patch.description, 2_000) || null;
-    for (const key of ['name', 'repoPath', 'repository', 'baseBranch', 'status']) if (patch[key] !== undefined) project[key] = patch[key];
+    project.objective = nextObjective;
+    project.definitionOfDone = nextDefinitionOfDone;
+    if (patch.orchestration !== undefined) {
+      if (!patch.orchestration || typeof patch.orchestration !== 'object' || Array.isArray(patch.orchestration)) throw new Error('Invalid Project orchestration settings');
+      const enabled = patch.orchestration.enabled !== undefined ? patch.orchestration.enabled === true : project.orchestration.enabled;
+      if (enabled && (!nextObjective || !nextDefinitionOfDone.length)) throw new Error('Automatic Master planning requires a Project objective and at least one definition-of-done criterion');
+      if (enabled && project.autonomy.mode !== 'autonomous') throw new Error('Automatic Master planning requires autonomous Project mode');
+      project.orchestration.enabled = enabled;
+      if (!enabled) {
+        project.orchestration.status = 'idle';
+        project.orchestration.lastError = null;
+        project.orchestration.completedAt = null;
+      } else if (patch.orchestration.restart === true || completionContractChanged || project.orchestration.status === 'idle') {
+        project.orchestration.status = 'ready';
+        project.orchestration.lastError = null;
+        project.orchestration.completedAt = null;
+      }
+    } else if (project.orchestration.enabled) {
+      if (project.autonomy.mode !== 'autonomous') {
+        project.orchestration.enabled = false;
+        project.orchestration.status = 'idle';
+        project.orchestration.lastError = null;
+        project.orchestration.completedAt = null;
+      } else if (completionContractChanged) {
+        project.orchestration.status = 'ready';
+        project.orchestration.lastError = null;
+        project.orchestration.completedAt = null;
+      }
+    }
+    if (patch.name !== undefined) {
+      const name = boundedText(patch.name, 500); if (!name) throw new Error('Project name is required'); project.name = name;
+    }
+    if (patch.repoPath !== undefined) project.repoPath = boundedText(patch.repoPath, 4_000) || null;
+    if (patch.repository !== undefined) project.repository = boundedText(patch.repository, 500) || null;
+    if (patch.baseBranch !== undefined) project.baseBranch = boundedText(patch.baseBranch, 500) || 'main';
+    if (patch.status !== undefined) project.status = patch.status;
     if (invalidatesPreflight) project.lastPreflight = null;
     project.updatedAt = new Date().toISOString(); return project;
+  }); }
+  async claimProjectOrchestration(id) { return this.#mutate('project.orchestration_started', (state) => {
+    const project = state.projects.find((item) => item.id === id); if (!project) throw new Error('Project not found');
+    if (project.status !== 'active') throw new Error(`Project is ${project.status}; Master planning is blocked`);
+    if (project.autonomy?.mode !== 'autonomous') throw new Error('Project must use autonomous mode before Master planning can run');
+    if (!project.orchestration?.enabled) throw new Error('Automatic Master planning is disabled');
+    if (!project.objective || !project.definitionOfDone?.length) throw new Error('Project objective and definition of done are required');
+    if (!['ready', 'working'].includes(project.orchestration.status)) throw new Error(`Master planning cannot start from ${project.orchestration.status}`);
+    const openTask = state.tasks.find((task) => task.projectId === id && task.state !== 'done');
+    if (openTask) throw new Error(`Project still has open Task ${openTask.id}`);
+    const activeRun = state.runs.find((run) => run.projectId === id && (ACTIVE_RUN_STATES.has(run.status) || run.dispatchUncertain === true || run.quarantineReason));
+    if (activeRun) throw new Error(`Project still has active or uncertain Run ${activeRun.id}`);
+    project.orchestration.status = 'planning';
+    project.orchestration.cycle = Number(project.orchestration.cycle || 0) + 1;
+    project.orchestration.lastRunAt = new Date().toISOString();
+    project.orchestration.lastError = null;
+    project.updatedAt = project.orchestration.lastRunAt;
+    return { projectId: project.id, cycle: project.orchestration.cycle, objective: project.objective, definitionOfDone: project.definitionOfDone,
+      conversationId: project.orchestration.conversationId || null };
+  }); }
+  async settleProjectOrchestration(id, input = {}) { return this.#mutate('project.orchestration_settled', (state) => {
+    const project = state.projects.find((item) => item.id === id); if (!project) throw new Error('Project not found');
+    if (project.orchestration.status !== 'planning' || Number(project.orchestration.cycle) !== Number(input.cycle)) {
+      throw new Error('Master planning round changed before settlement');
+    }
+    if (!['working', 'needs_input', 'complete'].includes(input.status)) throw new Error('Invalid Master planning settlement');
+    const now = new Date().toISOString();
+    project.orchestration.status = input.status;
+    project.orchestration.conversationId = input.conversationId?.trim?.() || project.orchestration.conversationId || null;
+    project.orchestration.lastSummary = boundedText(input.summary, 20_000) || null;
+    project.orchestration.lastError = boundedText(input.error, 4_000) || null;
+    project.orchestration.completedAt = input.status === 'complete' ? now : null;
+    project.updatedAt = now;
+    return project;
   }); }
   async compareAndSetProjectStatus(id, { expectedProjectIdentity, expectedStatus, status }) { return this.#mutate('project.status_changed', (state) => {
     const project = state.projects.find((item) => item.id === id); if (!project) throw new Error('Project not found');
@@ -591,8 +721,45 @@ export class StateStore {
     const agent = input.agentId ? state.agents.find((item) => item.id === input.agentId) : null; if (input.agentId && !agent) throw new Error('Agent not found');
     if (agent && agent.projectId !== project.id) throw new Error('Agent belongs to a different project'); if (agent?.enabled === false) throw new Error('Agent is disabled');
     const task = taskRecord(input, project, agent);
+    assertNewTaskDependencies(state, task);
     state.tasks.push(task); return task;
   }); }
+  async addTaskBatch(input = {}) { return this.#mutate('task.batch_created', (state) => {
+    const project = state.projects.find((item) => item.id === input.projectId); if (!project) throw new Error('Valid projectId is required');
+    if (project.orchestration?.status === 'planning' && state.tasks.some((task) => task.projectId === project.id && task.state !== 'done')) {
+      throw new Error('Automatic Master planning cycle already committed its Task batch');
+    }
+    if (!Array.isArray(input.tasks) || input.tasks.length < 1 || input.tasks.length > 50) throw new Error('Task batch requires between 1 and 50 Tasks');
+    const dependencyIndexes = input.tasks.map((spec, index) => {
+      if (!spec?.title?.trim()) throw new Error(`Task batch item ${index} requires a title`);
+      if (!Array.isArray(spec.acceptanceCriteria) || !stringList(spec.acceptanceCriteria).length) throw new Error(`Task batch item ${index} requires acceptance criteria`);
+      if (!normalizeWorkScopes(spec.workScopes).length) throw new Error(`Task batch item ${index} requires explicit workScopes`);
+      const dependencies = Array.isArray(spec.dependsOn) ? [...new Set(spec.dependsOn)] : [];
+      for (const dependency of dependencies) {
+        if (!Number.isInteger(dependency) || dependency < 0 || dependency >= input.tasks.length || dependency === index) {
+          throw new Error(`Task batch item ${index} has an invalid dependency index`);
+        }
+      }
+      return dependencies;
+    });
+    const visiting = new Set(); const visited = new Set();
+    const visit = (index) => {
+      if (visiting.has(index)) throw new Error('Task batch dependencies contain a cycle');
+      if (visited.has(index)) return;
+      visiting.add(index); for (const dependency of dependencyIndexes[index]) visit(dependency); visiting.delete(index); visited.add(index);
+    };
+    for (const index of dependencyIndexes.keys()) visit(index);
+    const tasks = input.tasks.map((spec) => {
+      const agent = spec.agentId ? state.agents.find((item) => item.id === spec.agentId) : null;
+      if (spec.agentId && !agent) throw new Error('Agent not found');
+      if (agent && agent.projectId !== project.id) throw new Error('Agent belongs to a different project');
+      if (agent?.enabled === false) throw new Error('Agent is disabled');
+      return taskRecord({ ...spec, projectId: project.id, workScopes: normalizeWorkScopes(spec.workScopes), blockedBy: [] }, project, agent);
+    });
+    for (const [index, task] of tasks.entries()) task.blockedBy = dependencyIndexes[index].map((dependency) => tasks[dependency].id);
+    state.tasks.push(...tasks);
+    return { projectId: project.id, tasks };
+  }, (value) => value, () => 'task.batch_created'); }
 
   async beginIdeaPlanning(ideaId, input = {}) { return this.#mutate('idea.planning_started', (state) => {
     const idea = state.ideas.find((item) => item.id === ideaId); if (!idea) throw new Error('Idea not found');
@@ -797,7 +964,7 @@ export class StateStore {
     const normalizedPatch = { ...patch }; if (patch.verificationCommands !== undefined) normalizedPatch.verificationCommands = stringList(patch.verificationCommands);
     if (patch.workScopes !== undefined) normalizedPatch.workScopes = finalScopes;
     if (patch.agentId !== undefined) { normalizedPatch.agentId = agent?.id || null; normalizedPatch.agentName = agent?.name || null; normalizedPatch.agentInstructions = agent?.instructions || null;
-      if (agent) { normalizedPatch.agentRole = agent.role; if (agent.model) normalizedPatch.model = agent.model; if (patch.workScopes === undefined) normalizedPatch.workScopes = normalizeWorkScopes(agent.workScopes); }
+      if (agent) { normalizedPatch.agentRole = agent.role; if (agent.model && patch.model === undefined) normalizedPatch.model = agent.model; if (patch.workScopes === undefined) normalizedPatch.workScopes = normalizeWorkScopes(agent.workScopes); }
       else { normalizedPatch.agentName = null; normalizedPatch.agentInstructions = null; } }
     Object.assign(task, normalizedPatch, { updatedAt: new Date().toISOString() }); return task;
   }); }
@@ -912,6 +1079,15 @@ export class StateStore {
     conversation.updatedAt = message.createdAt;
     return message;
   }); }
+  async updateMasterMessage(id, patch = {}) { return this.#mutate('master-message.updated', (state) => {
+    const message = state.masterMessages.find((item) => item.id === id); if (!message) throw new Error('Master message not found');
+    if (patch.role !== undefined && patch.role !== message.role) throw new Error('Master message role cannot be changed');
+    const candidate = masterMessageRecord({ ...message, ...patch, id: message.id, createdAt: message.createdAt }, message.conversationId, message.createdAt);
+    Object.assign(message, candidate);
+    const conversation = state.masterConversations.find((item) => item.id === message.conversationId);
+    if (conversation) conversation.updatedAt = new Date().toISOString();
+    return message;
+  }); }
   getMasterConversation(id) { return structuredClone(this.state.masterConversations.find((item) => item.id === id) || null); }
   listMasterConversations(projectId = null) {
     const filtered = projectId ? this.state.masterConversations.filter((item) => item.projectId === projectId) : this.state.masterConversations;
@@ -938,4 +1114,4 @@ export class StateStore {
   }
 }
 
-export { DEFAULT_AUTONOMY, DEFAULT_MODEL_POLICY, SCHEMA_VERSION };
+export { DEFAULT_AUTONOMY, DEFAULT_MODEL_POLICY, DEFAULT_PROJECT_ORCHESTRATION, SCHEMA_VERSION };

@@ -18,7 +18,7 @@ test('state store persists task model, verification, exploration and provider/re
     await store.upsertModelProvider({ id: 'lmstudio', name: 'LM Studio', protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:1234/v1', lastModels: [{ id: 'qwen3' }] });
     const research = await store.createResearchRun({ projectId: project.id, prompt: 'Analyze architecture' });
     const reloaded = new StateStore(file); await reloaded.load(); const snapshot = reloaded.snapshot();
-    assert.equal(snapshot.schemaVersion, 9); assert.equal(snapshot.explorations[0].id, exploration.id); assert.equal(snapshot.explorationRuns[0].report, 'Bootstrap brief');
+    assert.equal(snapshot.schemaVersion, 10); assert.equal(snapshot.explorations[0].id, exploration.id); assert.equal(snapshot.explorationRuns[0].report, 'Bootstrap brief');
     assert.equal(snapshot.tasks[0].model, 'lmstudio/qwen3'); assert.deepEqual(snapshot.tasks[0].verificationCommands, ['npm test']); assert.deepEqual(snapshot.tasks[0].workScopes, []); assert.equal(snapshot.tasks[0].agentId, null);
     assert.equal(snapshot.projects[0].autonomy.requireCi, true); assert.equal(snapshot.projects[0].lastPreflight, null); assert.equal(snapshot.researchRuns[0].id, research.id); assert.equal(snapshot.researchRuns[0].model, 'nvidia/meta/llama');
     assert.equal(snapshot.modelProviders[0].id, 'lmstudio'); assert.deepEqual(snapshot.mcpServers, []); assert.equal(task.model, 'lmstudio/qwen3');
@@ -31,10 +31,11 @@ test('schema v3 state migrates forward with MCP and agent-scope collections', as
     const file = join(dir, 'state.json');
     await writeFile(file, JSON.stringify({ schemaVersion: 3, projects: [{ id: 'p1', name: 'Old', autonomy: {} }], tasks: [{ id: 't1', projectId: 'p1', title: 'Old task' }], runs: [], ideas: [], agents: [], integrations: {} }));
     const store = new StateStore(file); await store.load(); const snapshot = store.snapshot();
-    assert.equal(snapshot.schemaVersion, 9); assert.equal(snapshot.tasks[0].id, 't1'); assert.equal(snapshot.tasks[0].model, null); assert.equal(snapshot.tasks[0].agentId, null);
+    assert.equal(snapshot.schemaVersion, 10); assert.equal(snapshot.tasks[0].id, 't1'); assert.equal(snapshot.tasks[0].model, null); assert.equal(snapshot.tasks[0].agentId, null);
     assert.deepEqual(snapshot.tasks[0].workScopes, []); assert.deepEqual(snapshot.tasks[0].verificationCommands, []); assert.equal(snapshot.projects[0].modelPolicy.researchModel, null);
     assert.equal(snapshot.projects[0].status, 'active'); assert.equal(snapshot.projects[0].baseBranch, 'main'); assert.equal(snapshot.projects[0].lastPreflight, null);
     assert.equal(snapshot.projects[0].autonomy.requireCi, true); assert.deepEqual(snapshot.projects[0].verificationCommands, []); assert.equal(snapshot.projects[0].brief, null);
+    assert.equal(snapshot.projects[0].objective, null); assert.deepEqual(snapshot.projects[0].definitionOfDone, []); assert.equal(snapshot.projects[0].orchestration.status, 'idle');
     assert.deepEqual(snapshot.researchRuns, []); assert.deepEqual(snapshot.explorations, []); assert.deepEqual(snapshot.explorationRuns, []); assert.deepEqual(snapshot.mcpServers, []);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
@@ -87,14 +88,100 @@ test('Project preflight reports persist and readiness-relevant settings invalida
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test('Project creation and updates reject unknown control-plane statuses', async () => {
+test('Project lifecycle supports operator pause/archive and rejects unknown control-plane statuses', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-project-status-'));
   try {
     const store = new StateStore(join(dir, 'state.json')); await store.load();
-    await assert.rejects(() => store.addProject({ name: 'Invalid', status: 'paused' }), /Invalid Project status/);
-    const project = await store.addProject({ name: 'Valid' });
+    const project = await store.addProject({ name: 'Valid', status: 'paused' });
+    assert.equal(project.status, 'paused');
+    await store.updateProject(project.id, { status: 'archived' });
     await assert.rejects(() => store.updateProject(project.id, { status: 'unexpected' }), /Invalid Project status/);
-    assert.equal(store.getProject(project.id).status, 'active');
+    assert.equal(store.getProject(project.id).status, 'archived');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('Project completion contract gates and persists bounded Master planning cycles', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-master-cycle-'));
+  try {
+    const file = join(dir, 'state.json'); const store = new StateStore(file); await store.load();
+    await assert.rejects(
+      () => store.addProject({ name: 'Invalid automatic Project', orchestration: { enabled: true } }),
+      /requires a Project objective/,
+    );
+    const project = await store.addProject({ name: 'Completion contract' });
+    await assert.rejects(
+      () => store.updateProject(project.id, { orchestration: { enabled: true } }),
+      /requires a Project objective/,
+    );
+    await store.updateProject(project.id, {
+      objective: 'Ship the local control center',
+      definitionOfDone: ['Operator can complete the full Project flow'],
+      autonomy: { mode: 'autonomous' },
+      orchestration: { enabled: true },
+    });
+    assert.equal(store.getProject(project.id).orchestration.status, 'ready');
+
+    const claim = await store.claimProjectOrchestration(project.id);
+    assert.equal(claim.cycle, 1);
+    assert.equal(store.getProject(project.id).orchestration.status, 'planning');
+    const batch = await store.addTaskBatch({
+      projectId: project.id,
+      tasks: [
+        { title: 'Implement core', workScopes: ['server'], acceptanceCriteria: ['Core is durable'], dependsOn: [] },
+        { title: 'Connect UI', workScopes: ['web'], acceptanceCriteria: ['UI exposes the contract'], dependsOn: [0] },
+      ],
+    });
+    assert.equal(batch.tasks.length, 2);
+    assert.deepEqual(batch.tasks[1].blockedBy, [batch.tasks[0].id]);
+    await assert.rejects(
+      () => store.addTaskBatch({
+        projectId: project.id,
+        tasks: [{ title: 'Duplicate batch', workScopes: ['docs'], acceptanceCriteria: ['duplicate'], dependsOn: [] }],
+      }),
+      /already committed its Task batch/,
+    );
+    await store.settleProjectOrchestration(project.id, {
+      cycle: claim.cycle,
+      status: 'working',
+      summary: 'Created the next atomic batch.',
+    });
+
+    const reloaded = new StateStore(file); await reloaded.load();
+    assert.equal(reloaded.getProject(project.id).objective, 'Ship the local control center');
+    assert.equal(reloaded.getProject(project.id).orchestration.status, 'working');
+    assert.equal(reloaded.tasksForProject(project.id).length, 2);
+    await reloaded.updateProject(project.id, { autonomy: { mode: 'assisted' } });
+    assert.equal(reloaded.getProject(project.id).orchestration.enabled, false);
+    assert.equal(reloaded.getProject(project.id).orchestration.status, 'idle');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('unfinished Master planning fails closed after restart and batches are atomic', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-master-restart-'));
+  try {
+    const file = join(dir, 'state.json'); const store = new StateStore(file); await store.load();
+    const project = await store.addProject({ name: 'Restart safety' });
+    await store.updateProject(project.id, {
+      objective: 'Finish safely', definitionOfDone: ['No duplicate planning'],
+      autonomy: { mode: 'autonomous' }, orchestration: { enabled: true },
+    });
+    await store.claimProjectOrchestration(project.id);
+    await assert.rejects(
+      () => store.addTaskBatch({
+        projectId: project.id,
+        tasks: [
+          { title: 'Valid prefix', workScopes: ['server'], acceptanceCriteria: ['valid'], dependsOn: [] },
+          { title: 'Invalid suffix', workScopes: ['web'], acceptanceCriteria: ['invalid'], dependsOn: [9] },
+        ],
+      }),
+      /invalid dependency index/,
+    );
+    assert.equal(store.tasksForProject(project.id).length, 0);
+
+    const reloaded = new StateStore(file); await reloaded.load();
+    const recovered = reloaded.getProject(project.id);
+    assert.equal(recovered.orchestration.status, 'needs_input');
+    assert.match(recovered.orchestration.lastError, /restarted during a Master planning round/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

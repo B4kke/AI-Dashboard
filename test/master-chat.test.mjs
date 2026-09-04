@@ -43,8 +43,8 @@ async function startServer() {
   return { dir, store, server, base };
 }
 
-test('Master conversation persistence is global and project-aware with schema v9', async () => {
-  assert.equal(SCHEMA_VERSION, 9);
+test('Master conversation persistence is global and project-aware with schema v10', async () => {
+  assert.equal(SCHEMA_VERSION, 10);
   const { dir, store, server, base } = await startServer();
   try {
     const project = await jsonFetch(base, '/api/projects', {
@@ -115,7 +115,7 @@ test('Master conversation persistence is global and project-aware with schema v9
     const snapshot = store.snapshot();
     assert.equal(snapshot.masterConversations.length, 2);
     assert.equal(snapshot.masterMessages.length, 5);
-    assert.equal(snapshot.schemaVersion, 9);
+    assert.equal(snapshot.schemaVersion, 10);
 
     // Filter via snapshot: project-scoped not leaked to global filter
     const filtered = store.listMasterConversations(projectId);
@@ -207,6 +207,37 @@ test('Master chat invariants fail closed', async () => {
   }
 });
 
+test('Project Settings HTTP boundary cannot forge orchestration or integrity state', async () => {
+  const { dir, store, server, base } = await startServer();
+  try {
+    const project = await store.addProject({ name: 'Guarded Project' });
+    const forgedOrchestration = await jsonFetch(base, `/api/projects/${project.id}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ orchestration: { status: 'complete' } }),
+    });
+    assert.equal(forgedOrchestration.response.status, 400);
+    assert.match(forgedOrchestration.value.error, /Invalid Project orchestration field/);
+
+    const forgedBlocked = await jsonFetch(base, `/api/projects/${project.id}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'blocked' }),
+    });
+    assert.equal(forgedBlocked.response.status, 400);
+    assert.match(forgedBlocked.value.error, /owned by control-plane integrity checks/);
+
+    await store.updateProject(project.id, { status: 'needs_sync' });
+    const bypassRepair = await jsonFetch(base, `/api/projects/${project.id}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'active' }),
+    });
+    assert.equal(bypassRepair.response.status, 400);
+    assert.equal(store.getProject(project.id).status, 'needs_sync');
+  } finally {
+    server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('Master React surface remains first-class and real-model wired (contract)', async () => {
   const { readFile } = await import('node:fs/promises');
   const app = await readFile(new URL('../web/src/App.tsx', import.meta.url), 'utf8');
@@ -223,5 +254,5 @@ test('Master React surface remains first-class and real-model wired (contract)',
   assert.match(service, /createOpenAICompatible/);
   assert.match(store, /Master chat cannot directly invoke/);
   assert.match(http, /master\.turn\(conversationId, input\.content\)/);
-  assert.match(store, /SCHEMA_VERSION = 9/);
+  assert.match(store, /SCHEMA_VERSION = 10/);
 });

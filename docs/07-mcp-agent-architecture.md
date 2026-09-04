@@ -281,7 +281,22 @@ POST   /api/mcp/servers/:id/resources/read
 POST   /api/mcp/servers/:id/prompts/get
 ```
 
-There is not yet a public/mobile MCP registry UI, authentication layer or complete Master-chat surface.
+The local React System surface implements MCP registry/discovery/removal and Master chat is persistent/global/Project-scoped. There is no authenticated public/remote MCP administration surface; loopback remains mandatory.
+
+## Bounded automatic Project planning
+
+Project automation uses the Master MCP surface through an additional runtime allowlist. An automated planning turn receives only:
+
+- canonical Dashboard/Project/Task/Agent/Run/evidence/scope reads,
+- atomic `task_batch_create`.
+
+It does not receive `task_delegate`, `research_start`, Idea mutation, Run abort, publish, review or merge capability. Prompt instructions explain the workflow, but the filtered tool set is the authorization boundary.
+
+Ordinary interactive Master sessions additionally expose `project_create` for a planning-first Project record. It does not clone/import a repository or grant execution authority; automatic planning cycles do not receive it.
+
+`task_batch_create` requires 1–50 fully specified Tasks, explicit `workScopes`, acceptance criteria and zero-based intra-batch dependencies. The StateStore validates the entire dependency graph and assignments before one atomic commit; no executable partial prefix is exposed. The normal autonomy loop later admits ready Tasks through existing Project readiness, identity, capacity and scope gates.
+
+Planning can be claimed only when the Project completion contract is configured, automatic planning is enabled, the Project is active/autonomous and no open Task or active/uncertain/quarantined Run exists. A planning-cycle number prevents stale settlement. Provider failure before a batch, an ambiguous result, a missing completion marker or process restart during the cycle becomes `needs_input`. A committed batch remains canonical even if the provider response fails afterward.
 
 ### External tool authorization
 
@@ -347,7 +362,7 @@ The suite covers:
 - external host with handler completing multi-round input,
 - external MCP default-deny and explicit mutation approval,
 - unsafe URL/secret configuration rejection,
-- StateStore schema v8 migration (with the Agent Registry introduced in v7),
+- StateStore schema v10 migration (with the Agent Registry introduced in v7 and Project completion/orchestration state introduced in v10),
 - durable agent assignment/scope persistence,
 - assignment/scope freeze after any execution history,
 - read-only roles rejected for executable work and unassigned Tasks blocked from bypassing registered scope owners,
@@ -371,8 +386,8 @@ This implementation does not yet prove:
 - real OpenCode configured as an MCP host against Dashboard on the user's PC,
 - interoperability with every MCP client/server implementation,
 - authenticated remote MCP,
-- complete persistent Master chat/memory,
-- automatic fleet scheduling/rebalancing above ordinary Task delegation,
+- Master token streaming and richer attachments,
+- adaptive live-work fleet rebalancing above the bounded queue-drained Project planner,
 - persistent per-agent memory/SOUL-style identity,
 - ACP/Codex/Claude/local harness breadth,
 - production multi-instance fencing.

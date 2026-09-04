@@ -104,3 +104,31 @@ test('GitHub publication and CI reconciliation happen before supervisor scheduli
   await engine.tick();
   assert.deepEqual(calls, [['publish', 't1'], ['ci', 't1'], ['supervisor', 't1']]);
 });
+
+test('autonomous loop starts bounded Master planning only after Tasks and Runs drain', async () => {
+  const state = {
+    projects: [{
+      id: 'p1', status: 'active',
+      autonomy: { mode: 'autonomous', autoAnalyzeIdeas: false, autoMerge: false, maxConcurrentRuns: 2 },
+      orchestration: { enabled: true, status: 'working' },
+    }],
+    ideas: [], tasks: [], runs: [],
+  };
+  const calls = [];
+  const store = { snapshot: () => structuredClone(state) };
+  const engine = new AutonomyEngine({
+    store,
+    operations: baseOperations({ orchestrateProject: async (projectId) => { calls.push(projectId); return { createdTaskIds: [] }; } }),
+    intervalMs: 999999,
+  });
+  const result = await engine.tick();
+  assert.deepEqual(calls, ['p1']);
+  assert.ok(result.actions.some((action) => action.type === 'project.master_plan' && action.projectId === 'p1'));
+
+  state.tasks.push({ id: 'open', projectId: 'p1', kind: 'work', state: 'backlog', blockedBy: [] });
+  await engine.tick();
+  state.tasks.length = 0;
+  state.runs.push({ id: 'uncertain', projectId: 'p1', taskId: 'done', kind: 'worker', status: 'failed', dispatchUncertain: true });
+  await engine.tick();
+  assert.deepEqual(calls, ['p1']);
+});

@@ -141,7 +141,7 @@ Worker never approves/merges itself. Supervisor is a separate read-only Run. Con
 
 ## Agent Registry and ownership
 
-State schema v9 contains durable project specialists plus external-session termination proof for coding Runs and persistent Master conversations/messages. The Agent Registry introduced in v7 gives an agent stable identity, project, role, harness, optional model, instructions, capabilities, enabled state and concrete project-relative `workScopes`.
+State schema v10 contains durable project specialists, Project completion/orchestration state, external-session termination proof for coding Runs and persistent Master conversations/messages. The Agent Registry introduced in v7 gives an agent stable identity, project, role, harness, optional model, instructions, capabilities, enabled state and concrete project-relative `workScopes`.
 
 A Task may reference an `agentId`. Assignment snapshots agent name/role/instructions and uses scopes constrained to the agent's registered scopes. Assignment and Task `workScopes` may change only while there is no execution history; a positive iteration or any persisted Run freezes them even if the Task is later back in `backlog` or `needs_input`.
 
@@ -152,6 +152,14 @@ An unassigned work Task still owns its explicit Task scopes for that Run. Missin
 Static registry checks are not enough, so worker admission checks effective Task scopes against every other active worker Task in the Project while holding the same durable run-admission lock used for concurrency, then repeats the check inside the atomic StateStore claim. Only active/uncertain `worker` Runs own mutation scopes. Planner/supervisor Runs count toward concurrency but do not claim file ownership. `dispatch_unknown` and `dispatchUncertain` retain scope ownership until reconciled.
 
 Scope instructions are included in the worker prompt, but prompt compliance is defense-in-depth rather than the authority mechanism.
+
+## Project completion contract and Master planning cycle
+
+A Project may persist an `objective`, ordered `definitionOfDone` criteria and bounded `orchestration` state. Automatic planning is opt-in and requires `autonomy.mode=autonomous`; ordinary manual/assisted Projects are unchanged.
+
+The autonomy loop may claim a Master planning cycle only for an active Project with no open Tasks and no active, uncertain or quarantined Runs. The StateStore atomically moves `ready|working -> planning` and increments the durable cycle number. The automated Master turn receives canonical read tools plus `task_batch_create` only. The first batch validates every Task, explicit work scope and dependency graph before committing the complete set in one state transition; another batch in the same cycle is rejected atomically. It cannot delegate, publish, review or merge.
+
+Settlement is cycle-checked and may become `working`, `needs_input` or `complete`. A provider/tool failure after a committed batch preserves the batch and settles to `working`; a failure before a batch settles to `needs_input`. Loading a persisted `planning` state after restart also becomes `needs_input`, preventing silent replay or duplicate planning. `complete` is explicitly a Master assessment against the Project contract, not Git/CI/supervisor evidence and not merge authority.
 
 ## Project readiness and bound admission
 

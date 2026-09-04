@@ -29,6 +29,8 @@ Implemented on the foundation branch:
 - responsive Project-first layout,
 - fail-closed rendered Chrome acceptance smoke at 1440 / 768 / 390 for Dashboard and Project Overview; timeout, runtime/console errors and horizontal page overflow fail CI.
 - Project Settings exposes repository binding and bounded autonomy controls without treating a save as readiness proof,
+- Project Settings exposes a durable objective, Project definition of done, pause/archive state and opt-in bounded Master planning,
+- Task creation/editing exposes priority and dependencies; structural fields remain editable only before execution history,
 - model selectors separate OpenCode execution models from direct-provider Master/Research models,
 - Project-scoped Master conversations remain inside the owning Project context.
 
@@ -37,6 +39,7 @@ Intentionally partial rather than over-abstracted:
 - global defaults currently cover role models plus autonomy mode/CI requirement; coding-harness, verification-policy and concurrency defaults remain planned,
 - discovery depth remains one direct directory below configured roots,
 - startup discovery is informational/read-only and never imports or executes automatically,
+- automatic Master planning is local, explicit and queue-drained; it never broadens discovery/import authority,
 - full real OpenCode + GitHub PC dogfood remains a separate external gate even when deterministic/Actions checks are green.
 
 The remainder of this document is the binding UX/discovery contract and acceptance model. Items already implemented stay documented because they define regression expectations.

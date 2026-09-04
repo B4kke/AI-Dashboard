@@ -10,10 +10,33 @@ function bounded(value, limit = 8_000) {
 }
 
 function conversationMessages(messages) {
-  return messages
-    .filter((message) => ['user', 'assistant'].includes(message.role))
-    .slice(-40)
-    .map((message) => ({ role: message.role, content: bounded(message.content, 20_000) }));
+  const candidates = messages
+    .filter((message) => ['user', 'assistant', 'system'].includes(message.role))
+    .map((message) => ({
+      role: message.role === 'system' ? 'user' : message.role,
+      content: message.role === 'system'
+        ? `[AUTOMATED CONTROL-PLANE REQUEST]\n${bounded(message.content, 20_000)}`
+        : bounded(message.content, 20_000),
+    }));
+  const selected = [];
+  let characters = 0;
+  for (let index = candidates.length - 1; index >= 0 && selected.length < 40; index -= 1) {
+    const candidate = candidates[index];
+    if (characters + candidate.content.length > 120_000 && selected.length) break;
+    selected.push(candidate);
+    characters += candidate.content.length;
+  }
+  return selected.reverse();
+}
+
+function safeToolPayload(value, limit = 3_000) {
+  if (value === null || value === undefined) return null;
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized.length <= limit ? value : { truncated: true, characters: serialized.length };
+  } catch {
+    return { truncated: true, reason: 'not_serializable' };
+  }
 }
 
 function toolHistory(result) {
@@ -22,7 +45,7 @@ function toolHistory(result) {
     for (const call of step.toolCalls || []) {
       calls.push({
         tool: call.toolName || call.tool || 'tool',
-        args: call.input ?? call.args ?? null,
+        args: safeToolPayload(call.input ?? call.args ?? null),
         status: 'completed',
       });
       if (calls.length >= 8) return calls;
@@ -34,7 +57,11 @@ function toolHistory(result) {
 function systemPrompt({ locale, project, state, soul, memoryContext }) {
   const language = locale === 'en' ? 'English' : 'Norwegian Bokmål';
   const projectContext = project
-    ? `Active Project context: ${project.name} (${project.id}). Status: ${project.status}. Repository: ${project.repository || 'local/unbound'}.`
+    ? [
+      `Active Project context: ${project.name} (${project.id}). Status: ${project.status}. Repository: ${project.repository || 'local/unbound'}.`,
+      project.objective ? `Project objective: ${bounded(project.objective, 8_000)}` : 'Project objective is not configured.',
+      project.definitionOfDone?.length ? `Project definition of done:\n${bounded(project.definitionOfDone.map((item, index) => `${index + 1}. ${item}`).join('\n'), 12_000)}` : 'Project definition of done is not configured.',
+    ].join('\n')
     : 'No Project is forced for this conversation. You are a general personal assistant first.';
   return [
     `You are Master, the user's personal AI assistant. Answer in ${language} unless the user asks for another language.`,
@@ -151,7 +178,7 @@ export function createMasterService({
     while (pendingLearning.size) await Promise.allSettled([...pendingLearning]);
   }
 
-  async function turn(conversationId, content) {
+  async function turn(conversationId, content, options = {}) {
     const conversation = store.getMasterConversation(conversationId);
     if (!conversation) throw new Error('Master conversation not found');
     const text = String(content || '').trim();
@@ -167,7 +194,13 @@ export function createMasterService({
     if (!provider || provider.enabled === false) throw new Error(`Master model provider is unavailable: ${model.providerID}`);
     if (provider.apiKeyEnv && !process.env[provider.apiKeyEnv]) throw new Error(`Master provider credential is not configured: ${provider.apiKeyEnv}`);
 
-    const user = await store.addMasterMessage({ conversationId, role: 'user', kind: 'conversation', content: text });
+    const systemInitiated = options.systemInitiated === true;
+    const user = await store.addMasterMessage({
+      conversationId,
+      role: systemInitiated ? 'system' : 'user',
+      kind: systemInitiated ? 'executing' : 'conversation',
+      content: text,
+    });
     const providerClient = createOpenAICompatible({
       name: provider.id,
       baseURL: provider.baseUrl,
@@ -176,6 +209,8 @@ export function createMasterService({
     const modelClient = providerClient.chatModel(model.modelID);
 
     let mcpClient = null;
+    let progressMessage = null;
+    const progressCalls = [];
     try {
       const [soul, remembered] = await Promise.all([memory.readSoul(), Promise.resolve(memory.context(project?.id || null))]);
       mcpClient = await createMcp({
@@ -183,8 +218,30 @@ export function createMasterService({
         name: 'ai-dashboard-master-runtime',
         version: '0.0.7',
       });
-      const tools = await mcpClient.tools();
+      const discoveredTools = await mcpClient.tools();
+      const allowedTools = Array.isArray(options.allowedTools) ? new Set(options.allowedTools) : null;
+      const tools = allowedTools
+        ? Object.fromEntries(Object.entries(discoveredTools).filter(([name]) => allowedTools.has(name)))
+        : discoveredTools;
+      if (allowedTools && Object.keys(tools).length !== allowedTools.size) {
+        const missing = [...allowedTools].filter((name) => !tools[name]);
+        throw new Error(`Required Master tools are unavailable: ${missing.join(', ')}`);
+      }
       const history = conversationMessages(store.masterMessagesFor(conversationId));
+      progressMessage = await store.addMasterMessage({
+        conversationId,
+        role: 'assistant',
+        kind: 'executing',
+        content: preferences.locale === 'en' ? 'Master is working…' : 'Master arbeider…',
+      });
+      const updateProgress = async (contentOverride = null) => {
+        if (!progressMessage) return;
+        progressMessage = await store.updateMasterMessage(progressMessage.id, {
+          kind: 'executing',
+          content: contentOverride || progressMessage.content,
+          toolCalls: progressCalls.map(({ callId, ...call }) => call),
+        });
+      };
       const result = await generate({
         model: modelClient,
         system: systemPrompt({ locale: preferences.locale || 'nb', project, state, soul, memoryContext: remembered }),
@@ -192,23 +249,35 @@ export function createMasterService({
         tools,
         stopWhen: isStepCount(8),
         temperature: 0.25,
+        onToolExecutionStart: async (event) => {
+          const tool = event?.toolCall?.toolName || 'tool';
+          progressCalls.push({ callId: event?.toolCall?.toolCallId || event?.callId || `${tool}-${progressCalls.length}`, tool, args: safeToolPayload(event?.toolCall?.input ?? null), status: 'running' });
+          await updateProgress(preferences.locale === 'en' ? `Master is using ${tool}…` : `Master bruker ${tool}…`);
+        },
+        onToolExecutionEnd: async (event) => {
+          const callId = event?.toolCall?.toolCallId || event?.callId;
+          const item = [...progressCalls].reverse().find((call) => call.callId === callId)
+            || [...progressCalls].reverse().find((call) => call.tool === event?.toolCall?.toolName && call.status === 'running');
+          if (item) item.status = event?.toolOutput?.type === 'tool-error' ? 'failed' : 'completed';
+          await updateProgress();
+        },
       });
       const assistantText = bounded(result.text || 'Jeg fullførte verktøykallet, men modellen returnerte ingen tekst.', 40_000);
-      const assistant = await store.addMasterMessage({
-        conversationId,
-        role: 'assistant',
-        kind: 'conversation',
+      const assistant = await store.updateMasterMessage(progressMessage.id, {
+        kind: options.assistantKind || 'conversation',
         content: assistantText,
         toolCalls: toolHistory(result),
       });
-      const learning = scheduleLearning({
-        modelClient,
-        locale: preferences.locale || 'nb',
-        project,
-        conversationId,
-        user,
-        assistant,
-      });
+      const learning = systemInitiated || options.skipLearning === true
+        ? { scheduled: false }
+        : scheduleLearning({
+          modelClient,
+          locale: preferences.locale || 'nb',
+          project,
+          conversationId,
+          user,
+          assistant,
+        });
       return {
         user,
         assistant,
@@ -218,15 +287,69 @@ export function createMasterService({
         learning,
       };
     } catch (error) {
-      await store.addMasterMessage({
-        conversationId,
-        role: 'assistant',
-        kind: 'needs_input',
-        content: `Master kunne ikke fullføre modellkjøringen: ${bounded(error.message, 2_000)}`,
-      }).catch(() => {});
+      const failure = `Master kunne ikke fullføre modellkjøringen: ${bounded(error.message, 2_000)}`;
+      if (progressMessage) await store.updateMasterMessage(progressMessage.id, { kind: 'needs_input', content: failure, toolCalls: progressCalls.map(({ callId, ...call }) => call) }).catch(() => {});
+      else await store.addMasterMessage({ conversationId, role: 'assistant', kind: 'needs_input', content: failure }).catch(() => {});
       throw error;
     } finally {
       await mcpClient?.close?.().catch(() => {});
+    }
+  }
+
+  async function orchestrateProject(projectId) {
+    const claim = await store.claimProjectOrchestration(projectId);
+    const project = validateProject(projectId);
+    let conversation = claim.conversationId ? store.getMasterConversation(claim.conversationId) : null;
+    if (!conversation || conversation.projectId !== project.id) {
+      conversation = store.listMasterConversations(project.id).find((item) => item.title === 'Automatisk prosjektledelse') || null;
+    }
+    if (!conversation) conversation = await store.createMasterConversation({ projectId: project.id, title: 'Automatisk prosjektledelse' });
+    const beforeIds = new Set(store.tasksForProject(project.id).map((task) => task.id));
+    const criteria = bounded(claim.definitionOfDone.map((item, index) => `${index + 1}. ${item}`).join('\n'), 12_000);
+    const prompt = [
+      `Run automatic Master planning cycle ${claim.cycle} for Project ${project.id}.`,
+      `OBJECTIVE:\n${claim.objective}`,
+      `PROJECT DEFINITION OF DONE:\n${criteria}`,
+      'Read the canonical Project, Tasks, Runs, agents and relevant evidence before deciding.',
+      'If every definition-of-done criterion is demonstrably satisfied by completed Tasks and evidence, create no work and finish with MASTER_PLAN_STATUS: complete.',
+      'If work remains, reuse suitable enabled specialists where possible and call task_batch_create exactly once with the smallest dependency-aware next batch. Every Task needs explicit non-overlapping workScopes and concrete acceptance criteria. Do not call task_delegate; the autonomy engine owns admission after the complete batch is durable.',
+      'If a real operator decision is required, create no work, explain the exact question and finish with MASTER_PLAN_STATUS: needs_input.',
+      'Never publish, review, approve, merge, fabricate evidence or weaken Project safety policy.',
+      'Your final line must be exactly one of: MASTER_PLAN_STATUS: tasks_created | MASTER_PLAN_STATUS: complete | MASTER_PLAN_STATUS: needs_input',
+    ].join('\n\n');
+    try {
+      const result = await turn(conversation.id, prompt, {
+        systemInitiated: true,
+        assistantKind: 'proposal',
+        skipLearning: true,
+        allowedTools: [
+          'dashboard_status', 'project_get', 'task_list', 'task_get', 'task_evidence',
+          'agent_list', 'agent_get', 'run_get', 'scope_check', 'task_batch_create',
+        ],
+      });
+      const created = store.tasksForProject(project.id).filter((task) => !beforeIds.has(task.id));
+      const marker = /MASTER_PLAN_STATUS:\s*(tasks_created|complete|needs_input)\s*$/i.exec(result.assistant.content)?.[1]?.toLowerCase() || null;
+      const status = created.length ? 'working' : (marker === 'complete' ? 'complete' : 'needs_input');
+      const settled = await store.settleProjectOrchestration(project.id, {
+        cycle: claim.cycle,
+        status,
+        conversationId: conversation.id,
+        summary: result.assistant.content,
+        error: !created.length && marker === 'tasks_created' ? 'Master reported created Tasks, but no Task batch was committed.' : null,
+      });
+      return { project: settled, createdTaskIds: created.map((task) => task.id), marker };
+    } catch (error) {
+      const created = store.tasksForProject(project.id).filter((task) => !beforeIds.has(task.id));
+      const status = created.length ? 'working' : 'needs_input';
+      const settled = await store.settleProjectOrchestration(project.id, {
+        cycle: claim.cycle,
+        status,
+        conversationId: conversation.id,
+        summary: created.length ? `Master call ended after committing ${created.length} Task(s); automatic work continues from canonical Task state.` : null,
+        error: created.length ? null : error.message,
+      }).catch(() => null);
+      if (created.length) return { project: settled, createdTaskIds: created.map((task) => task.id), marker: null };
+      throw error;
     }
   }
 
@@ -263,5 +386,5 @@ export function createMasterService({
     return memory.forget(id);
   }
 
-  return { initialize, turn, profile, updateSoul, listMemory, remember, updateMemory, forgetMemory, drainLearning };
+  return { initialize, turn, orchestrateProject, profile, updateSoul, listMemory, remember, updateMemory, forgetMemory, drainLearning };
 }

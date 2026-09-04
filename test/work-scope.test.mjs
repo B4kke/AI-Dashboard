@@ -32,7 +32,7 @@ test('specialist agents and task assignments are durable and constrained to agen
     const task = await store.addTask({ projectId: project.id, title: 'Implement MCP', agentId: agent.id, workScopes: ['server/mcp/client'], acceptanceCriteria: ['works'] });
     await assert.rejects(() => store.addTask({ projectId: project.id, title: 'Escape scope', agentId: agent.id, workScopes: ['public'] }), /inside the assigned agent workScopes/);
     const reloaded = new StateStore(file); await reloaded.load();
-    assert.equal(reloaded.snapshot().schemaVersion, 9); assert.equal(reloaded.getAgent(agent.id).name, 'MCP specialist');
+    assert.equal(reloaded.snapshot().schemaVersion, 10); assert.equal(reloaded.getAgent(agent.id).name, 'MCP specialist');
     assert.deepEqual(reloaded.getTask(task.id).workScopes, ['server/mcp/client']);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

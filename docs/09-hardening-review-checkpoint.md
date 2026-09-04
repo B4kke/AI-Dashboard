@@ -1,6 +1,6 @@
 # Hardening review checkpoint
 
-Status date: 2026-08-29
+Status date: 2026-09-03
 Branch: `bootstrap/control-center-foundation`  
 PR: #2
 
@@ -68,15 +68,15 @@ P0 Product Foundation head (level 3 verified on exact-head Actions — includes 
 - Commit: `f959a7a64781cacc08c3b110c1ec3dfc334fa9c5`
 - GitHub Actions push `33020151327`: `test` Linux success + `Windows portability` success (incl. audit + rendered 1440/768/390)
 - GitHub Actions PR `33020241708`: `test` Linux success + `Windows portability` success (incl. audit + rendered 1440/768/390)
-- Current local deterministic suite: 393 tests pass; `git diff --check` and the production build are clean. Exact-head rendered/Actions evidence remains pending for the repaired UI.
+- Current completion-contract change: 46 focused local tests pass across StateStore, autonomy, Master, MCP, HTTP guards, work scopes and React contracts; syntax, `git diff --check` and the production build are clean. The full PC/OpenCode campaign was intentionally not run because it interferes with the active local OpenCode process. Exact-head full-suite/rendered/Actions evidence remains pending.
 - Rendered smoke covers `/#/master` (setup card), `/#/projects`, `/#/project/:id`, `/#/master/:id` and `/#/system` at 1440/768/390 without overflow/runtime errors
 
 This proves deterministic + exact-head Actions for fleet, Master and P0 heads. None proves real OpenCode/GitHub interoperability (level 4).
 
 ## Project-level autonomy / M3 foundation
 
-11. **Open:** explicit Project objective / definition-of-done model with durable project-level completion criteria and evidence.
-12. **Open:** automatic bounded Master/fleet scheduler above ordinary Task delegation. It must re-evaluate canonical state, create only scoped Tasks and never self-certify completion.
+11. **Implemented, exact-head external evidence pending:** explicit Project objective / definition-of-done plus durable planning-cycle state in schema v10. Completion remains a Master assessment, not machine evidence.
+12. **Implemented bounded local slice, exact-head external evidence pending:** automatic queue-drained Master planning with atomic dependency-aware Task batches. The automated turn receives reads + batch creation only; it cannot delegate, publish, review or merge. Adaptive live-work rebalancing remains open.
 13. **Control plane + canonical React implemented, exact-head render pending:** persistent Master conversation/session context is global + Project-aware in StateStore/API and ordinary user messages cannot fabricate assistant/tool/verified-result history. Global and Project Master destinations are exposed; contextual Task/Research shortcuts remain open. SOUL.md and bounded inspectable/editable/deletable memory are implemented; richer per-agent memory remains open.
 14. **Implemented:** structured diff/scope/verification/CI/supervisor/merge evidence is primary; raw evidence JSON remains Advanced.
 15. **Control plane + canonical React implemented, exact-head render pending:** Project-scoped Agent fleet APIs retain the full registry invariants and no alternate execution motor. The React Agents tab lists fleet/active state and exposes guarded create/edit/enable/disable. No publish/review/merge bypass exists.
@@ -86,18 +86,18 @@ This proves deterministic + exact-head Actions for fleet, Master and P0 heads. N
 Implemented as a normal chat environment, inspired by current `odysseus-dev/odysseus@dev` browser layout (verified `AGPL-3.0-or-later` — no substantial code/assets reused; AI Dashboard stays its own product/visual system):
 
 - first-class global `Master` (`#/master`) plus Project-scoped Master destination,
-- persistent global/project-aware conversations + messages (`StateStore` v9, whitelisted `POST/GET /api/master/*`),
+- persistent global/project-aware conversations + messages (`StateStore` v10, whitelisted `POST/GET /api/master/*`),
 - real direct-provider reasoning through AI SDK + bounded Dashboard MCP tools,
-- bubble stream `user` (right) vs `assistant` (left); richer turn-kind and progressive tool rendering remain open,
+- bubble stream `user` (right) vs `assistant` (left), with one durable assistant placeholder updated as tool calls start/end,
 - internal tool-call history is capped and `publish/review/merge` fail-closed; ordinary UI/HTTP user turns cannot submit tool-call records,
 - centered `✦ Master` empty state like a normal chat, tip, durable history,
 - mobile-first: `300px+1fr` → single column on tablet/phone, no overflow, rounded `Message Master…` composer with `↑` send.
 
 Exact-head Linux+Windows GitHub Actions verified on `a990d75` (push `32995600890` + PR `32995605683`) and re-verified on `f959a7a` (push `33020151327` + PR `33020241708`).
 
-Master now uses real AI SDK direct-model inference + Dashboard `/mcp/master` tools, local `SOUL.md` and bounded durable memory with post-response reflection (see M3C). The visible answer no longer waits for the second learning call. Token streaming/progressive tool rendering and richer file/evidence attachments remain open.
+Master now uses real AI SDK direct-model inference + Dashboard `/mcp/master` tools, local `SOUL.md` and bounded durable memory with post-response reflection (see M3C). The visible answer no longer waits for the second learning call. Tool status is progressively persisted; token streaming and richer file/evidence attachments remain open.
 
-Still open: token streaming, richer Task/Run/file/evidence attachments, per-agent persona/memory and fleet scheduler (see `docs/04-roadmap.md` M3A/M3C).
+Still open: token streaming, richer Task/Run/file/evidence attachments, per-agent persona/memory and adaptive live-work rebalancing (see `docs/04-roadmap.md` M3A/M3C).
 
 ## Review invariants
 

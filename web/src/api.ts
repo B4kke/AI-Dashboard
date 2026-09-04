@@ -2,14 +2,15 @@ import i18n from './i18n';
 
 export type Project = {
   id: string; name: string; description?: string | null; repoPath?: string | null; repository?: string | null;
-  baseBranch?: string; status?: string; verificationCommands?: string[];
+  baseBranch?: string; status?: string; verificationCommands?: string[]; objective?: string | null; definitionOfDone?: string[];
   modelPolicy?: { codingModel?: string | null; planningModel?: string | null; supervisorModel?: string | null; researchModel?: string | null };
-  autonomy?: Record<string, unknown>; lastPreflight?: { ok?: boolean; blockers?: Array<{ code?: string; summary?: string; detail?: string }> } | null; updatedAt?: string;
+  autonomy?: Record<string, unknown>; orchestration?: { enabled?: boolean; status?: string; cycle?: number; conversationId?: string | null; lastRunAt?: string | null; lastSummary?: string | null; lastError?: string | null; completedAt?: string | null };
+  lastPreflight?: { ok?: boolean; blockers?: Array<{ code?: string; summary?: string; detail?: string }> } | null; updatedAt?: string;
 };
 export type Task = {
   id: string; projectId: string; title: string; description?: string; state: string; priority?: string;
   kind?: string; acceptanceCriteria?: string[]; blockedBy?: string[]; workScopes?: string[]; agentId?: string | null;
-  publication?: Record<string, unknown> | null; updatedAt?: string;
+  model?: string | null; verificationCommands?: string[]; iteration?: number; publication?: Record<string, unknown> | null; updatedAt?: string;
 };
 export type Agent = {
   id: string; projectId: string; name: string; role: string; harness?: string; model?: string | null;

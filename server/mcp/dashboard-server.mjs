@@ -13,9 +13,11 @@ import { normalizeWorkScopes, scopeSetsOverlap, taskWorkScopes } from '../core/w
 
 const ACTIVE_STATES = new Set(['preparing', 'running', 'retrying', 'dispatch_unknown']);
 const MUTATING_TOOLS = new Set([
+  'project_create',
   'agent_create',
   'agent_update',
   'task_create',
+  'task_batch_create',
   'task_assign_agent',
   'task_delegate',
   'task_requeue',
@@ -337,6 +339,26 @@ export function buildDashboardMcpServer({
   );
 
   register(
+    'project_create',
+    {
+      description: 'Create a Project record for planning and Tasks. This does not import, clone or execute a repository.',
+      inputSchema: z.object({
+        name: z.string().min(1).max(500),
+        description: z.string().max(2_000).default(''),
+        objective: z.string().max(20_000).nullable().optional(),
+        definitionOfDone: z.array(z.string().min(1)).max(100).default([]),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => result(await store.addProject(input)),
+  );
+
+  register(
     'agent_create',
     {
       description: 'Create a named project specialist with explicit non-overlapping work scopes.',
@@ -394,7 +416,7 @@ export function buildDashboardMcpServer({
         title: z.string().min(1).max(500),
         description: z.string().max(40_000).default(''),
         priority: z.enum(['P0', 'P1', 'P2', 'P3']).default('P2'),
-        acceptanceCriteria: z.array(z.string()).max(100).default([]),
+        acceptanceCriteria: z.array(z.string().min(1)).min(1).max(100),
         verificationCommands: z.array(z.string()).max(50).optional(),
         blockedBy: z.array(z.string()).max(100).default([]),
         agentId: z.string().nullable().optional(),
@@ -410,6 +432,35 @@ export function buildDashboardMcpServer({
       },
     },
     async (input) => result(await store.addTask(input)),
+  );
+
+  register(
+    'task_batch_create',
+    {
+      description: 'Atomically create a dependency-aware batch of ordinary Tasks for one Project. dependsOn contains zero-based indexes into the same batch.',
+      inputSchema: z.object({
+        projectId: z.string().min(1),
+        tasks: z.array(z.object({
+          title: z.string().min(1).max(500),
+          description: z.string().max(40_000).default(''),
+          priority: z.enum(['P0', 'P1', 'P2', 'P3']).default('P2'),
+          acceptanceCriteria: z.array(z.string()).min(1).max(100),
+          verificationCommands: z.array(z.string()).max(50).optional(),
+          dependsOn: z.array(z.number().int().nonnegative()).max(100).default([]),
+          agentId: z.string().nullable().optional(),
+          workScopes: z.array(z.string()).min(1).max(100),
+          model: z.string().nullable().optional(),
+          agentRole: z.string().nullable().optional(),
+        })).min(1).max(50),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => result(await store.addTaskBatch(input)),
   );
 
   register(

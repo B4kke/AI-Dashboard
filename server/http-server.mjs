@@ -7,6 +7,33 @@ import { inspectProjectUsability } from './core/project-usability.mjs';
 
 const AGENT_MUTATION_FIELDS = new Set(['name', 'role', 'harness', 'model', 'instructions', 'capabilities', 'workScopes', 'enabled']);
 const MASTER_USER_MESSAGE_FIELDS = new Set(['content']);
+const PROJECT_MUTATION_FIELDS = new Set(['name', 'description', 'objective', 'definitionOfDone', 'repository', 'baseBranch', 'status', 'verificationCommands', 'modelPolicy', 'autonomy', 'orchestration']);
+const PROJECT_MODEL_FIELDS = new Set(['codingModel', 'planningModel', 'supervisorModel', 'researchModel']);
+const PROJECT_AUTONOMY_FIELDS = new Set(['mode', 'supervisorRole', 'plannerRole', 'workerRole', 'maxConcurrentRuns', 'maxTaskIterations', 'maxRunMinutes', 'maxRetryAttempts', 'autoAnalyzeIdeas', 'autoMerge', 'cleanupAfterMerge', 'ciDiscoverySeconds', 'requireCi', 'mergeMethod', 'deleteRemoteBranch']);
+const PROJECT_ORCHESTRATION_FIELDS = new Set(['enabled', 'restart']);
+const INTEGRITY_PROJECT_STATUSES = new Set(['needs_sync', 'blocked']);
+
+function assertObjectFields(value, fields, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid ${label}`);
+  for (const key of Object.keys(value)) if (!fields.has(key)) throw new Error(`Invalid ${label} field: ${key}`);
+}
+
+function projectMutationPatch(project, input) {
+  assertObjectFields(input, PROJECT_MUTATION_FIELDS, 'Project mutation');
+  if (!Object.keys(input).length) throw new Error('Project mutation requires at least one field');
+  if (input.modelPolicy !== undefined) assertObjectFields(input.modelPolicy, PROJECT_MODEL_FIELDS, 'Project model policy');
+  if (input.autonomy !== undefined) assertObjectFields(input.autonomy, PROJECT_AUTONOMY_FIELDS, 'Project autonomy');
+  if (input.orchestration !== undefined) assertObjectFields(input.orchestration, PROJECT_ORCHESTRATION_FIELDS, 'Project orchestration');
+  if (input.status !== undefined) {
+    if (INTEGRITY_PROJECT_STATUSES.has(input.status) && input.status !== project.status) {
+      throw new Error(`Project status ${input.status} is owned by control-plane integrity checks`);
+    }
+    if (INTEGRITY_PROJECT_STATUSES.has(project.status) && input.status !== project.status) {
+      throw new Error(`Project status ${project.status} must be repaired through control-plane readiness/integrity checks`);
+    }
+  }
+  return input;
+}
 
 function agentMutationPatch(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid agent payload');
@@ -171,7 +198,11 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       return json(response, 200, await discovery.setProjectDefaults(await body(request)));
     }
     const projectPatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
-    if (request.method === 'PATCH' && projectPatch) return json(response, 200, await store.updateProject(decodeURIComponent(projectPatch[1]), await body(request)));
+    if (request.method === 'PATCH' && projectPatch) {
+      const projectId = decodeURIComponent(projectPatch[1]);
+      const project = store.getProject(projectId); if (!project) throw new Error('Project not found');
+      return json(response, 200, await store.updateProject(projectId, projectMutationPatch(project, await body(request))));
+    }
     const projectUsability = url.pathname.match(/^\/api\/projects\/([^/]+)\/usability$/);
     if (request.method === 'GET' && projectUsability) {
       const project = store.getProject(decodeURIComponent(projectUsability[1]));
@@ -328,7 +359,7 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       const message = String(error?.message || error || 'Request failed');
       const status = /not found/i.test(message) ? 404
         : /already in progress|cannot .* from state|already promoted|integrity review|cannot be promoted while|already has an active|overlaps active task|preflight failed|cannot disable agent|cannot change agent|would exclude assigned task|workScopes overlap|already exists/i.test(message) ? 409
-        : /required|valid .*id|choose .*model|invalid|request body too large|JSON|allowlist|workScope|agent field|read-only agent role|cannot be assigned to an executable work task|requires at least one field|invalid agent payload|cannot directly invoke|Master conversation/i.test(message) ? 400 : 500;
+        : /required|valid .*id|choose .*model|invalid|request body too large|JSON|allowlist|workScope|agent field|read-only agent role|cannot be assigned to an executable work task|requires at least one field|invalid agent payload|cannot directly invoke|Master conversation|owned by control-plane integrity checks|must be repaired through control-plane/i.test(message) ? 400 : 500;
       const payload = error?.readiness
         ? { error: message, code: 'PROJECT_NOT_READY', readiness: error.readiness }
         : { error: message };

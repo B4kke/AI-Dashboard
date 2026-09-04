@@ -38,6 +38,7 @@ export const MCP_PROFILES = Object.freeze({
       'agent_create',
       'agent_update',
       'task_create',
+      'task_batch_create',
       'task_assign_agent',
       'task_delegate',
       'task_requeue',

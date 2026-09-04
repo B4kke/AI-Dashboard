@@ -41,7 +41,7 @@ function publishStateChange(type, payload) {
   if (!mcp) return;
   mcp.notifyResourceUpdated('dashboard://summary');
   if (payload?.projectId) mcp.notifyResourceUpdated(`dashboard://projects/${payload.projectId}/tasks`);
-  if (type.startsWith('project.') && payload?.id) mcp.notifyResourceUpdated(`dashboard://projects/${payload.id}`);
+  if (type.startsWith('project.') && (payload?.id || payload?.projectId)) mcp.notifyResourceUpdated(`dashboard://projects/${payload.id || payload.projectId}`);
   if (type.startsWith('task.') && payload?.id) {
     mcp.notifyResourceUpdated(`dashboard://tasks/${payload.id}`);
     mcp.notifyResourceUpdated(`dashboard://tasks/${payload.id}/evidence`);
@@ -74,6 +74,13 @@ const orchestrator = decorateMergeRetry({ orchestrator: policyOrchestrator, stor
 const recovery = await orchestrator.recover();
 if (recovery.length) console.log(`AI Dashboard recovered ${recovery.length} state transition(s)`);
 
+// Startup repository discovery is read-only and informational. New
+// repositories are surfaced to the operator for explicit import; discovery
+// never auto-imports, starts workers or creates Git side effects.
+const discovery = createDiscoveryService({ store, github });
+const setup = createSetupService({ store, persistence: sqlite, discovery, opencode: rawOpenCode, research, dashboardBaseUrl });
+const master = createMasterService({ store, setup, dashboardBaseUrl, persistence: sqlite, soulPath: masterSoulFile });
+await master.initialize();
 const autonomy = new AutonomyEngine({
   store,
   operations: {
@@ -84,16 +91,9 @@ const autonomy = new AutonomyEngine({
     reconcilePublishedTask: orchestrator.reconcilePublishedTask,
     startSupervisor: orchestrator.startSupervisor,
     mergeApprovedTask: orchestrator.mergeApprovedTask,
+    orchestrateProject: master.orchestrateProject,
   },
 });
-
-// Startup repository discovery is read-only and informational. New
-// repositories are surfaced to the operator for explicit import; discovery
-// never auto-imports, starts workers or creates Git side effects.
-const discovery = createDiscoveryService({ store, github });
-const setup = createSetupService({ store, persistence: sqlite, discovery, opencode: rawOpenCode, research, dashboardBaseUrl });
-const master = createMasterService({ store, setup, dashboardBaseUrl, persistence: sqlite, soulPath: masterSoulFile });
-await master.initialize();
 discovery.scan().then((report) => {
   if (report.roots.length && report.newCount > 0) console.log(`AI Dashboard discovered ${report.newCount} not-yet-imported repository(ies) in configured Workspace Roots`);
 }).catch(() => {});
@@ -108,8 +108,8 @@ const server = createHttpServer({
   store, events, orchestrator, autonomy, research, github, mcp, mcpClients, discovery, setup, master,
   publicDir: PUBLIC, version: VERSION, privateMode,
 });
-autonomy.start();
 server.listen(port, host, () => {
+  autonomy.start();
   console.log(`AI Dashboard listening on http://${host}:${port}`);
   if (privateMode && setup.preferences().completed) {
     setup.ensureDashboardMcp().then((result) => {

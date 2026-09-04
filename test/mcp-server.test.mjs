@@ -91,10 +91,23 @@ test('Dashboard MCP serves 2026 protocol with separated tools, resources, prompt
 
     assert.equal(master.getProtocolEra(), 'modern');
     const masterTools = (await master.listTools()).tools.map((tool) => tool.name);
+    assert(masterTools.includes('project_create'));
     assert(masterTools.includes('agent_create'));
     assert(masterTools.includes('task_delegate'));
+    assert(masterTools.includes('task_batch_create'));
     assert(masterTools.includes('task_resolve_input'));
     assert(!masterTools.some((name) => /merge|publish|approve/.test(name)));
+
+    const createdProject = await master.callTool({
+      name: 'project_create',
+      arguments: {
+        name: 'MCP planning project',
+        objective: 'Plan a separate local Project',
+        definitionOfDone: ['Project contract is explicit'],
+      },
+    });
+    assert.equal(createdProject.structuredContent.name, 'MCP planning project');
+    assert.equal(createdProject.structuredContent.orchestration.enabled, false);
 
     const createdAgent = await master.callTool({
       name: 'agent_create',
@@ -122,6 +135,19 @@ test('Dashboard MCP serves 2026 protocol with separated tools, resources, prompt
     });
     const task = createdTask.structuredContent;
     assert.equal(task.agentId, agent.id);
+
+    const createdBatch = await master.callTool({
+      name: 'task_batch_create',
+      arguments: {
+        projectId: project.id,
+        tasks: [
+          { title: 'Batch core', workScopes: ['docs/core'], acceptanceCriteria: ['core documented'], dependsOn: [] },
+          { title: 'Batch follow-up', workScopes: ['docs/follow-up'], acceptanceCriteria: ['follow-up documented'], dependsOn: [0] },
+        ],
+      },
+    });
+    assert.equal(createdBatch.structuredContent.tasks.length, 2);
+    assert.deepEqual(createdBatch.structuredContent.tasks[1].blockedBy, [createdBatch.structuredContent.tasks[0].id]);
 
     await store.createRun({ projectId: project.id, taskId: task.id, status: 'running' });
     const conflict = await master.callTool({

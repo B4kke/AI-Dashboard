@@ -149,3 +149,71 @@ test('Master returns the visible answer without waiting for private reflection',
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('automatic Master planning is tool-filtered and settles an atomic Task batch', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-master-orchestration-'));
+  const store = new StateStore(join(dir, 'state.json'));
+  const persistence = metadataPersistence();
+  await store.load();
+  await store.upsertModelProvider({
+    id: 'local', name: 'Local', baseUrl: 'http://127.0.0.1:1234/v1', enabled: true, configured: true, local: true, apiKeyEnv: null,
+  });
+  const project = await store.addProject({ name: 'Automatic Project' });
+  await store.updateProject(project.id, {
+    objective: 'Complete the local product',
+    definitionOfDone: ['Operator workflow is complete'],
+    autonomy: { mode: 'autonomous' },
+    orchestration: { enabled: true },
+  });
+  const allToolNames = [
+    'dashboard_status', 'project_get', 'task_list', 'task_get', 'task_evidence', 'agent_list',
+    'agent_get', 'run_get', 'scope_check', 'task_batch_create', 'task_delegate', 'run_abort',
+  ];
+  let visibleTools = [];
+  const master = createMasterService({
+    store,
+    setup: { preferences: () => ({ locale: 'nb', masterModel: 'local/test-model' }) },
+    dashboardBaseUrl: 'http://127.0.0.1:7331',
+    persistence,
+    soulPath: join(dir, 'master', 'SOUL.md'),
+    createMcp: async () => ({
+      tools: async () => Object.fromEntries(allToolNames.map((name) => [name, { description: name }])),
+      close: async () => {},
+    }),
+    generate: async (options) => {
+      visibleTools = Object.keys(options.tools);
+      await options.onToolExecutionStart({
+        callId: 'generation-1',
+        toolCall: { toolCallId: 'tool-1', toolName: 'task_batch_create', input: { projectId: project.id } },
+      });
+      await store.addTaskBatch({
+        projectId: project.id,
+        tasks: [{ title: 'Finish product', workScopes: ['server'], acceptanceCriteria: ['Product contract is complete'], dependsOn: [] }],
+      });
+      await options.onToolExecutionEnd({
+        callId: 'generation-1',
+        toolCall: { toolCallId: 'tool-1', toolName: 'task_batch_create', input: { projectId: project.id } },
+        toolOutput: { type: 'tool-result' },
+      });
+      return {
+        text: 'Opprettet neste arbeidsrunde.\nMASTER_PLAN_STATUS: tasks_created',
+        steps: [{ toolCalls: [{ toolCallId: 'tool-1', toolName: 'task_batch_create', input: { projectId: project.id } }] }],
+        finishReason: 'stop',
+      };
+    },
+  });
+  try {
+    await master.initialize();
+    const result = await master.orchestrateProject(project.id);
+    assert.equal(result.createdTaskIds.length, 1);
+    assert.equal(store.getProject(project.id).orchestration.status, 'working');
+    assert(visibleTools.includes('task_batch_create'));
+    assert(!visibleTools.includes('task_delegate'));
+    assert(!visibleTools.includes('run_abort'));
+    const messages = store.masterMessagesFor(store.getProject(project.id).orchestration.conversationId);
+    assert.equal(messages.filter((message) => message.role === 'assistant').length, 1);
+    assert.equal(messages.at(-1).toolCalls[0].tool, 'task_batch_create');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

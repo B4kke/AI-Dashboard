@@ -1,10 +1,10 @@
 import { normalizeWorkScopes } from './work-scope.mjs';
 
 const ALLOWED_FIELDS = new Set([
-  'description', 'acceptanceCriteria', 'verificationCommands', 'priority',
+  'title', 'description', 'acceptanceCriteria', 'verificationCommands', 'priority',
   'blockedBy', 'model', 'agentRole', 'workScopes', 'agentId', 'supervisorFeedback',
 ]);
-const STRUCTURAL_FIELDS = new Set(['blockedBy', 'model', 'agentRole', 'workScopes', 'agentId']);
+const STRUCTURAL_FIELDS = new Set(['title', 'blockedBy', 'model', 'agentRole', 'workScopes', 'agentId']);
 
 function hasOwn(value, key) {
   return Object.prototype.hasOwnProperty.call(value || {}, key);
@@ -80,6 +80,11 @@ export async function repairTaskFromOperator(store, taskId, input = {}) {
   }
 
   const patch = {};
+  if (hasOwn(input, 'title')) {
+    const title = boundedText(input.title, 500);
+    if (!title) throw new Error('Task title is required');
+    patch.title = title;
+  }
   if (hasOwn(input, 'description')) patch.description = boundedText(input.description, 40_000);
   if (hasOwn(input, 'priority')) {
     if (!['P0', 'P1', 'P2', 'P3'].includes(input.priority)) throw new Error('Invalid Task priority');

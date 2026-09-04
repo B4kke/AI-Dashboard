@@ -13,6 +13,8 @@ AI Dashboard connects existing projects/repositories, direct Tasks, optional Ide
 ```text
 Project / existing repo
   |
+  +-> objective + Project definition of done -> bounded Master planning cycles
+  |
   +-> Task -> worker -> worktree -> checkpoint/evidence -> GitHub/CI -> supervisor -> merge
   |
   +-> Agent Registry -> named specialists + explicit workScopes -> Tasks
@@ -58,7 +60,7 @@ See `docs/10-project-first-ux-discovery.md` and `docs/11-design-principles.md`.
 
 OpenCode SDK, MCP and Octokit are adapters around external protocols. They do not own Project/Task/Run truth or irreversible decisions.
 
-The first-run and System UI can add or edit custom OpenAI-compatible providers by `baseUrl`, discover their models, and set global Coding/Planner/Supervisor/Research defaults plus the direct Master model. Projects can override all four role models, and specialist agents can select their own coding model. The selectors intentionally keep two catalogs separate: Coding/Planner/Supervisor/agents may select only models actually exposed by OpenCode, while Master/Research/Exploration may select only configured direct-provider models. API-key values are never persisted in Dashboard state: providers reference an environment-variable name only.
+The first-run and System UI can add or edit custom OpenAI-compatible providers by `baseUrl`, discover their models, and set global Coding/Planner/Supervisor/Research defaults plus the direct Master model. Projects can override all four role models, individual Tasks and specialist agents can select coding models, and API/provider choices remain editable. The selectors intentionally keep two catalogs separate: Coding/Planner/Supervisor/agents/Tasks may select only models actually exposed by OpenCode, while Master/Research/Exploration may select only configured direct-provider models. API-key values are never persisted in Dashboard state: providers reference an environment-variable name only.
 
 ## MCP — August 2026 architecture
 
@@ -125,7 +127,7 @@ See `docs/07-mcp-agent-architecture.md` and `docs/08-mcp-input-required.md`.
 
 ## Agent Registry and non-overlapping specialists
 
-State schema **v9** contains durable project agents, explicit external-session termination proof and persistent Master conversations/messages. The Agent Registry introduced in v7 lets a specialist define name, role, harness, model, instructions, capabilities, explicit project-relative `workScopes` and enabled state. Master history (`masterConversations`/`masterMessages` with `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`) is global + project-scoped and whitelisted via `POST/GET /api/master/*`.
+State schema **v10** contains durable project agents, Project objective/definition-of-done/orchestration state, explicit external-session termination proof and persistent Master conversations/messages. The Agent Registry introduced in v7 lets a specialist define name, role, harness, model, instructions, capabilities, explicit project-relative `workScopes` and enabled state. Master history (`masterConversations`/`masterMessages` with `CONVERSATION|PROPOSAL|EXECUTING|NEEDS INPUT|VERIFIED RESULT`) is global + project-scoped and whitelisted via `POST/GET /api/master/*`.
 
 Parent/child scopes overlap: `server` conflicts with `server/mcp`. Two enabled mutating specialists cannot own overlapping registered scopes. Read-only roles (`supervisor`, `reviewer`, `research`, `planner`, `master`) do not own mutation scopes and cannot be assigned an executable work Task. A Task assigned to a mutating specialist must remain inside that specialist's scopes and snapshots identity/instructions/model.
 
@@ -145,7 +147,9 @@ The intended Master AI can inspect Projects/Tasks/Runs/agents/evidence, reason a
 
 It cannot fabricate evidence, approve its own coding work, interpret unavailable CI as green, force-push/reset, merge an unreviewed checkpoint or bypass locks/recovery.
 
-Persistent Master chat is implemented as a **normal global and Project-scoped chat environment** with a conversation sidebar, centered message stream and composer. Project conversations stay isolated inside the owning Project workspace. History persists and ordinary HTTP/UI input can create only `user` + `conversation`; it cannot fabricate assistant roles, tool calls or verified-result labels. Task/Research creation still enters the normal control plane. Master uses real AI SDK model inference + Dashboard MCP tools, a local runtime `SOUL.md`, and bounded inspectable/editable/deletable durable memory. Post-turn reflection is scheduled after the visible answer so learning does not hold the chat response open. A full automatic fleet scheduler remains planned.
+Persistent Master chat is implemented as a **normal global and Project-scoped chat environment** with a conversation sidebar, centered message stream and composer. Project conversations stay isolated inside the owning Project workspace. History persists and ordinary HTTP/UI input can create only `user` + `conversation`; it cannot fabricate assistant roles, tool calls or verified-result labels. Task/Research creation still enters the normal control plane. Master uses real AI SDK model inference + Dashboard MCP tools, a local runtime `SOUL.md`, and bounded inspectable/editable/deletable durable memory. Tool execution status is persisted progressively through SSE while the model turn is running; token streaming is not yet implemented. Post-turn reflection is scheduled after the visible answer so learning does not hold the chat response open.
+
+An optional **bounded automatic Master planner** is implemented per Project. It requires an explicit objective, at least one Project definition-of-done criterion and `autonomous` mode. Only when the Project has no open Tasks or active/uncertain Runs may it claim a durable planning cycle. That cycle can inspect canonical state and create exactly one atomic dependency-aware Task batch, mark the Project as needing operator input, or assess the completion contract as satisfied. The automatic turn receives only read tools plus `task_batch_create`; delegation, publish, review and merge tools are technically unavailable. A restart during planning fails closed to `needs_input` and requires explicit restart.
 
 ## Project readiness and admission identity
 

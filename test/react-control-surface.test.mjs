@@ -90,4 +90,9 @@ test('React presents operator attention before execution and requires a usable T
   assert.match(app, /taskDependencyState/);
   assert.match(app, /waiting_dependencies/);
   assert.match(app, /!splitList\(criteria\)\.length/);
+  assert.match(app, /function TaskEditor/);
+  assert.match(app, /function DependencyPicker/);
+  assert.match(app, /definitionOfDone/);
+  assert.match(app, /orchestration/);
+  assert.match(app, /settings\.autoPlan/);
 });

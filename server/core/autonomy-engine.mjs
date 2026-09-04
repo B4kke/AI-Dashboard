@@ -129,6 +129,23 @@ export class AutonomyEngine {
             }
           }
         }
+
+        const planningState = this.store.snapshot();
+        const currentProject = planningState.projects.find((item) => item.id === project.id);
+        const openTasks = planningState.tasks.filter((item) => item.projectId === project.id && item.state !== 'done');
+        const activeRuns = planningState.runs.filter((item) => item.projectId === project.id && retainsRunOwnership(item));
+        if (this.operations.orchestrateProject
+          && currentProject?.orchestration?.enabled
+          && ['ready', 'working'].includes(currentProject.orchestration.status)
+          && openTasks.length === 0
+          && activeRuns.length === 0) {
+          try {
+            const result = await this.operations.orchestrateProject(project.id);
+            actions.push({ type: 'project.master_plan', projectId: project.id, result });
+          } catch (error) {
+            actions.push({ type: 'project.master_plan_failed', projectId: project.id, error: error.message });
+          }
+        }
       }
       return { actions };
     } finally {

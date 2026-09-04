@@ -55,6 +55,8 @@ Research is separate and read-only:
 
 Research never creates a worktree and never enters the coding merge loop.
 
+Optional automatic Project planning is a bounded control-plane loop, not general remote automation. It requires a durable Project objective, definition of done and autonomous mode. It may run only when no open Task or active/uncertain Run exists, may inspect canonical state and atomically create one dependency-aware Task batch, and must settle to `working`, `needs_input` or `complete`. The automated Master call must not receive delegation, publish, review or merge tools. Restart during an unsettled planning cycle fails closed to explicit operator review/restart. A Master completion assessment is never machine evidence or merge authorization.
+
 ## Harness != Provider != Model != Protocol
 
 Keep these concepts distinct:

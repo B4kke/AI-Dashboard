@@ -27,6 +27,8 @@ Implemented/tested:
 - safe Task lifecycle actions plus ordinary `needs_input` response/requeue,
 - first-class ordinary `needs_input` response + explicit requeue path,
 - Project Settings for description, repository binding, base branch, verification commands, autonomy policy and all four role-model overrides,
+- durable Project objective, definition of done, pause/archive lifecycle and automatic Master-planning controls,
+- ordinary pre-execution Task editing for title, description, criteria, priority, agent, model, scopes and dependencies,
 - separate OpenCode execution-model and direct-provider model catalogs in every role selector,
 - guarded Agent Registry create/edit/enable/disable UI,
 - global Exploration inbox with direct-model analysis/retry and explicit Project promotion,
@@ -153,6 +155,7 @@ Deferred breadth: GitHub issue sync, webhooks, review-comment workflow and raw A
 Implemented foundation:
 
 - MCP `master` profile reads canonical Project/Task/Run/Agent/Research/evidence state,
+- creates ordinary planning-first Project records without cloning/importing/executing a repository,
 - creates/updates specialist agents,
 - creates/assigns/delegates ordinary Tasks,
 - can requeue blocked work,
@@ -160,11 +163,15 @@ Implemented foundation:
 - operator response and resume authority stay separate,
 - starts Research/Idea planning and requests Run abort,
 - no direct MCP publish/review/merge bypass,
-- reusable orchestration prompt encodes dependency/scope/input-first procedure.
+- reusable orchestration prompt encodes dependency/scope/input-first procedure,
+- durable bounded Project planning cycles triggered only when Tasks/Runs are drained,
+- automated turns receive canonical read tools plus atomic `task_batch_create` only,
+- complete Task batches and dependencies commit in one StateStore transition,
+- provider/tool failure and restart settle fail-closed without replaying an uncertain planning cycle.
 
 Still planned:
 
-- automatic multi-step fleet scheduler,
+- adaptive fleet rebalancing while work is active,
 - capability/performance-based agent selection from verified history,
 - rich explanation of context/action selection.
 
@@ -178,10 +185,11 @@ Implemented early slice (normal chat environment, inspired by `odysseus-dev/odys
 
 - global Master page (`#/master`) with normal chat look: sidebar conversation list + centered bubble stream + rounded composer,
 - Project-scoped Master destination with conversations isolated to the owning Project,
-- persistent global and project-scoped conversations + messages in `StateStore` schema v9 (`masterConversations`/`masterMessages`),
+- persistent global and project-scoped conversations + messages in `StateStore` schema v10 (`masterConversations`/`masterMessages`),
 - `GET/POST /api/master/conversations`, `GET/PATCH /api/master/conversations/:id`, `GET/POST /api/master/conversations/:id/messages` with fail-closed invariants,
 - internal assistant/control-plane message kinds remain durable and ordinary UI/HTTP user input is fixed to `user` + `conversation`, so it cannot fabricate assistant/tool/verified history,
 - real AI SDK direct-model responses through the configured Master provider/model plus Dashboard `/mcp/master` tools; bounded tool-call history rejects direct publish/review/merge bypass,
+- one durable assistant placeholder updated from AI SDK tool start/end callbacks so SSE shows progressive tool status during a turn,
 - empty state like a normal chat: centered `✦ Master` mark, tip, durably stored history,
 - mobile-first: desktop 300px+1fr grid, tablet/phone stacked, no horizontal overflow, 44px touch targets,
 - deterministic coverage in `test/master-chat.test.mjs`; published heads historically rendered global Master at 1440/768/390.
@@ -191,9 +199,9 @@ Exact-head Linux+Windows GitHub Actions verified on commit `a990d75` (push `3299
 Still planned:
 
 - visible turn-kind labels and contextual Task/Research shortcuts,
-- token streaming/progressive tool rendering (current runtime is real model inference but returns the completed turn),
+- token streaming (tool status is progressive; answer text is committed at turn completion),
 - richer context attachments (Tasks/Runs/files/reports/evidence) and file references,
-- per-agent persona/memory and automatic fleet scheduler (M3A/M3C).
+- per-agent persona/memory and richer adaptive fleet rebalancing (M3A/M3C).
 
 ### M3C — Memory & personal context — IMPLEMENTED EARLY SLICE
 
@@ -257,7 +265,7 @@ Still planned:
 
 Implemented/tested:
 
-- durable project Agent Registry in StateStore schema v9,
+- durable project Agent Registry in StateStore schema v10,
 - identity/name/role/harness/model/instructions/capabilities/enabled state,
 - explicit project-relative `workScopes`,
 - static conflict rejection for overlapping mutating specialists,
@@ -327,7 +335,7 @@ Implemented and level-3 verified on P0 head `f959a7a` (push `33020151327` + PR `
 - mobile width-contract is fail-closed; rendered smoke covers `/#/master` (setup card), `/#/projects`, `/#/project/:id`, `/#/master/:id` and `/#/system` on 1440/768/390,
 - production `npm audit --omit=dev --audit-level=high` is gated in CI; lockfile is pinned and refreshed via `p0-lock-and-verify.yml`.
 
-Still planned: richer Master streaming/progressive tool rendering, per-agent persona/memory, automatic fleet scheduler (M3A/M3C/M3E), broader provider/harness breadth and remote/public topology. See Issue #1 for the remaining real PC-beta E2E gate.
+Still planned: Master token streaming and richer attachments, per-agent persona/memory, adaptive live-work rebalancing (M3A/M3C/M3E), broader provider/harness breadth and remote/public topology. See Issue #1 for the remaining real PC-beta E2E gate.
 
 ## Immediate verification gates
 
@@ -362,7 +370,7 @@ Before remote autonomous operation require:
 - encrypted/external secret management,
 - production-grade side-effect fencing for the selected topology.
 
-Only then add scheduled/conditional Tasks/Research, project-health monitoring, Master briefings, notifications, webhooks/event triggers and durable scheduler recovery.
+Only then add remote scheduled/conditional Tasks/Research, project-health monitoring, Master briefings, notifications and webhook/event triggers. The local bounded Project planner does not authorize remote exposure or general-purpose automation.
 
 No "just expose the port" path is acceptable.
 
