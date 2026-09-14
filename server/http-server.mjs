@@ -282,7 +282,34 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       if (!master) return json(response, 503, { error: 'Master model service is unavailable' });
       const conversationId = decodeURIComponent(masterTurns[1]);
       const input = masterUserMessage(await body(request));
-      return json(response, 201, await master.turn(conversationId, input.content));
+      const abortController = new AbortController();
+      const abort = () => abortController.abort();
+      request.once('aborted', abort);
+      let streamErrorSent = false;
+      response.writeHead(200, {
+        ...SECURITY_HEADERS,
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      });
+      const send = (event) => {
+        if (response.writableEnded || response.destroyed) return;
+        if (event?.type === 'error') streamErrorSent = true;
+        response.write(`data: ${JSON.stringify(event)}\n\n`);
+      };
+      try {
+        await master.turn(conversationId, input.content, { onEvent: send, abortSignal: abortController.signal });
+      } catch (error) {
+        if (!streamErrorSent) send({ type: 'error', error: String(error?.message || error || 'Master turn failed') });
+      } finally {
+        request.off('aborted', abort);
+        if (!response.writableEnded && !response.destroyed) {
+          response.write('data: [DONE]\n\n');
+          response.end();
+        }
+      }
+      return true;
     }
 
     const masterMessages = url.pathname.match(/^\/api\/master\/conversations\/([^/]+)\/messages$/);

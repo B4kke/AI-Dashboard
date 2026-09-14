@@ -189,7 +189,7 @@ Implemented early slice (normal chat environment, inspired by `odysseus-dev/odys
 - `GET/POST /api/master/conversations`, `GET/PATCH /api/master/conversations/:id`, `GET/POST /api/master/conversations/:id/messages` with fail-closed invariants,
 - internal assistant/control-plane message kinds remain durable and ordinary UI/HTTP user input is fixed to `user` + `conversation`, so it cannot fabricate assistant/tool/verified history,
 - real AI SDK direct-model responses through the configured Master provider/model plus Dashboard `/mcp/master` tools; bounded tool-call history rejects direct publish/review/merge bypass,
-- one durable assistant placeholder updated from AI SDK tool start/end callbacks so SSE shows progressive tool status during a turn,
+- HomeAI-aligned AI SDK streaming (`streamText` + `stepCountIs`) with one durable assistant placeholder; turn SSE carries bounded answer tokens, reasoning/activity phase and tool status while final persisted text stays canonical,
 - empty state like a normal chat: centered `✦ Master` mark, tip, durably stored history,
 - mobile-first: desktop 300px+1fr grid, tablet/phone stacked, no horizontal overflow, 44px touch targets,
 - deterministic coverage in `test/master-chat.test.mjs`; published heads historically rendered global Master at 1440/768/390.
@@ -199,7 +199,6 @@ Exact-head Linux+Windows GitHub Actions verified on commit `a990d75` (push `3299
 Still planned:
 
 - visible turn-kind labels and contextual Task/Research shortcuts,
-- token streaming (tool status is progressive; answer text is committed at turn completion),
 - richer context attachments (Tasks/Runs/files/reports/evidence) and file references,
 - per-agent persona/memory and richer adaptive fleet rebalancing (M3A/M3C).
 
@@ -335,7 +334,7 @@ Implemented and level-3 verified on P0 head `f959a7a` (push `33020151327` + PR `
 - mobile width-contract is fail-closed; rendered smoke covers `/#/master` (setup card), `/#/projects`, `/#/project/:id`, `/#/master/:id` and `/#/system` on 1440/768/390,
 - production `npm audit --omit=dev --audit-level=high` is gated in CI; lockfile is pinned and refreshed via `p0-lock-and-verify.yml`.
 
-Still planned: Master token streaming and richer attachments, per-agent persona/memory, adaptive live-work rebalancing (M3A/M3C/M3E), broader provider/harness breadth and remote/public topology. See Issue #1 for the remaining real PC-beta E2E gate.
+Still planned: richer Master attachments, per-agent persona/memory, adaptive live-work rebalancing (M3A/M3C/M3E), broader provider/harness breadth and remote/public topology. See Issue #1 for the remaining real PC-beta E2E gate.
 
 ## Immediate verification gates
 

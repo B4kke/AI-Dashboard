@@ -37,6 +37,7 @@ export type McpServer = {
 };
 export type MasterConversation = { id: string; projectId?: string | null; title: string; updatedAt: string };
 export type MasterMessage = { id: string; conversationId: string; role: 'user'|'assistant'|'system'|'tool'; kind: string; content: string; toolCalls?: Array<{tool:string;status?:string|null}> };
+export type MasterStreamEvent = { type?: 'start'|'activity'|'tool'|'token'|'done'|'error'; phase?: string; label?: string; tool?: string; state?: 'running'|'done'|'error'; token?: string; conversationId?: string; assistantId?: string | null; modelId?: string; done?: boolean; error?: string };
 export type MasterMemoryItem = { id:string; scope:string; kind:string; text:string; confidence:number; source:string; updatedAt:string };
 export type MasterProfile = { soul:string; memory:MasterMemoryItem[]; learning:{enabled:boolean;maxItems:number;contextOnly:boolean} };
 export type DashboardState = {
@@ -60,6 +61,45 @@ export const json = <T>(path: string, method: string, body?: unknown) => request
   headers: { 'content-type': 'application/json' },
   body: body === undefined ? undefined : JSON.stringify(body),
 });
+
+async function streamSse(path: string, body: unknown, onEvent: (event: MasterStreamEvent) => void): Promise<void> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok || !response.body) {
+    const value = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(value.error || `HTTP ${response.status}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let streamError = '';
+  const consume = (block: string) => {
+    for (const line of block.split(/\r?\n/)) {
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      try {
+        const event = JSON.parse(payload) as MasterStreamEvent;
+        onEvent(event);
+        if (event.type === 'error' && event.error) streamError = event.error;
+      } catch { /* Keep consuming later valid SSE events. */ }
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() || '';
+    for (const block of blocks) consume(block);
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) consume(buffer);
+  if (streamError) throw new Error(streamError);
+}
 
 async function localizedProjectUsability(id: string) {
   const value = await request<any>(`/api/projects/${encodeURIComponent(id)}/usability`);
@@ -109,7 +149,7 @@ export const api = {
   startResearch: (value: unknown) => json<ResearchRun>('/api/research', 'POST', value),
   retryResearch: (id: string) => json<ResearchRun>(`/api/research/${encodeURIComponent(id)}/retry`, 'POST'),
   createConversation: (value: unknown) => json<MasterConversation>('/api/master/conversations', 'POST', value),
-  masterTurn: (id: string, content: string) => json<any>(`/api/master/conversations/${encodeURIComponent(id)}/turns`, 'POST', { content }),
+  masterTurn: (id: string, content: string, onEvent: (event: MasterStreamEvent) => void) => streamSse(`/api/master/conversations/${encodeURIComponent(id)}/turns`, { content }, onEvent),
   masterProfile: (projectId?: string) => request<MasterProfile>(`/api/master/profile${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
   setMasterSoul: (content: string) => json<{content:string}>('/api/master/soul', 'PUT', { content }),
   masterMemory: (projectId?: string) => request<{memory:MasterMemoryItem[]}>(`/api/master/memory${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),

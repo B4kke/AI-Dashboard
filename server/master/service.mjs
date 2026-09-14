@@ -1,4 +1,4 @@
-import { generateText, isStepCount } from 'ai';
+import { generateText, stepCountIs, streamText } from 'ai';
 import { createMCPClient } from '@ai-sdk/mcp';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { normalizeModelRef } from '../integrations/model-provider.mjs';
@@ -113,7 +113,7 @@ function parseLearning(value) {
 
 export function createMasterService({
   store, setup, dashboardBaseUrl, persistence, soulPath,
-  generate = generateText, createMcp = createMCPClient,
+  generate = generateText, stream = streamText, createMcp = createMCPClient,
 }) {
   const memory = createMasterMemory({ persistence, soulPath });
   const pendingLearning = new Set();
@@ -131,142 +131,79 @@ export function createMasterService({
 
   async function learnFromTurn({ modelClient, locale, project, conversationId, user, assistant }) {
     try {
-      const result = await generate({
-        model: modelClient,
-        system: learningSystemPrompt(locale),
-        prompt: [
-          project ? `Project context: ${project.name} (${project.id})` : 'Global conversation.',
-          `USER:\n${bounded(user.content, 12_000)}`,
-          `MASTER ANSWER:\n${bounded(assistant.content, 12_000)}`,
-        ].join('\n\n'),
-        temperature: 0,
-      });
-      const learning = parseLearning(result.text);
-      const stored = [];
-      for (const candidate of learning.memories) {
-        const confidence = Number(candidate?.confidence);
-        if (!Number.isFinite(confidence) || confidence < 0.65) continue;
-        const item = memory.remember({
-          projectId: candidate.projectScoped === true && project ? project.id : null,
-          kind: candidate.kind,
-          text: candidate.text,
-          confidence,
-          source: 'assistant_reflection',
-          sourceConversationId: conversationId,
-          sourceMessageIds: [user.id, assistant.id],
-        });
-        stored.push(item.id);
-      }
-      const soul = learning.soulLesson ? await memory.appendSoulLesson(learning.soulLesson) : { changed: false };
-      return { stored: stored.length, soulUpdated: soul.changed === true };
-    } catch {
-      // Reflection must never turn a successful user-facing answer into a failed turn.
-      return { stored: 0, soulUpdated: false };
-    }
-  }
-
-  function scheduleLearning(input) {
-    let pending;
-    pending = Promise.resolve()
-      .then(() => learnFromTurn(input))
-      .finally(() => pendingLearning.delete(pending));
-    pendingLearning.add(pending);
-    return { scheduled: true };
-  }
-
-  async function drainLearning() {
-    while (pendingLearning.size) await Promise.allSettled([...pendingLearning]);
-  }
-
-  async function turn(conversationId, content, options = {}) {
-    const conversation = store.getMasterConversation(conversationId);
-    if (!conversation) throw new Error('Master conversation not found');
-    const text = String(content || '').trim();
-    if (!text) throw new Error('Master message content is required');
-
-    const state = store.snapshot();
-    const project = conversation.projectId ? store.getProject(conversation.projectId) : null;
-    const preferences = setup.preferences();
-    const modelRef = preferences.masterModel || project?.modelPolicy?.researchModel || null;
-    const model = normalizeModelRef(modelRef);
-    if (!model) throw new Error('No Master model is configured. Complete first-run setup or choose a Master model in System.');
-    const provider = store.getModelProvider(model.providerID);
-    if (!provider || provider.enabled === false) throw new Error(`Master model provider is unavailable: ${model.providerID}`);
-    if (provider.apiKeyEnv && !process.env[provider.apiKeyEnv]) throw new Error(`Master provider credential is not configured: ${provider.apiKeyEnv}`);
-
-    const systemInitiated = options.systemInitiated === true;
-    const user = await store.addMasterMessage({
-      conversationId,
-      role: systemInitiated ? 'system' : 'user',
-      kind: systemInitiated ? 'executing' : 'conversation',
-      content: text,
-    });
-    const providerClient = createOpenAICompatible({
-      name: provider.id,
-      baseURL: provider.baseUrl,
-      apiKey: provider.apiKeyEnv ? process.env[provider.apiKeyEnv] : undefined,
-    });
-    const modelClient = providerClient.chatModel(model.modelID);
-
-    let mcpClient = null;
-    let progressMessage = null;
-    const progressCalls = [];
-    try {
-      const [soul, remembered] = await Promise.all([memory.readSoul(), Promise.resolve(memory.context(project?.id || null))]);
-      mcpClient = await createMcp({
-        transport: { type: 'http', url: new URL('/mcp/master', dashboardBaseUrl).toString() },
-        name: 'ai-dashboard-master-runtime',
-        version: '0.0.7',
-      });
-      const discoveredTools = await mcpClient.tools();
-      const allowedTools = Array.isArray(options.allowedTools) ? new Set(options.allowedTools) : null;
-      const tools = allowedTools
-        ? Object.fromEntries(Object.entries(discoveredTools).filter(([name]) => allowedTools.has(name)))
-        : discoveredTools;
-      if (allowedTools && Object.keys(tools).length !== allowedTools.size) {
-        const missing = [...allowedTools].filter((name) => !tools[name]);
-        throw new Error(`Required Master tools are unavailable: ${missing.join(', ')}`);
-      }
-      const history = conversationMessages(store.masterMessagesFor(conversationId));
-      progressMessage = await store.addMasterMessage({
-        conversationId,
-        role: 'assistant',
-        kind: 'executing',
-        content: preferences.locale === 'en' ? 'Master is working…' : 'Master arbeider…',
-      });
-      const updateProgress = async (contentOverride = null) => {
-        if (!progressMessage) return;
-        progressMessage = await store.updateMasterMessage(progressMessage.id, {
-          kind: 'executing',
-          content: contentOverride || progressMessage.content,
-          toolCalls: progressCalls.map(({ callId, ...call }) => call),
-        });
-      };
-      const result = await generate({
+      const runtimeTools = Object.fromEntries(Object.entries(tools).map(([toolName, definition]) => {
+        if (typeof definition?.execute !== 'function') return [toolName, definition];
+        return [toolName, {
+          ...definition,
+          execute: async (input, execution) => {
+            const callId = execution?.toolCallId || `${toolName}-${progressCalls.length}`;
+            const call = { callId, tool: toolName, args: safeToolPayload(input), status: 'running' };
+            progressCalls.push(call);
+            await updateProgress(preferences.locale === 'en' ? `Master is using ${toolName}…` : `Master bruker ${toolName}…`);
+            emit({ type: 'tool', tool: toolName, state: 'running', label: toolName });
+            try {
+              const output = await definition.execute(input, execution);
+              call.status = 'completed';
+              await updateProgress();
+              emit({ type: 'tool', tool: toolName, state: 'done', label: toolName });
+              return output;
+            } catch (error) {
+              call.status = 'failed';
+              await updateProgress();
+              emit({ type: 'tool', tool: toolName, state: 'error', label: toolName });
+              throw error;
+            }
+          },
+        }];
+      }));
+      const result = stream({
         model: modelClient,
         system: systemPrompt({ locale: preferences.locale || 'nb', project, state, soul, memoryContext: remembered }),
         messages: history,
-        tools,
-        stopWhen: isStepCount(8),
+        tools: runtimeTools,
+        stopWhen: stepCountIs(8),
         temperature: 0.25,
-        onToolExecutionStart: async (event) => {
-          const tool = event?.toolCall?.toolName || 'tool';
-          progressCalls.push({ callId: event?.toolCall?.toolCallId || event?.callId || `${tool}-${progressCalls.length}`, tool, args: safeToolPayload(event?.toolCall?.input ?? null), status: 'running' });
-          await updateProgress(preferences.locale === 'en' ? `Master is using ${tool}…` : `Master bruker ${tool}…`);
-        },
-        onToolExecutionEnd: async (event) => {
-          const callId = event?.toolCall?.toolCallId || event?.callId;
-          const item = [...progressCalls].reverse().find((call) => call.callId === callId)
-            || [...progressCalls].reverse().find((call) => call.tool === event?.toolCall?.toolName && call.status === 'running');
-          if (item) item.status = event?.toolOutput?.type === 'tool-error' ? 'failed' : 'completed';
-          await updateProgress();
-        },
+        ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
       });
-      const assistantText = bounded(result.text || 'Jeg fullførte verktøykallet, men modellen returnerte ingen tekst.', 40_000);
+      let streamedText = '';
+      let reasoningSeen = false;
+      let writingSeen = false;
+      for await (const part of result.fullStream) {
+        const type = part?.type || '';
+        if (type.includes('reasoning')) {
+          if (!reasoningSeen) {
+            reasoningSeen = true;
+            emit({ type: 'activity', phase: 'reasoning', label: preferences.locale === 'en' ? 'Reasoning' : 'Resonnerer' });
+          }
+          continue;
+        }
+        if (type === 'text-delta') {
+          const delta = typeof part.text === 'string' ? part.text : '';
+          if (!delta) continue;
+          if (!writingSeen) {
+            writingSeen = true;
+            emit({ type: 'activity', phase: 'writing', label: preferences.locale === 'en' ? 'Writing response' : 'Skriver svar' });
+          }
+          const remaining = Math.max(0, 40_000 - streamedText.length);
+          const visible = remaining ? delta.slice(0, remaining) : '';
+          streamedText += visible;
+          if (visible) emit({ type: 'token', token: visible, assistantId: progressMessage.id, conversationId });
+          continue;
+        }
+        if (type === 'error') {
+          const streamError = part.error;
+          throw streamError instanceof Error ? streamError : new Error(String(streamError || 'Master model stream failed'));
+        }
+      }
+      const finalText = await result.text;
+      const steps = await result.steps;
+      const usage = await (result.totalUsage ?? result.usage ?? null);
+      const finishReason = await (result.finishReason ?? null);
+      const assistantText = bounded(finalText || streamedText || 'Jeg fullførte verktøykallet, men modellen returnerte ingen tekst.', 40_000);
       const assistant = await store.updateMasterMessage(progressMessage.id, {
         kind: options.assistantKind || 'conversation',
         content: assistantText,
-        toolCalls: toolHistory(result),
+        toolCalls: progressCalls.length ? progressCalls.map(({ callId, ...call }) => call) : toolHistory({ steps }),
       });
       const learning = systemInitiated || options.skipLearning === true
         ? { scheduled: false }
@@ -278,16 +215,18 @@ export function createMasterService({
           user,
           assistant,
         });
+      emit({ type: 'done', done: true, assistantId: assistant.id, conversationId, modelId: modelRef });
       return {
         user,
         assistant,
         model: modelRef,
-        usage: result.totalUsage || result.usage || null,
-        finishReason: result.finishReason || null,
+        usage,
+        finishReason,
         learning,
       };
     } catch (error) {
       const failure = `Master kunne ikke fullføre modellkjøringen: ${bounded(error.message, 2_000)}`;
+      emit({ type: 'error', error: failure, conversationId, assistantId: progressMessage?.id || null });
       if (progressMessage) await store.updateMasterMessage(progressMessage.id, { kind: 'needs_input', content: failure, toolCalls: progressCalls.map(({ callId, ...call }) => call) }).catch(() => {});
       else await store.addMasterMessage({ conversationId, role: 'assistant', kind: 'needs_input', content: failure }).catch(() => {});
       throw error;

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  api, type Agent, type DashboardState, type Exploration, type ExplorationRun, type MasterConversation, type MasterMemoryItem, type MasterProfile,
+  api, type Agent, type DashboardState, type Exploration, type ExplorationRun, type MasterConversation, type MasterMemoryItem, type MasterProfile, type MasterStreamEvent,
   type McpServer, type ModelProvider, type Project, type ResearchRun, type Run, type Task,
 } from './api';
 import { Conversation, Message, PromptInput, Tool } from './components/ai-elements';
@@ -143,6 +143,35 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
   const selected = scopedConversations.find(c=>c.id===routeId) || scopedConversations[0] || null;
   const messages = selected ? state.masterMessages.filter(m=>m.conversationId===selected.id) : [];
   const [input, setInput] = useState('');
+  const [streaming, setStreaming] = useState<{conversationId:string;assistantId:string;content:string;toolCalls:Array<{tool:string;status?:string|null}>;done:boolean}|null>(null);
+  const displayMessages = useMemo(() => {
+    const next = [...messages];
+    if (!streaming || streaming.conversationId !== selected?.id || !streaming.assistantId) return next;
+    const index = next.findIndex((message) => message.id === streaming.assistantId);
+    if (index >= 0) {
+      const canonical = next[index];
+      next[index] = {
+        ...canonical,
+        content: streaming.content || canonical.content,
+        toolCalls: streaming.toolCalls.length ? streaming.toolCalls : canonical.toolCalls,
+      };
+    } else {
+      next.push({
+        id: streaming.assistantId,
+        conversationId: streaming.conversationId,
+        role: 'assistant',
+        kind: 'executing',
+        content: streaming.content,
+        toolCalls: streaming.toolCalls,
+      });
+    }
+    return next;
+  }, [messages, selected?.id, streaming]);
+  useEffect(() => {
+    if (!streaming?.done || !streaming.assistantId) return;
+    const canonical = state.masterMessages.find((message) => message.id === streaming.assistantId && message.kind !== 'executing');
+    if (canonical) setStreaming(null);
+  }, [state.masterMessages, streaming]);
   const create = async () => {
     const conv = projectId
       ? await api.createConversation({ title: t('master.project'), projectId })
@@ -153,20 +182,39 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
     const content = input.trim(); if (!content) return; setInput('');
     let conv: MasterConversation | null = selected;
     if (!conv) conv = await api.createConversation({ title: content.slice(0, 60), ...(projectId ? { projectId } : {}) });
-    await api.masterTurn(conv.id, content);
-    go(projectId ? `/project/${projectId}/master/${conv.id}` : `/master/${conv.id}`);
+    const activeConv = conv;
+    setStreaming({ conversationId: activeConv.id, assistantId: '', content: '', toolCalls: [], done: false });
+    go(projectId ? `/project/${projectId}/master/${activeConv.id}` : `/master/${activeConv.id}`);
+    await api.masterTurn(activeConv.id, content, (event: MasterStreamEvent) => {
+      setStreaming((current) => {
+        const base = current?.conversationId === activeConv.id
+          ? current
+          : { conversationId: activeConv.id, assistantId: '', content: '', toolCalls: [], done: false };
+        if (event.type === 'start') return { ...base, assistantId: event.assistantId || base.assistantId };
+        if (event.type === 'token' && event.token) return { ...base, assistantId: event.assistantId || base.assistantId, content: base.content + event.token };
+        if (event.type === 'tool' && event.tool) {
+          const status = event.state === 'done' ? 'completed' : event.state === 'error' ? 'failed' : 'running';
+          const toolCalls = [...base.toolCalls];
+          const index = toolCalls.findIndex((item) => item.tool === event.tool && item.status === 'running');
+          if (index >= 0) toolCalls[index] = { ...toolCalls[index], status };
+          else toolCalls.push({ tool: event.tool, status });
+          return { ...base, toolCalls };
+        }
+        if (event.type === 'done' || event.type === 'error') return { ...base, done: true };
+        return base;
+      });
+    });
   };
   return <div className={`master-layout${projectId ? ' project-master-layout' : ''}`}>
     <aside className="conversation-list"><div className="panel-title"><span>{t('master.title')}</span><button className="icon-button" onClick={()=>void run(create)}>＋</button></div>
       {scopedConversations.map(c=><button key={c.id} className={selected?.id===c.id?'conversation-row active':'conversation-row'} onClick={()=>go(projectId ? `/project/${projectId}/master/${c.id}` : `/master/${c.id}`)}><strong>{c.title}</strong><small>{t('master.messageCount', { count: state.masterMessages.filter(m=>m.conversationId===c.id).length })}</small></button>)}
     </aside>
     <section className="chat-stage"><header><div><p className="eyebrow">{projectId ? projectName || t('master.project') : t('master.eyebrow')}</p><h1>{selected?.title || t('master.title')}</h1></div><span className={`model-chip ${setup.masterModel ? '' : 'warn'}`}>{setup.masterModel || t('master.noModel')}</span></header>
-      <Conversation>{messages.length ? messages.map(m=><Message key={m.id} role={m.role}><div className="message-meta">{m.role==='user'?t('master.you'):'Master'}</div><div className="message-text">{m.content}</div>{m.toolCalls?.length ? <div className="tool-row">{m.toolCalls.map((tool,i)=><Tool key={`${tool.tool}-${i}`} name={tool.tool} status={tool.status}/>)}</div>:null}</Message>) : <div className="master-empty"><div className="brand-glyph hero">✦</div><h2>{t('master.emptyTitle')}</h2><p>{t('master.emptyCopy')}</p></div>}</Conversation>
+      <Conversation>{displayMessages.length ? displayMessages.map(m=><Message key={m.id} role={m.role}><div className="message-meta">{m.role==='user'?t('master.you'):'Master'}</div><div className="message-text">{m.content}</div>{m.toolCalls?.length ? <div className="tool-row">{m.toolCalls.map((tool,i)=><Tool key={`${tool.tool}-${i}`} name={tool.tool} status={tool.status}/>)}</div>:null}</Message>) : <div className="master-empty"><div className="brand-glyph hero">✦</div><h2>{t('master.emptyTitle')}</h2><p>{t('master.emptyCopy')}</p></div>}</Conversation>
       <div className="composer-wrap"><PromptInput value={input} onChange={setInput} onSubmit={()=>void run(send)} disabled={busy} placeholder={t('master.placeholder')} action="↑" /></div>
     </section>
   </div>;
 }
-
 function ExplorationsView({ state, setup, busy, run }: {state:DashboardState;setup:any;busy:boolean;run:(fn:()=>Promise<unknown>)=>Promise<void>}) {
   const { t } = useTranslation(); const catalogs = modelCatalogsFromSetup(setup); const explorations = [...(state.explorations || [])].sort((a,b)=>String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))); const runs = state.explorationRuns || [];
   const [creating, setCreating] = useState(false); const [title, setTitle] = useState(''); const [notes, setNotes] = useState(''); const [model, setModel] = useState(setup.recommendations?.researchModel || catalogs.directModels[0] || ''); const [kind, setKind] = useState<'analysis'|'research'>('analysis');

@@ -13,6 +13,21 @@ async function jsonFetch(base, path, options = {}) {
   return { response, value };
 }
 
+async function sseFetch(base, path, options = {}) {
+  const response = await fetch(`${base}${path}`, options);
+  const text = await response.text();
+  const events = [];
+  for (const block of text.split(/\r?\n\r?\n/)) {
+    for (const line of block.split(/\r?\n/)) {
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      events.push(JSON.parse(payload));
+    }
+  }
+  return { response, text, events };
+}
+
 async function startServer() {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-master-'));
   const store = new StateStore(join(dir, 'state.json'));
@@ -27,9 +42,12 @@ async function startServer() {
     autonomy: { tick: async () => ({ actions: [] }) },
     research: { listProviders: async () => [], openCodeModels: async () => [] },
     master: {
-      turn: async (conversationId, content) => {
+      turn: async (conversationId, content, options = {}) => {
         const user = await store.addMasterMessage({ conversationId, role: 'user', kind: 'conversation', content });
         const assistant = await store.addMasterMessage({ conversationId, role: 'assistant', kind: 'conversation', content: 'Test Master response' });
+        options.onEvent?.({ type: 'start', conversationId, assistantId: assistant.id, modelId: 'test/model' });
+        options.onEvent?.({ type: 'token', token: 'Test Master response', conversationId, assistantId: assistant.id });
+        options.onEvent?.({ type: 'done', done: true, conversationId, assistantId: assistant.id, modelId: 'test/model' });
         return { user, assistant, model: 'test/model' };
       },
     },
@@ -183,15 +201,20 @@ test('Master chat invariants fail closed', async () => {
     });
     assert.equal(mergeBypass.response.status, 400);
 
-    const safeTurn = await jsonFetch(base, `/api/master/conversations/${convId}/turns`, {
+    const safeTurn = await sseFetch(base, `/api/master/conversations/${convId}/turns`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ content: 'Summarize current work' }),
     });
-    assert.equal(safeTurn.response.status, 201);
-    assert.equal(safeTurn.value.user.role, 'user');
-    assert.equal(safeTurn.value.user.kind, 'conversation');
-    assert.equal(safeTurn.value.assistant.role, 'assistant');
-    assert.equal(safeTurn.value.assistant.kind, 'conversation');
+    assert.equal(safeTurn.response.status, 200);
+    assert.match(safeTurn.response.headers.get('content-type') || '', /text\/event-stream/);
+    assert.deepEqual(safeTurn.events.map((event) => event.type), ['start', 'token', 'done']);
+    assert.equal(safeTurn.events.find((event) => event.type === 'token')?.token, 'Test Master response');
+    assert.match(safeTurn.text, /data: \[DONE\]/);
+    const turnMessages = store.masterMessagesFor(convId);
+    assert.equal(turnMessages.at(-2)?.role, 'user');
+    assert.equal(turnMessages.at(-2)?.kind, 'conversation');
+    assert.equal(turnMessages.at(-1)?.role, 'assistant');
+    assert.equal(turnMessages.at(-1)?.kind, 'conversation');
 
     const unknownConv = await jsonFetch(base, '/api/master/conversations/notfound/messages');
     assert.equal(unknownConv.response.status, 404);
@@ -249,10 +272,21 @@ test('Master React surface remains first-class and real-model wired (contract)',
   assert.match(app, /<PromptInput/);
   assert.match(api, /masterTurn/);
   assert.doesNotMatch(app, /window\.prompt/);
-  assert.match(service, /generateText/);
+  assert.match(service, /streamText/);
+  assert.match(service, /stepCountIs\(8\)/);
+  assert.match(service, /for await \(const part of result\.fullStream\)/);
+  assert.match(service, /generateText/); // bounded memory reflection remains a separate non-visible pass
   assert.match(service, /createMCPClient/);
   assert.match(service, /createOpenAICompatible/);
   assert.match(store, /Master chat cannot directly invoke/);
-  assert.match(http, /master\.turn\(conversationId, input\.content\)/);
+  assert.match(http, /text\/event-stream; charset=utf-8/);
+  assert.match(http, /master\.turn\(conversationId, input\.content, \{ onEvent: send, abortSignal:/);
+  assert.match(api, /response\.body\.getReader\(\)/);
+  assert.match(app, /MasterStreamEvent/);
   assert.match(store, /SCHEMA_VERSION = 10/);
+
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.dependencies.ai, '7.0.97');
+  assert.equal(pkg.dependencies['@ai-sdk/openai-compatible'], '3.0.47');
+  assert.equal(pkg.dependencies['@ai-sdk/mcp'], '2.0.48');
 });
