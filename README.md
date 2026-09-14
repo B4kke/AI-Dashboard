@@ -4,7 +4,7 @@ Self-hosted control center for AI-assisted and progressively autonomous project 
 
 AI Dashboard connects existing projects/repositories, direct Tasks, optional Ideas/Explorations, specialist agents, AI coding harnesses, model providers, MCP capabilities, read-only Research Runs, isolated Git worktrees and GitHub/CI evidence behind one fail-closed control plane.
 
-> Status: pre-alpha / PC-beta candidate. The published branch head `2464549` passed Linux, Windows and rendered-UI Actions in run `33071272602`. Any later head must earn that evidence again. A beta claim still requires the complete current-stack OpenCode/GitHub PC beta; deterministic tests and green Actions are necessary but not sufficient.
+> Status: pre-alpha / PC-beta candidate. Exact-head Linux, Windows and rendered-UI Actions are required after every code change; a beta claim additionally requires current-stack OpenCode + disposable GitHub/Actions dogfood.
 
 ## Product model
 

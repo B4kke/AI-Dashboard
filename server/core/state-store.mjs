@@ -423,10 +423,10 @@ function normalizeState(parsed) {
     title: boundedText(conv.title || 'Master conversation', 200) || 'Master conversation',
   }));
   state.masterMessages = state.masterMessages.map((msg) => ({
+    ...msg,
     role: MASTER_MESSAGE_ROLES.has(String(msg.role || '').toLowerCase()) ? String(msg.role).toLowerCase() : 'user',
     kind: MASTER_MESSAGE_KINDS.has(String(msg.kind || '').toLowerCase()) ? String(msg.kind).toLowerCase() : 'conversation',
     toolCalls: Array.isArray(msg.toolCalls) ? msg.toolCalls.slice(0, 8) : [],
-    ...msg,
     content: boundedText(msg.content, 40_000),
   }));
   return state;

@@ -37,7 +37,7 @@ export type McpServer = {
 };
 export type MasterConversation = { id: string; projectId?: string | null; title: string; updatedAt: string };
 export type MasterMessage = { id: string; conversationId: string; role: 'user'|'assistant'|'system'|'tool'; kind: string; content: string; toolCalls?: Array<{tool:string;status?:string|null}> };
-export type MasterStreamEvent = { type?: 'start'|'activity'|'tool'|'token'|'done'|'error'; phase?: string; label?: string; tool?: string; state?: 'running'|'done'|'error'; token?: string; conversationId?: string; assistantId?: string | null; modelId?: string; done?: boolean; error?: string };
+export type MasterStreamEvent = { type?: 'start'|'activity'|'tool'|'token'|'done'|'error'; phase?: string; label?: string; callId?: string; tool?: string; state?: 'running'|'done'|'error'; token?: string; conversationId?: string; assistantId?: string | null; modelId?: string; done?: boolean; error?: string };
 export type MasterMemoryItem = { id:string; scope:string; kind:string; text:string; confidence:number; source:string; updatedAt:string };
 export type MasterProfile = { soul:string; memory:MasterMemoryItem[]; learning:{enabled:boolean;maxItems:number;contextOnly:boolean} };
 export type DashboardState = {

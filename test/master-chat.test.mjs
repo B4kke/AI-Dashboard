@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { once } from 'node:events';
+import { request as httpRequest } from 'node:http';
 import { StateStore, SCHEMA_VERSION } from '../server/core/state-store.mjs';
 import { createHttpServer } from '../server/http-server.mjs';
 
@@ -28,7 +29,7 @@ async function sseFetch(base, path, options = {}) {
   return { response, text, events };
 }
 
-async function startServer() {
+async function startServer({ masterTurn = null } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-master-'));
   const store = new StateStore(join(dir, 'state.json'));
   await store.load();
@@ -42,14 +43,16 @@ async function startServer() {
     autonomy: { tick: async () => ({ actions: [] }) },
     research: { listProviders: async () => [], openCodeModels: async () => [] },
     master: {
-      turn: async (conversationId, content, options = {}) => {
-        const user = await store.addMasterMessage({ conversationId, role: 'user', kind: 'conversation', content });
-        const assistant = await store.addMasterMessage({ conversationId, role: 'assistant', kind: 'conversation', content: 'Test Master response' });
-        options.onEvent?.({ type: 'start', conversationId, assistantId: assistant.id, modelId: 'test/model' });
-        options.onEvent?.({ type: 'token', token: 'Test Master response', conversationId, assistantId: assistant.id });
-        options.onEvent?.({ type: 'done', done: true, conversationId, assistantId: assistant.id, modelId: 'test/model' });
-        return { user, assistant, model: 'test/model' };
-      },
+      turn: masterTurn
+        ? (conversationId, content, options = {}) => masterTurn(store, conversationId, content, options)
+        : async (conversationId, content, options = {}) => {
+          const user = await store.addMasterMessage({ conversationId, role: 'user', kind: 'conversation', content });
+          const assistant = await store.addMasterMessage({ conversationId, role: 'assistant', kind: 'conversation', content: 'Test Master response' });
+          options.onEvent?.({ type: 'start', conversationId, assistantId: assistant.id, modelId: 'test/model' });
+          options.onEvent?.({ type: 'token', token: 'Test Master response', conversationId, assistantId: assistant.id });
+          options.onEvent?.({ type: 'done', done: true, conversationId, assistantId: assistant.id, modelId: 'test/model' });
+          return { user, assistant, model: 'test/model' };
+        },
     },
     github: { token: null, baseUrl: 'https://api.github.test' },
     privateMode: true,
@@ -141,6 +144,69 @@ test('Master conversation persistence is global and project-aware with schema v1
 
     const byConv = store.masterMessagesFor(globalConv.value.id);
     assert.equal(byConv.length, 5);
+  } finally {
+    server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Master SSE aborts the in-flight model turn when the response client disconnects', async () => {
+  let abortObservedResolve;
+  const abortObserved = new Promise((resolve) => { abortObservedResolve = resolve; });
+  const { dir, server, base } = await startServer({
+    masterTurn: async (_store, conversationId, _content, options = {}) => {
+      options.onEvent?.({ type: 'start', conversationId, assistantId: 'pending-assistant', modelId: 'test/model' });
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 750);
+        const onAbort = () => {
+          clearTimeout(timer);
+          abortObservedResolve(true);
+          resolve();
+        };
+        if (options.abortSignal?.aborted) onAbort();
+        else options.abortSignal?.addEventListener('abort', onAbort, { once: true });
+      });
+      return { model: 'test/model' };
+    },
+  });
+  try {
+    const conversation = await jsonFetch(base, '/api/master/conversations', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Disconnect test' }),
+    });
+    assert.equal(conversation.response.status, 201);
+    const url = new URL(`${base}/api/master/conversations/${conversation.value.id}/turns`);
+    const payload = JSON.stringify({ content: 'Keep streaming until I disconnect' });
+
+    await new Promise((resolve, reject) => {
+      const request = httpRequest({
+        hostname: url.hostname,
+        port: Number(url.port),
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(payload),
+        },
+      }, (response) => {
+        response.once('data', () => {
+          response.destroy();
+          resolve();
+        });
+        response.once('error', (error) => {
+          if (error?.code === 'ECONNRESET') resolve();
+          else reject(error);
+        });
+      });
+      request.once('error', reject);
+      request.end(payload);
+    });
+
+    const observed = await Promise.race([
+      abortObserved,
+      new Promise((resolve) => setTimeout(() => resolve(false), 1_000)),
+    ]);
+    assert.equal(observed, true);
   } finally {
     server.close();
     await rm(dir, { recursive: true, force: true });
@@ -283,6 +349,7 @@ test('Master React surface remains first-class and real-model wired (contract)',
   assert.match(store, /Master chat cannot directly invoke/);
   assert.match(http, /text\/event-stream; charset=utf-8/);
   assert.match(http, /master\.turn\(conversationId, input\.content, \{ onEvent: send, abortSignal:/);
+  assert.match(http, /response\.once\('close', abort\)/);
   assert.match(api, /response\.body\.getReader\(\)/);
   assert.match(app, /MasterStreamEvent/);
   assert.match(store, /SCHEMA_VERSION = 10/);

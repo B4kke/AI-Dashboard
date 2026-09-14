@@ -143,7 +143,7 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
   const selected = scopedConversations.find(c=>c.id===routeId) || scopedConversations[0] || null;
   const messages = selected ? state.masterMessages.filter(m=>m.conversationId===selected.id) : [];
   const [input, setInput] = useState('');
-  const [streaming, setStreaming] = useState<{conversationId:string;assistantId:string;content:string;toolCalls:Array<{tool:string;status?:string|null}>;done:boolean}|null>(null);
+  const [streaming, setStreaming] = useState<{conversationId:string;assistantId:string;content:string;toolCalls:Array<{callId?:string;tool:string;status?:string|null}>;done:boolean}|null>(null);
   const displayMessages = useMemo(() => {
     const next = [...messages];
     if (!streaming || streaming.conversationId !== selected?.id || !streaming.assistantId) return next;
@@ -195,9 +195,11 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
         if (event.type === 'tool' && event.tool) {
           const status = event.state === 'done' ? 'completed' : event.state === 'error' ? 'failed' : 'running';
           const toolCalls = [...base.toolCalls];
-          const index = toolCalls.findIndex((item) => item.tool === event.tool && item.status === 'running');
-          if (index >= 0) toolCalls[index] = { ...toolCalls[index], status };
-          else toolCalls.push({ tool: event.tool, status });
+          const index = event.callId
+            ? toolCalls.findIndex((item) => item.callId === event.callId)
+            : toolCalls.findIndex((item) => item.tool === event.tool && item.status === 'running');
+          if (index >= 0) toolCalls[index] = { ...toolCalls[index], callId: event.callId || toolCalls[index].callId, status };
+          else toolCalls.push({ callId: event.callId, tool: event.tool, status });
           return { ...base, toolCalls };
         }
         if (event.type === 'done' || event.type === 'error') return { ...base, done: true };

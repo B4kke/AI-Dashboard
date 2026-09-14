@@ -283,8 +283,12 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       const conversationId = decodeURIComponent(masterTurns[1]);
       const input = masterUserMessage(await body(request));
       const abortController = new AbortController();
-      const abort = () => abortController.abort();
+      let turnSettled = false;
+      const abort = () => {
+        if (!turnSettled && !abortController.signal.aborted) abortController.abort();
+      };
       request.once('aborted', abort);
+      response.once('close', abort);
       let streamErrorSent = false;
       response.writeHead(200, {
         ...SECURITY_HEADERS,
@@ -303,7 +307,9 @@ export function createHttpServer({ store, events, orchestrator, autonomy, resear
       } catch (error) {
         if (!streamErrorSent) send({ type: 'error', error: String(error?.message || error || 'Master turn failed') });
       } finally {
+        turnSettled = true;
         request.off('aborted', abort);
+        response.off('close', abort);
         if (!response.writableEnded && !response.destroyed) {
           response.write('data: [DONE]\n\n');
           response.end();

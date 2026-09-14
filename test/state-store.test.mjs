@@ -40,6 +40,37 @@ test('schema v3 state migrates forward with MCP and agent-scope collections', as
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('persisted Master messages are sanitized again when state is loaded after restart', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-master-message-normalize-'));
+  try {
+    const file = join(dir, 'state.json');
+    const createdAt = '2026-08-20T10:00:00.000Z';
+    await writeFile(file, JSON.stringify({
+      schemaVersion: 10,
+      masterConversations: [{
+        id: 'conversation-1', projectId: null, title: 'Stored conversation',
+        createdAt, updatedAt: createdAt, lastMessageAt: createdAt,
+      }],
+      masterMessages: [{
+        id: 'message-1', conversationId: 'conversation-1',
+        role: 'root', kind: 'forged', content: 'Stored content',
+        toolCalls: Array.from({ length: 12 }, (_, index) => ({ tool: `tool-${index}`, status: 'completed' })),
+        createdAt,
+      }],
+    }));
+
+    const store = new StateStore(file);
+    await store.load();
+    const [message] = store.masterMessagesFor('conversation-1');
+    assert.equal(message.role, 'user');
+    assert.equal(message.kind, 'conversation');
+    assert.equal(message.toolCalls.length, 8);
+    assert.equal(message.content, 'Stored content');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('schema v7 terminal coding Runs retain ownership until external termination is proven', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-terminal-proof-migrate-'));
   try {
