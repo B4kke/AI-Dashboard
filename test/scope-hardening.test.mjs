@@ -602,25 +602,27 @@ test('retry refuses a reusable worker workspace when readiness proved a newer Pr
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 
-test('worker admission fails closed on unknown and cross-Project dependency IDs', async () => {
+test('Task creation fails closed on unknown and cross-Project dependency IDs', async () => {
   const f = await gitFixture();
   try {
     const store = new StateStore(join(f.dir, 'dependency-integrity-state.json')); await store.load();
     const project = await store.addProject({ name: 'Dependencies', repoPath: f.repo, verificationCommands: ['node verify.mjs'] });
     const otherProject = await store.addProject({ name: 'Other Project', repoPath: f.repo, verificationCommands: ['node verify.mjs'] });
     const foreign = await store.addTask({ projectId: otherProject.id, title: 'Foreign', state: 'done' });
-    const unknown = await store.addTask({
-      projectId: project.id, title: 'Unknown dependency', blockedBy: ['missing-task-id'], acceptanceCriteria: ['blocked'],
-    });
-    const crossProject = await store.addTask({
-      projectId: project.id, title: 'Cross-project dependency', blockedBy: [foreign.id], acceptanceCriteria: ['blocked'],
-    });
-    const orchestrator = createOrchestrator({ store, opencode: {}, github: {} });
 
-    await assert.rejects(() => orchestrator.startWorker(unknown.id), /dependency integrity failed/);
-    await assert.rejects(() => orchestrator.startWorker(crossProject.id), /dependency integrity failed/);
-    assert.equal(store.getTask(unknown.id).state, 'needs_input');
-    assert.equal(store.getTask(crossProject.id).state, 'needs_input');
+    await assert.rejects(
+      () => store.addTask({
+        projectId: project.id, title: 'Unknown dependency', blockedBy: ['missing-task-id'], acceptanceCriteria: ['blocked'],
+      }),
+      /Invalid Task dependency: missing-task-id was not found in this Project/,
+    );
+    await assert.rejects(
+      () => store.addTask({
+        projectId: project.id, title: 'Cross-project dependency', blockedBy: [foreign.id], acceptanceCriteria: ['blocked'],
+      }),
+      /Invalid Task dependency: .* belongs to a different Project/,
+    );
+    assert.equal(store.tasksForProject(project.id).length, 0);
     assert.equal(store.snapshot().runs.length, 0);
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
