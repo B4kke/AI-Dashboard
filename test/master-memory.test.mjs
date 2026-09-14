@@ -15,6 +15,19 @@ function metadataPersistence() {
   };
 }
 
+function fakeStream(text, { steps = [], usage = null, finishReason = 'stop', beforeText = null } = {}) {
+  return {
+    fullStream: (async function* () {
+      if (beforeText) await beforeText();
+      if (text) yield { type: 'text-delta', text };
+    })(),
+    text: Promise.resolve(text),
+    steps: Promise.resolve(steps),
+    totalUsage: Promise.resolve(usage),
+    finishReason: Promise.resolve(finishReason),
+  };
+}
+
 test('Master SOUL.md and memory are durable, inspectable, editable and deletable context', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-soul-'));
   const soulPath = join(dir, 'master', 'SOUL.md');
@@ -75,18 +88,22 @@ test('Master reflection learns explicit user preferences and feeds them back int
   const calls = [];
   let reflectionCount = 0;
   const generate = async (options) => {
+    if (!options.prompt) throw new Error('Visible Master turn must use stream(), not generate().');
+    reflectionCount += 1;
+    if (reflectionCount === 1) return {
+      text: JSON.stringify({
+        memories: [{ kind: 'preference', text: 'Bruk norsk som standardspråk og vær teknisk konkret.', confidence: 0.96, projectScoped: false }],
+        soulLesson: 'Når brukeren ber om teknisk status, skill mellom implementert, testet og ende-til-ende-verifisert.',
+      }),
+    };
+    return { text: JSON.stringify({ memories: [], soulLesson: null }) };
+  };
+  const stream = (options) => {
     calls.push(options);
-    if (options.prompt) {
-      reflectionCount += 1;
-      if (reflectionCount === 1) return {
-        text: JSON.stringify({
-          memories: [{ kind: 'preference', text: 'Bruk norsk som standardspråk og vær teknisk konkret.', confidence: 0.96, projectScoped: false }],
-          soulLesson: 'Når brukeren ber om teknisk status, skill mellom implementert, testet og ende-til-ende-verifisert.',
-        }),
-      };
-      return { text: JSON.stringify({ memories: [], soulLesson: null }) };
-    }
-    return { text: 'Dette er et ekte modell-svar i testen.', steps: [], totalUsage: { inputTokens: 10, outputTokens: 8 }, finishReason: 'stop' };
+    return fakeStream('Dette er et ekte modell-svar i testen.', {
+      usage: { inputTokens: 10, outputTokens: 8 },
+      finishReason: 'stop',
+    });
   };
   const master = createMasterService({
     store,
@@ -95,6 +112,7 @@ test('Master reflection learns explicit user preferences and feeds them back int
     persistence,
     soulPath,
     generate,
+    stream,
     createMcp: async () => ({ tools: async () => ({}), close: async () => {} }),
   });
   try {
@@ -132,9 +150,11 @@ test('Master returns the visible answer without waiting for private reflection',
     dashboardBaseUrl: 'http://127.0.0.1:7331',
     persistence,
     soulPath: join(dir, 'master', 'SOUL.md'),
-    generate: async (options) => options.prompt
-      ? reflection
-      : { text: 'Synlig svar', steps: [], finishReason: 'stop' },
+    generate: async (options) => {
+      if (!options.prompt) throw new Error('Visible Master turn must use stream(), not generate().');
+      return reflection;
+    },
+    stream: () => fakeStream('Synlig svar'),
     createMcp: async () => ({ tools: async () => ({}), close: async () => {} }),
   });
   try {
@@ -177,29 +197,27 @@ test('automatic Master planning is tool-filtered and settles an atomic Task batc
     persistence,
     soulPath: join(dir, 'master', 'SOUL.md'),
     createMcp: async () => ({
-      tools: async () => Object.fromEntries(allToolNames.map((name) => [name, { description: name }])),
+      tools: async () => Object.fromEntries(allToolNames.map((name) => [name, {
+        description: name,
+        execute: name === 'task_batch_create'
+          ? async () => {
+            await store.addTaskBatch({
+              projectId: project.id,
+              tasks: [{ title: 'Finish product', workScopes: ['server'], acceptanceCriteria: ['Product contract is complete'], dependsOn: [] }],
+            });
+            return { created: true };
+          }
+          : async () => ({ ok: true }),
+      }])),
       close: async () => {},
     }),
-    generate: async (options) => {
+    stream: (options) => {
       visibleTools = Object.keys(options.tools);
-      await options.onToolExecutionStart({
-        callId: 'generation-1',
-        toolCall: { toolCallId: 'tool-1', toolName: 'task_batch_create', input: { projectId: project.id } },
+      const toolCall = { toolCallId: 'tool-1', toolName: 'task_batch_create', input: { projectId: project.id } };
+      return fakeStream('Opprettet neste arbeidsrunde.\nMASTER_PLAN_STATUS: tasks_created', {
+        steps: [{ toolCalls: [toolCall] }],
+        beforeText: () => options.tools.task_batch_create.execute(toolCall.input, { toolCallId: toolCall.toolCallId }),
       });
-      await store.addTaskBatch({
-        projectId: project.id,
-        tasks: [{ title: 'Finish product', workScopes: ['server'], acceptanceCriteria: ['Product contract is complete'], dependsOn: [] }],
-      });
-      await options.onToolExecutionEnd({
-        callId: 'generation-1',
-        toolCall: { toolCallId: 'tool-1', toolName: 'task_batch_create', input: { projectId: project.id } },
-        toolOutput: { type: 'tool-result' },
-      });
-      return {
-        text: 'Opprettet neste arbeidsrunde.\nMASTER_PLAN_STATUS: tasks_created',
-        steps: [{ toolCalls: [{ toolCallId: 'tool-1', toolName: 'task_batch_create', input: { projectId: project.id } }] }],
-        finishReason: 'stop',
-      };
     },
   });
   try {

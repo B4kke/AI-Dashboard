@@ -131,6 +131,122 @@ export function createMasterService({
 
   async function learnFromTurn({ modelClient, locale, project, conversationId, user, assistant }) {
     try {
+      const result = await generate({
+        model: modelClient,
+        system: learningSystemPrompt(locale),
+        prompt: [
+          project ? `Project context: ${project.name} (${project.id})` : 'Global conversation.',
+          `USER:\n${bounded(user.content, 12_000)}`,
+          `MASTER ANSWER:\n${bounded(assistant.content, 12_000)}`,
+        ].join('\n\n'),
+        temperature: 0,
+      });
+      const learning = parseLearning(result.text);
+      const stored = [];
+      for (const candidate of learning.memories) {
+        const confidence = Number(candidate?.confidence);
+        if (!Number.isFinite(confidence) || confidence < 0.65) continue;
+        const item = memory.remember({
+          projectId: candidate.projectScoped === true && project ? project.id : null,
+          kind: candidate.kind,
+          text: candidate.text,
+          confidence,
+          source: 'assistant_reflection',
+          sourceConversationId: conversationId,
+          sourceMessageIds: [user.id, assistant.id],
+        });
+        stored.push(item.id);
+      }
+      const soul = learning.soulLesson ? await memory.appendSoulLesson(learning.soulLesson) : { changed: false };
+      return { stored: stored.length, soulUpdated: soul.changed === true };
+    } catch {
+      // Reflection must never turn a successful user-facing answer into a failed turn.
+      return { stored: 0, soulUpdated: false };
+    }
+  }
+
+  function scheduleLearning(input) {
+    let pending;
+    pending = Promise.resolve()
+      .then(() => learnFromTurn(input))
+      .finally(() => pendingLearning.delete(pending));
+    pendingLearning.add(pending);
+    return { scheduled: true };
+  }
+
+  async function drainLearning() {
+    while (pendingLearning.size) await Promise.allSettled([...pendingLearning]);
+  }
+
+  async function turn(conversationId, content, options = {}) {
+    const conversation = store.getMasterConversation(conversationId);
+    if (!conversation) throw new Error('Master conversation not found');
+    const text = String(content || '').trim();
+    if (!text) throw new Error('Master message content is required');
+
+    const state = store.snapshot();
+    const project = conversation.projectId ? store.getProject(conversation.projectId) : null;
+    const preferences = setup.preferences();
+    const modelRef = preferences.masterModel || project?.modelPolicy?.researchModel || null;
+    const model = normalizeModelRef(modelRef);
+    if (!model) throw new Error('No Master model is configured. Complete first-run setup or choose a Master model in System.');
+    const provider = store.getModelProvider(model.providerID);
+    if (!provider || provider.enabled === false) throw new Error(`Master model provider is unavailable: ${model.providerID}`);
+    if (provider.apiKeyEnv && !process.env[provider.apiKeyEnv]) throw new Error(`Master provider credential is not configured: ${provider.apiKeyEnv}`);
+
+    const systemInitiated = options.systemInitiated === true;
+    const user = await store.addMasterMessage({
+      conversationId,
+      role: systemInitiated ? 'system' : 'user',
+      kind: systemInitiated ? 'executing' : 'conversation',
+      content: text,
+    });
+    const providerClient = createOpenAICompatible({
+      name: provider.id,
+      baseURL: provider.baseUrl,
+      apiKey: provider.apiKeyEnv ? process.env[provider.apiKeyEnv] : undefined,
+    });
+    const modelClient = providerClient.chatModel(model.modelID);
+
+    let mcpClient = null;
+    let progressMessage = null;
+    const progressCalls = [];
+    const emit = (event) => {
+      try { options.onEvent?.(event); } catch { /* UI streaming must never alter model/control-plane semantics. */ }
+    };
+    try {
+      const [soul, remembered] = await Promise.all([memory.readSoul(), Promise.resolve(memory.context(project?.id || null))]);
+      mcpClient = await createMcp({
+        transport: { type: 'http', url: new URL('/mcp/master', dashboardBaseUrl).toString() },
+        name: 'ai-dashboard-master-runtime',
+        version: '0.0.7',
+      });
+      const discoveredTools = await mcpClient.tools();
+      const allowedTools = Array.isArray(options.allowedTools) ? new Set(options.allowedTools) : null;
+      const tools = allowedTools
+        ? Object.fromEntries(Object.entries(discoveredTools).filter(([name]) => allowedTools.has(name)))
+        : discoveredTools;
+      if (allowedTools && Object.keys(tools).length !== allowedTools.size) {
+        const missing = [...allowedTools].filter((name) => !tools[name]);
+        throw new Error(`Required Master tools are unavailable: ${missing.join(', ')}`);
+      }
+      const history = conversationMessages(store.masterMessagesFor(conversationId));
+      progressMessage = await store.addMasterMessage({
+        conversationId,
+        role: 'assistant',
+        kind: 'executing',
+        content: preferences.locale === 'en' ? 'Master is working…' : 'Master arbeider…',
+      });
+      emit({ type: 'start', conversationId, assistantId: progressMessage.id, modelId: modelRef });
+      emit({ type: 'activity', phase: 'preparing', label: preferences.locale === 'en' ? 'Preparing response' : 'Forbereder svar' });
+      const updateProgress = async (contentOverride = null) => {
+        if (!progressMessage) return;
+        progressMessage = await store.updateMasterMessage(progressMessage.id, {
+          kind: 'executing',
+          content: contentOverride || progressMessage.content,
+          toolCalls: progressCalls.map(({ callId, ...call }) => call),
+        });
+      };
       const runtimeTools = Object.fromEntries(Object.entries(tools).map(([toolName, definition]) => {
         if (typeof definition?.execute !== 'function') return [toolName, definition];
         return [toolName, {
@@ -140,17 +256,17 @@ export function createMasterService({
             const call = { callId, tool: toolName, args: safeToolPayload(input), status: 'running' };
             progressCalls.push(call);
             await updateProgress(preferences.locale === 'en' ? `Master is using ${toolName}…` : `Master bruker ${toolName}…`);
-            emit({ type: 'tool', tool: toolName, state: 'running', label: toolName });
+            emit({ type: 'tool', callId, tool: toolName, state: 'running', label: toolName });
             try {
               const output = await definition.execute(input, execution);
               call.status = 'completed';
               await updateProgress();
-              emit({ type: 'tool', tool: toolName, state: 'done', label: toolName });
+              emit({ type: 'tool', callId, tool: toolName, state: 'done', label: toolName });
               return output;
             } catch (error) {
               call.status = 'failed';
               await updateProgress();
-              emit({ type: 'tool', tool: toolName, state: 'error', label: toolName });
+              emit({ type: 'tool', callId, tool: toolName, state: 'error', label: toolName });
               throw error;
             }
           },

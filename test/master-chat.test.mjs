@@ -275,6 +275,8 @@ test('Master React surface remains first-class and real-model wired (contract)',
   assert.match(service, /streamText/);
   assert.match(service, /stepCountIs\(8\)/);
   assert.match(service, /for await \(const part of result\.fullStream\)/);
+  assert.match(service, /async function learnFromTurn[\\s\\S]*?const result = await generate\\\(/);
+  assert.match(service, /async function turn[\\s\\S]*?const result = stream\\\(/);
   assert.match(service, /generateText/); // bounded memory reflection remains a separate non-visible pass
   assert.match(service, /createMCPClient/);
   assert.match(service, /createOpenAICompatible/);
