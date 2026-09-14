@@ -1,0 +1,93 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { SqliteControlStore } from '../server/core/sqlite-control.mjs';
+import { SCHEMA_VERSION, StateStore } from '../server/core/state-store.mjs';
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('SQLite control state survives reopen and journals transitions with revisions', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-sqlite-'));
+  const dbPath = join(dir, 'control.sqlite'); const legacy = join(dir, 'state.json');
+  try {
+    await writeFile(legacy, JSON.stringify({ schemaVersion: 4, projects: [{ id: 'legacy', name: 'Legacy', autonomy: {}, modelPolicy: {} }], tasks: [], runs: [], ideas: [], agents: [], integrations: {} }), 'utf8');
+    const sqlite1 = await new SqliteControlStore(dbPath).initialize();
+    assert.equal(await sqlite1.importJsonIfEmpty(legacy), true);
+    const store1 = new StateStore(legacy, { persistence: sqlite1 }); await store1.load();
+    const project = await store1.addProject({ name: 'Durable', verificationCommands: ['node --test'] });
+    const task = await store1.addTask({ projectId: project.id, title: 'Journal me', acceptanceCriteria: ['works'] });
+    await store1.updateTask(task.id, { state: 'needs_input' });
+    const transitions = sqlite1.recentTransitions(10);
+    assert.equal(transitions.length, 3);
+    assert.deepEqual(transitions.map((item) => item.type), ['task.updated', 'task.created', 'project.created']);
+    assert.deepEqual(transitions.map((item) => item.revision), [3, 2, 1]);
+    assert.equal(store1.snapshot().revision, 3);
+    sqlite1.close();
+
+    const sqlite2 = await new SqliteControlStore(dbPath).initialize();
+    assert.equal(await sqlite2.importJsonIfEmpty(legacy), false);
+    const store2 = new StateStore(legacy, { persistence: sqlite2 }); await store2.load();
+    const snapshot = store2.snapshot();
+    assert.equal(snapshot.schemaVersion, SCHEMA_VERSION); assert.equal(snapshot.revision, 3);
+    assert.ok(snapshot.projects.some((item) => item.id === 'legacy'));
+    assert.equal(snapshot.projects.find((item) => item.id === project.id).name, 'Durable');
+    assert.equal(store2.getTask(task.id).state, 'needs_input');
+    assert.equal(store2.persistenceInfo().type, 'sqlite'); assert.equal(store2.persistenceInfo().durable, true); assert.equal(store2.persistenceInfo().revision, 3);
+    sqlite2.close();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('SQLite operation locks are exclusive and released after the owner exits', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-lock-')); const dbPath = join(dir, 'control.sqlite');
+  try {
+    const a = await new SqliteControlStore(dbPath, { lockTtlMs: 30_000 }).initialize();
+    const b = await new SqliteControlStore(dbPath, { lockTtlMs: 30_000 }).initialize();
+    assert.equal(a.acquire('task:123', 'owner-a'), true); assert.equal(b.acquire('task:123', 'owner-b'), false); assert.equal(a.listLocks().length, 1);
+    a.release('task:123', 'owner-a'); assert.equal(b.acquire('task:123', 'owner-b'), true); b.release('task:123', 'owner-b');
+    a.close(); b.close();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('withLock renews a live lease so another connection cannot enter after the original TTL', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-lock-renew-')); const dbPath = join(dir, 'control.sqlite');
+  try {
+    const a = await new SqliteControlStore(dbPath, { lockTtlMs: 1_200 }).initialize();
+    const b = await new SqliteControlStore(dbPath, { lockTtlMs: 1_200 }).initialize();
+    let entered = false;
+    const held = a.withLock('task:renew', async () => {
+      entered = true;
+      await sleep(1_650);
+      return 'done';
+    });
+    while (!entered) await sleep(5);
+    await sleep(1_300);
+    assert.equal(b.acquire('task:renew', 'owner-b', 1_200), false);
+    assert.equal(await held, 'done');
+    assert.equal(b.acquire('task:renew', 'owner-b', 1_200), true);
+    b.release('task:renew', 'owner-b');
+    a.close(); b.close();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('stale bootstrap snapshot cannot overwrite a newer committed revision', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-revision-')); const dbPath = join(dir, 'control.sqlite');
+  try {
+    const sqlite = await new SqliteControlStore(dbPath).initialize();
+    await sqlite.save({ schemaVersion: SCHEMA_VERSION, revision: 1, projects: [{ id: 'p1', name: 'rev1' }] });
+    await sqlite.saveWithEvent(
+      { schemaVersion: SCHEMA_VERSION, revision: 2, projects: [{ id: 'p1', name: 'rev2' }] },
+      'project.updated',
+      { id: 'p1', name: 'rev2' },
+    );
+    await assert.rejects(
+      () => sqlite.save({ schemaVersion: SCHEMA_VERSION, revision: 1, projects: [{ id: 'p1', name: 'stale' }] }),
+      /State revision regression/,
+    );
+    const current = await sqlite.load();
+    assert.equal(current.revision, 2);
+    assert.equal(current.projects[0].name, 'rev2');
+    sqlite.close();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
