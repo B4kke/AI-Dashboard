@@ -351,6 +351,8 @@ test('Master React surface remains first-class and real-model wired (contract)',
   assert.match(http, /master\.turn\(conversationId, input\.content, \{ onEvent: send, abortSignal:/);
   assert.match(http, /response\.once\('close', abort\)/);
   assert.match(api, /response\.body\.getReader\(\)/);
+  assert.match(api, /callId\?: string/);
+  assert.match(app, /item\.callId === event\.callId/);
   assert.match(app, /MasterStreamEvent/);
   assert.match(store, /SCHEMA_VERSION = 10/);
 
