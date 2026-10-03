@@ -96,3 +96,28 @@ test('React presents operator attention before execution and requires a usable T
   assert.match(app, /orchestration/);
   assert.match(app, /settings\.autoPlan/);
 });
+
+
+test('React landing is Project-first and mobile Project navigation stays compact', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(new URL('../web/src/styles.css', import.meta.url), 'utf8'),
+  ]);
+  assert.match(app, /return \{ page: 'projects' \};/);
+  assert.match(app, /className="project-section-picker"/);
+  assert.match(app, /go\('\/projects'\)/);
+  assert.match(styles, /\.project-section-picker\{display:none\}/);
+  assert.match(styles, /@media\(max-width:620px\)[\s\S]*?\.project-tabs\{display:none\}/);
+});
+
+test('React keeps operator blockers and GitHub evidence human-readable before raw debug data', async () => {
+  const [app, api, i18n] = await Promise.all([readFile(appUrl, 'utf8'), readFile(apiUrl, 'utf8'), readFile(i18nUrl, 'utf8')]);
+  assert.match(api, /supervisorFeedback\?: string \| null/);
+  assert.match(app, /task\.supervisorFeedback/);
+  assert.match(app, /className="blocker-context"/);
+  assert.match(app, /publication\.ci/);
+  assert.match(app, /latestSupervisor/);
+  assert.doesNotMatch(app, /JSON\.stringify\(evidence\.publication/);
+  assert.match(i18n, /failedChecks:/);
+  assert.match(i18n, /noSupervisor:/);
+});

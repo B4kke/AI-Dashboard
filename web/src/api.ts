@@ -10,7 +10,7 @@ export type Project = {
 export type Task = {
   id: string; projectId: string; title: string; description?: string; state: string; priority?: string;
   kind?: string; acceptanceCriteria?: string[]; blockedBy?: string[]; workScopes?: string[]; agentId?: string | null;
-  model?: string | null; verificationCommands?: string[]; iteration?: number; publication?: Record<string, unknown> | null; updatedAt?: string;
+  model?: string | null; verificationCommands?: string[]; iteration?: number; supervisorFeedback?: string | null; publication?: Record<string, unknown> | null; updatedAt?: string;
 };
 export type Agent = {
   id: string; projectId: string; name: string; role: string; harness?: string; model?: string | null;

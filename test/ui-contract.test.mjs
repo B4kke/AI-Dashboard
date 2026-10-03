@@ -62,3 +62,13 @@ test('Master SOUL and durable memory are operator-visible in the React System su
   assert.match(app, /api\.updateMasterMemory/);
   assert.match(app, /api\.forgetMasterMemory/);
 });
+
+
+test('Project-first root and structured evidence match the binding UX hierarchy', async () => {
+  const app = await readFile(reactUrl, 'utf8');
+  assert.match(app, /return \{ page: 'projects' \};/);
+  assert.match(app, /readiness\.blockers/);
+  assert.match(app, /evidence-link/);
+  assert.match(app, /evidence\.advanced/);
+  assert.doesNotMatch(app, /<section><h3>\{t\('evidence\.github'\)\}<\/h3><pre>/);
+});
