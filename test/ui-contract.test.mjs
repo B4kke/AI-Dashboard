@@ -72,3 +72,9 @@ test('Project-first root and structured evidence match the binding UX hierarchy'
   assert.match(app, /evidence\.advanced/);
   assert.doesNotMatch(app, /<section><h3>\{t\('evidence\.github'\)\}<\/h3><pre>/);
 });
+
+
+test('action labels avoid unsupported full-width plus glyphs', async () => {
+  const app = await readFile(reactUrl, 'utf8');
+  assert.doesNotMatch(app, /＋/);
+});
