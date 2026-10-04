@@ -71,7 +71,7 @@ export default function App() {
     return () => { window.clearTimeout(timer); eventSource.close(); };
   }, []);
 
-  if (!state || !setup) return <div className="boot"><div className="brand-glyph">✦</div><p>{t('common.loading')}</p>{error && <p className="error">{error}</p>}</div>;
+  if (!state || !setup) return <div className="boot"><div className="brand-glyph">✦</div><p>{error ? t('common.configure') : t('common.loading')}</p>{error && <div className="boot-error" role="alert"><span>{error}</span><button onClick={() => void refresh()}>{t('common.refresh')}</button></div>}</div>;
   if (!setup.completed) return <SetupWizard setup={setup} onDone={refresh} />;
 
   const run = async (fn: () => Promise<unknown>) => {
