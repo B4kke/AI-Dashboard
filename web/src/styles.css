@@ -76,3 +76,8 @@
 .boot-error{display:grid;gap:10px;max-width:min(520px,calc(100vw - 32px));margin:10px auto 0;padding:13px 14px;border:1px solid rgba(255,122,138,.28);border-radius:10px;background:rgba(255,122,138,.06);color:#ffc1c8;text-align:left}
 .boot-error span{overflow-wrap:anywhere;line-height:1.5}
 .boot-error button{min-height:44px}
+
+.stream-activity{display:flex;align-items:center;gap:9px;max-width:720px;padding:2px 3px;color:#86a2b3;font-size:12px;font-weight:650;line-height:1.4}
+.stream-pulse{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:var(--cyan);box-shadow:0 0 0 0 rgba(82,215,255,.28);animation:stream-pulse 1.4s ease-out infinite}
+@keyframes stream-pulse{0%{box-shadow:0 0 0 0 rgba(82,215,255,.28)}70%{box-shadow:0 0 0 7px rgba(82,215,255,0)}100%{box-shadow:0 0 0 0 rgba(82,215,255,0)}}
+@media(prefers-reduced-motion:reduce){.stream-pulse{animation:none}}
