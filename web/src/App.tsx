@@ -309,6 +309,7 @@ function ProjectView({ state, setup, projectId, routeTab = 'overview', routeConv
   const [blockedBy, setBlockedBy] = useState<string[]>([]);
 
   useEffect(() => { setTab(routeTab); }, [projectId, routeTab]);
+  useEffect(() => { setReadiness(project?.lastPreflight || null); }, [projectId, project?.lastPreflight]);
   useEffect(() => {
     if (!project) return;
     setUsabilityError('');
