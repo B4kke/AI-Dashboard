@@ -146,12 +146,13 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
   const conversations = [...state.masterConversations].sort((a,b)=>String(b.updatedAt).localeCompare(String(a.updatedAt)));
   const scopedConversations = projectId ? conversations.filter((conversation) => conversation.projectId === projectId) : conversations.filter((conversation) => !conversation.projectId);
   const selected = scopedConversations.find(c=>c.id===routeId) || scopedConversations[0] || null;
+  const activeConversationId = selected?.id || routeId || null;
   const messages = selected ? state.masterMessages.filter(m=>m.conversationId===selected.id) : [];
   const [input, setInput] = useState('');
-  const [streaming, setStreaming] = useState<{conversationId:string;assistantId:string;content:string;toolCalls:Array<{callId?:string;tool:string;status?:string|null}>;done:boolean}|null>(null);
+  const [streaming, setStreaming] = useState<{conversationId:string;assistantId:string;content:string;activity:string;toolCalls:Array<{callId?:string;tool:string;status?:string|null}>;done:boolean}|null>(null);
   const displayMessages = useMemo(() => {
     const next = [...messages];
-    if (!streaming || streaming.conversationId !== selected?.id || !streaming.assistantId) return next;
+    if (!streaming || streaming.conversationId !== activeConversationId || !streaming.assistantId) return next;
     const index = next.findIndex((message) => message.id === streaming.assistantId);
     if (index >= 0) {
       const canonical = next[index];
@@ -171,7 +172,7 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
       });
     }
     return next;
-  }, [messages, selected?.id, streaming]);
+  }, [messages, activeConversationId, streaming]);
   useEffect(() => {
     if (!streaming?.done || !streaming.assistantId) return;
     const canonical = state.masterMessages.find((message) => message.id === streaming.assistantId && message.kind !== 'executing');
@@ -188,14 +189,15 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
     let conv: MasterConversation | null = selected;
     if (!conv) conv = await api.createConversation({ title: content.slice(0, 60), ...(projectId ? { projectId } : {}) });
     const activeConv = conv;
-    setStreaming({ conversationId: activeConv.id, assistantId: '', content: '', toolCalls: [], done: false });
+    setStreaming({ conversationId: activeConv.id, assistantId: '', content: '', activity: t('master.working'), toolCalls: [], done: false });
     go(projectId ? `/project/${projectId}/master/${activeConv.id}` : `/master/${activeConv.id}`);
     await api.masterTurn(activeConv.id, content, (event: MasterStreamEvent) => {
       setStreaming((current) => {
         const base = current?.conversationId === activeConv.id
           ? current
-          : { conversationId: activeConv.id, assistantId: '', content: '', toolCalls: [], done: false };
+          : { conversationId: activeConv.id, assistantId: '', content: '', activity: t('master.working'), toolCalls: [], done: false };
         if (event.type === 'start') return { ...base, assistantId: event.assistantId || base.assistantId };
+        if (event.type === 'activity') return { ...base, activity: event.label || event.phase || base.activity };
         if (event.type === 'token' && event.token) return { ...base, assistantId: event.assistantId || base.assistantId, content: base.content + event.token };
         if (event.type === 'tool' && event.tool) {
           const status = event.state === 'done' ? 'completed' : event.state === 'error' ? 'failed' : 'running';
@@ -205,13 +207,14 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
             : toolCalls.findIndex((item) => item.tool === event.tool && item.status === 'running');
           if (index >= 0) toolCalls[index] = { ...toolCalls[index], callId: event.callId || toolCalls[index].callId, status };
           else toolCalls.push({ callId: event.callId, tool: event.tool, status });
-          return { ...base, toolCalls };
+          return { ...base, toolCalls, activity: status === 'running' ? t('master.usingTool', { tool: event.tool }) : base.activity };
         }
         if (event.type === 'done' || event.type === 'error') return { ...base, done: true };
         return base;
       });
     });
   };
+  const streamingActive = Boolean(streaming && streaming.conversationId === activeConversationId && !streaming.done);
   return <div className={`master-layout${projectId ? ' project-master-layout' : ''}`}>
     <aside className="conversation-list"><div className="panel-title"><span>{t('master.title')}</span><button className="icon-button" aria-label={t('master.newChat')} onClick={()=>void run(create)}>+</button></div>
       {scopedConversations.map(c=><button key={c.id} className={selected?.id===c.id?'conversation-row active':'conversation-row'} onClick={()=>go(projectId ? `/project/${projectId}/master/${c.id}` : `/master/${c.id}`)}><strong>{c.title}</strong><small>{t('master.messageCount', { count: state.masterMessages.filter(m=>m.conversationId===c.id).length })}</small></button>)}
@@ -221,7 +224,7 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
         <label className="mobile-conversation-select"><span>{t('master.conversations')}</span><select aria-label={t('master.conversations')} value={selected?.id || ''} disabled={!scopedConversations.length} onChange={(event)=>{const id=event.target.value;if(id)go(projectId ? `/project/${projectId}/master/${id}` : `/master/${id}`);}}>{scopedConversations.length ? scopedConversations.map((conversation)=><option key={conversation.id} value={conversation.id}>{conversation.title}</option>) : <option value="">{t('master.noConversations')}</option>}</select></label>
         <button className="primary" disabled={busy} onClick={()=>void run(create)}>+ {t('master.newChat')}</button>
       </div>
-      <Conversation>{displayMessages.length ? displayMessages.map(m=><Message key={m.id} role={m.role}><div className="message-meta">{m.role==='user'?t('master.you'):'Master'}</div><div className="message-text">{m.content}</div>{m.toolCalls?.length ? <div className="tool-row">{m.toolCalls.map((tool,i)=><Tool key={`${tool.tool}-${i}`} name={tool.tool} status={tool.status}/>)}</div>:null}</Message>) : <div className="master-empty"><div className="brand-glyph hero">✦</div><h2>{t('master.emptyTitle')}</h2><p>{t('master.emptyCopy')}</p></div>}</Conversation>
+      <Conversation>{displayMessages.length ? displayMessages.map(m=><Message key={m.id} role={m.role}><div className="message-meta">{m.role==='user'?t('master.you'):'Master'}</div><div className="message-text">{m.content}</div>{m.toolCalls?.length ? <div className="tool-row">{m.toolCalls.map((tool,i)=><Tool key={`${tool.tool}-${i}`} name={tool.tool} status={tool.status}/>)}</div>:null}</Message>) : !streamingActive ? <div className="master-empty"><div className="brand-glyph hero">✦</div><h2>{t('master.emptyTitle')}</h2><p>{t('master.emptyCopy')}</p></div> : null}{streamingActive && <div className="stream-activity" role="status" aria-live="polite"><span className="stream-pulse" />{streaming?.activity || t('master.working')}</div>}</Conversation>
       <div className="composer-wrap"><PromptInput value={input} onChange={setInput} onSubmit={()=>void run(send)} disabled={busy} placeholder={t('master.placeholder')} action="↑" /></div>
     </section>
   </div>;
