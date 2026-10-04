@@ -145,8 +145,8 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
   const { t } = useTranslation();
   const conversations = [...state.masterConversations].sort((a,b)=>String(b.updatedAt).localeCompare(String(a.updatedAt)));
   const scopedConversations = projectId ? conversations.filter((conversation) => conversation.projectId === projectId) : conversations.filter((conversation) => !conversation.projectId);
-  const selected = scopedConversations.find(c=>c.id===routeId) || scopedConversations[0] || null;
-  const activeConversationId = selected?.id || routeId || null;
+  const selected = routeId ? scopedConversations.find(c=>c.id===routeId) || null : scopedConversations[0] || null;
+  const activeConversationId = routeId || selected?.id || null;
   const messages = selected ? state.masterMessages.filter(m=>m.conversationId===selected.id) : [];
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState<{conversationId:string;assistantId:string;content:string;activity:string;toolCalls:Array<{callId?:string;tool:string;status?:string|null}>;done:boolean}|null>(null);
@@ -161,7 +161,7 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
         content: streaming.content || canonical.content,
         toolCalls: streaming.toolCalls.length ? streaming.toolCalls : canonical.toolCalls,
       };
-    } else {
+    } else if (streaming.content || streaming.toolCalls.length) {
       next.push({
         id: streaming.assistantId,
         conversationId: streaming.conversationId,
