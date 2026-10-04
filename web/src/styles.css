@@ -72,3 +72,7 @@
 .inline-load-error>span{min-width:0;overflow-wrap:anywhere;line-height:1.45}
 .inline-load-error button{flex:0 0 auto}
 @media(max-width:620px){.inline-load-error{align-items:stretch;flex-direction:column}.inline-load-error button{min-height:44px;width:100%}}
+
+.boot-error{display:grid;gap:10px;max-width:min(520px,calc(100vw - 32px));margin:10px auto 0;padding:13px 14px;border:1px solid rgba(255,122,138,.28);border-radius:10px;background:rgba(255,122,138,.06);color:#ffc1c8;text-align:left}
+.boot-error span{overflow-wrap:anywhere;line-height:1.5}
+.boot-error button{min-height:44px}
