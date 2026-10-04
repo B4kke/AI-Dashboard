@@ -106,3 +106,15 @@ test('mobile Master keeps conversation creation and switching available', async 
   assert.match(i18n, /conversations: 'Samtaler'/);
   assert.match(i18n, /conversations: 'Conversations'/);
 });
+
+
+test('modal interaction contract includes semantics, escape close, focus trap and restoration', async () => {
+  const app = await readFile(reactUrl, 'utf8');
+  assert.match(app, /role="dialog"/);
+  assert.match(app, /aria-modal="true"/);
+  assert.match(app, /aria-labelledby=\{titleId\}/);
+  assert.match(app, /event\.key === 'Escape'/);
+  assert.match(app, /event\.key !== 'Tab'/);
+  assert.match(app, /previousFocus\?\.focus\(\)/);
+  assert.match(app, /aria-label=\{t\('common\.close'\)\}/);
+});
