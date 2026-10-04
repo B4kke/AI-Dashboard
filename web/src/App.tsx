@@ -89,7 +89,7 @@ export default function App() {
         <span>{health?.integrations?.opencode?.connected ? 'OpenCode' : t('system.opencodeOffline')}</span></div>
     </aside>
     <main className="workspace">
-      {error && <div className="error-banner">{error}<button onClick={() => setError('')}>×</button></div>}
+      {error && <div className="error-banner" role="alert"><span>{error}</span><div className="error-actions"><button disabled={busy} onClick={() => void refresh()}>{t('common.refresh')}</button><button aria-label={t('common.close')} onClick={() => setError('')}>×</button></div></div>}
       {route.page === 'master' && <MasterView state={state} setup={setup} routeId={route.id} busy={busy} run={run} />}
       {route.page === 'explorations' && <ExplorationsView state={state} setup={setup} busy={busy} run={run} />}
       {route.page === 'projects' && <ProjectsView state={state} setup={setup} busy={busy} run={run} />}
@@ -236,7 +236,7 @@ function ProjectsView({ state, setup, busy, run }: {state:DashboardState;setup:a
   const { t } = useTranslation(); const [mode,setMode]=useState<'none'|'create'|'import'>('none'); const [discovery,setDiscovery]=useState<any>(null);
   const [name,setName]=useState(''); const [description,setDescription]=useState(''); const [folder,setFolder]=useState(''); const roots=state.settings?.workspaceRoots||setup.workspaceRoots||[]; const [root,setRoot]=useState(roots[0]||'');
   const scan=async()=>setDiscovery(await api.discovery(true));
-  return <div className="page"><header className="page-head"><div><p className="eyebrow">{t('projects.eyebrow')}</p><h1>{t('projects.title')}</h1></div><div className="actions"><button onClick={()=>{setMode('import');void scan();}}>{t('projects.discover')}</button><button className="primary" onClick={()=>setMode('create')}>+ {t('projects.create')}</button></div></header>
+  return <div className="page"><header className="page-head"><div><p className="eyebrow">{t('projects.eyebrow')}</p><h1>{t('projects.title')}</h1></div><div className="actions"><button disabled={busy} onClick={()=>{setMode('import');void run(scan);}}>{t('projects.discover')}</button><button className="primary" disabled={busy} onClick={()=>setMode('create')}>+ {t('projects.create')}</button></div></header>
     {state.projects.length ? <div className="project-grid">{state.projects.map(project=>{const projectTasks=state.tasks.filter(task=>task.projectId===project.id);const openTasks=projectTasks.filter(task=>task.state!=='done');const attention=projectAttentionTask(projectTasks);const dependencyState=attention?taskDependencyState(attention,projectTasks):'ready';return <button key={project.id} className={`project-card ${attention?.state==='needs_input'||project.status==='needs_sync'||dependencyState==='repair'||project.orchestration?.status==='needs_input'?'attention':''}`} onClick={()=>go(`/project/${project.id}/overview`)}><div className="project-icon">◇</div><div><h3>{project.name}</h3><p>{project.description||project.repository||project.repoPath||t('projects.localProject')}</p><div className="meta-row"><span className={`pill ${project.status==='active'?'good':''}`}>{projectStateLabel(project,t)}</span><span>{openTasks.length} {t('projects.tasks')}</span></div><div className="project-next"><span>{t('project.next')}</span><strong>{attention?.title||projectOrchestrationLabel(project,t)}</strong><small>{attention ? taskStateLabel(attention,t,projectTasks) : projectStateLabel(project,t)}</small></div></div><span className="arrow">→</span></button>})}</div> : <div className="empty-card"><h2>{t('projects.empty')}</h2><p>{t('projects.emptyCopy')}</p></div>}
     {mode==='create'&&<Modal title={t('projects.createTitle')} onClose={()=>setMode('none')}><Field label={t('projects.name')}><input value={name} onChange={e=>setName(e.target.value)}/></Field><Field label={t('projects.folder')}><input value={folder} onChange={e=>setFolder(e.target.value)} placeholder={name}/></Field><Field label={t('projects.description')}><textarea value={description} onChange={e=>setDescription(e.target.value)}/></Field><Field label={t('projects.root')}><select value={root} onChange={e=>setRoot(e.target.value)}>{roots.map((r:string)=><option key={r}>{r}</option>)}</select></Field><button className="primary wide" disabled={busy||!name.trim()||!root} onClick={()=>void run(async()=>{const result:any=await api.createLocalProject({name,folderName:folder,description,rootPath:root});setMode('none');go(`/project/${result.project.id}`);})}>{t('projects.createAction')}</button></Modal>}
     {mode==='import'&&<Modal title={t('projects.discoverTitle')} onClose={()=>setMode('none')}><div className="modal-actions"><button onClick={()=>void run(scan)}>{t('projects.scan')}</button></div><div className="repo-list">{(discovery?.items||[]).filter((item:any)=>['local_only','github_only'].includes(item.matchState)).map((item:any)=>{const local=item.kind==='local'?item.repo:null;const remote=item.kind==='github'?item.githubRepo:null;const key=local?.path||remote?.fullName;return <div key={key} className="repo-row"><div><strong>{local?.name||remote?.name||remote?.fullName}</strong><small>{local?.path||`${t('projects.remoteRepo')}: ${remote?.fullName}`}</small></div><button className="primary" disabled={busy||(!local&&!root)} onClick={()=>void run(async()=>{if(local)await api.importRepo(local.path);else await api.importGitHub(remote.fullName,root);setMode('none');})}>{local?t('projects.import'):t('projects.cloneImport')}</button></div>})}{discovery&&!(discovery.items||[]).some((item:any)=>['local_only','github_only'].includes(item.matchState))&&<p className="muted">{t('projects.noRepos')}</p>}</div></Modal>}
@@ -283,6 +283,7 @@ function ProjectView({ state, setup, projectId, routeTab = 'overview', routeConv
   const researchRuns = (state.researchRuns || []).filter((item) => item.projectId === projectId);
   const [tab, setTab] = useState<ProjectTab>(routeTab);
   const [usability, setUsability] = useState<any>(null);
+  const [usabilityError, setUsabilityError] = useState('');
   const [readiness, setReadiness] = useState<any>(project?.lastPreflight || null);
   const [newTask, setNewTask] = useState(false);
   const [title, setTitle] = useState('');
@@ -294,7 +295,14 @@ function ProjectView({ state, setup, projectId, routeTab = 'overview', routeConv
   const [blockedBy, setBlockedBy] = useState<string[]>([]);
 
   useEffect(() => { setTab(routeTab); }, [projectId, routeTab]);
-  useEffect(() => { if (project) void api.projectUsability(project.id).then(setUsability); }, [projectId, project?.updatedAt]);
+  useEffect(() => {
+    if (!project) return;
+    setUsabilityError('');
+    void api.projectUsability(project.id).then(setUsability).catch((err) => {
+      setUsability(null);
+      setUsabilityError(err instanceof Error ? err.message : String(err));
+    });
+  }, [projectId, project?.updatedAt]);
   if (!project) return <div className="page"><h1>{t('project.notFound')}</h1></div>;
 
   const agents = (state.agents || []).filter((item) => item.projectId === project.id);
@@ -313,7 +321,7 @@ function ProjectView({ state, setup, projectId, routeTab = 'overview', routeConv
       {PROJECT_TABS.map((item) => <button key={item} className={tab === item ? 'active' : ''} onClick={() => go(`/project/${project.id}/${item}`)}>{t(`project.tabs.${item}`)}</button>)}
     </nav>
 
-    {tab === 'overview' && <ProjectOverview project={project} tasks={tasks} activeRuns={activeRuns} usability={usability} readiness={readiness} busy={busy} onReadiness={() => run(async () => setReadiness(await api.projectReadiness(project.id)))} />}
+    {tab === 'overview' && <ProjectOverview project={project} tasks={tasks} activeRuns={activeRuns} usability={usability} usabilityError={usabilityError} readiness={readiness} busy={busy} onReadiness={() => run(async () => setReadiness(await api.projectReadiness(project.id)))} onUsability={() => api.projectUsability(project.id).then((value) => { setUsability(value); setUsabilityError(''); }).catch((err) => setUsabilityError(err instanceof Error ? err.message : String(err)))} />}
     {tab === 'tasks' && <ProjectTasks tasks={tasks} agents={agents} codingModels={catalogs.codingModels} busy={busy} run={run} />}
     {tab === 'agents' && <ProjectAgents project={project} agents={agents} codingModels={catalogs.codingModels} busy={busy} run={run} />}
     {tab === 'master' && <MasterView state={state} setup={setup} routeId={routeConversationId} projectId={project.id} projectName={project.name} busy={busy} run={run} />}
@@ -337,7 +345,7 @@ function ProjectView({ state, setup, projectId, routeTab = 'overview', routeConv
   </div>;
 }
 
-function ProjectOverview({ project, tasks, activeRuns, usability, readiness, busy, onReadiness }: {project:Project;tasks:Task[];activeRuns:Run[];usability:any;readiness:any;busy:boolean;onReadiness:()=>Promise<void>}) {
+function ProjectOverview({ project, tasks, activeRuns, usability, usabilityError, readiness, busy, onReadiness, onUsability }: {project:Project;tasks:Task[];activeRuns:Run[];usability:any;usabilityError:string;readiness:any;busy:boolean;onReadiness:()=>Promise<void>;onUsability:()=>Promise<unknown>}) {
   const { t } = useTranslation();
   const attention = projectAttentionTask(tasks);
   const blockers = Array.isArray(readiness?.blockers) ? readiness.blockers : [];
@@ -345,7 +353,7 @@ function ProjectOverview({ project, tasks, activeRuns, usability, readiness, bus
     ? attention.supervisorFeedback
     : attention?.description || (attention ? taskStateLabel(attention, t, tasks) : '');
   return <div className="project-overview">
-    <div className="status-grid"><section className="status-card"><p className="eyebrow">{t('project.normalUse')}</p><h2>{usability?.usable ? t('projects.usable') : t('common.configure')}</h2><p>{usability?.message || t('common.loading')}</p></section><section className={`status-card ${readiness && !readiness.ok ? 'status-card-attention' : ''}`}><p className="eyebrow">{t('project.strictReadiness')}</p><h2>{readiness?.ok ? t('common.ready') : t('projects.automation')}</h2>{readiness?.ok ? <p>{t('project.readinessReady')}</p> : readiness ? <><p>{t('project.blockerCount', { count: blockers.length })}</p>{blockers.length > 0 && <ul className="blocker-list">{blockers.slice(0, 3).map((item:any, index:number) => <li key={item.code || index}><strong>{item.summary || item.code || t('project.readinessBlocker')}</strong>{item.detail && <span>{item.detail}</span>}</li>)}</ul>}</> : <p>{t('project.readinessHint')}</p>}<button disabled={busy} onClick={() => void onReadiness()}>{t('project.checkReadiness')}</button></section></div>
+    <div className="status-grid"><section className={`status-card ${usabilityError ? 'status-card-attention' : ''}`}><p className="eyebrow">{t('project.normalUse')}</p><h2>{usabilityError ? t('common.configure') : usability?.usable ? t('projects.usable') : t('common.configure')}</h2><p>{usabilityError || usability?.message || t('common.loading')}</p>{usabilityError && <button disabled={busy} onClick={() => void onUsability()}>{t('common.refresh')}</button>}</section><section className={`status-card ${readiness && !readiness.ok ? 'status-card-attention' : ''}`}><p className="eyebrow">{t('project.strictReadiness')}</p><h2>{readiness?.ok ? t('common.ready') : t('projects.automation')}</h2>{readiness?.ok ? <p>{t('project.readinessReady')}</p> : readiness ? <><p>{t('project.blockerCount', { count: blockers.length })}</p>{blockers.length > 0 && <ul className="blocker-list">{blockers.slice(0, 3).map((item:any, index:number) => <li key={item.code || index}><strong>{item.summary || item.code || t('project.readinessBlocker')}</strong>{item.detail && <span>{item.detail}</span>}</li>)}</ul>}</> : <p>{t('project.readinessHint')}</p>}<button disabled={busy} onClick={() => void onReadiness()}>{t('project.checkReadiness')}</button></section></div>
     <section className="summary-strip"><div><span>{t('project.activeRuns')}</span><strong>{activeRuns.length}</strong></div><div><span>{t('project.openTasks')}</span><strong>{tasks.filter((task) => task.state !== 'done').length}</strong></div><div><span>{t('project.next')}</span><strong>{attention ? taskStateLabel(attention, t, tasks) : projectOrchestrationLabel(project, t)}</strong></div></section>
     {project.objective && <section className="objective-strip"><div><p className="eyebrow">{t('project.objective')}</p><h2>{project.objective}</h2><p>{t('project.doneProgress', { done: project.definitionOfDone?.length || 0 })}</p></div><span className={`pill ${project.orchestration?.status === 'complete' ? 'good' : ''}`}>{t(`orchestration.${project.orchestration?.status || 'idle'}`)}</span></section>}
     {attention ? <section className={`attention-row ${attention.state === 'needs_input' || taskDependencyState(attention, tasks) === 'repair' ? 'blocked' : ''}`}><div><p className="eyebrow">{t('project.next')}</p><h2>{attention.title}</h2><p>{attentionCopy}</p></div><div className="attention-actions"><span className="pill">{taskStateLabel(attention, t, tasks)}</span><button className={attention.state === 'needs_input' ? 'primary' : ''} onClick={() => go(`/project/${project.id}/tasks`)}>{t('project.viewTasks')}</button></div></section> : <div className={`empty-card compact ${project.orchestration?.status === 'needs_input' ? 'orchestration-attention' : ''}`}><h2>{projectOrchestrationLabel(project, t)}</h2><p>{project.orchestration?.lastError || project.orchestration?.lastSummary || t('project.noOpenWorkHint')}</p></div>}
@@ -421,10 +429,19 @@ function ProjectEvidence({ tasks }: {tasks:Task[]}) {
   const { t } = useTranslation();
   const [taskId, setTaskId] = useState(tasks[0]?.id || '');
   const [evidence, setEvidence] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const evidenceSignature = tasks.find((task) => task.id === taskId)?.updatedAt || '';
-  useEffect(() => { if (taskId) void api.taskEvidence(taskId).then(setEvidence); else setEvidence(null); }, [taskId, evidenceSignature]);
+  const loadEvidence = async () => {
+    if (!taskId) { setEvidence(null); setLoadError(''); return; }
+    setLoading(true); setLoadError('');
+    try { setEvidence(await api.taskEvidence(taskId)); }
+    catch (err) { setEvidence(null); setLoadError(err instanceof Error ? err.message : String(err)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void loadEvidence(); }, [taskId, evidenceSignature]);
   return <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">{t('project.tabs.evidence')}</p><h2>{t('evidence.title')}</h2></div>{tasks.length > 0 && <select value={taskId} onChange={(event) => setTaskId(event.target.value)}>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select>}</div>
-    {!evidence ? <div className="empty-card compact"><h2>{t('evidence.empty')}</h2><p>{t('evidence.emptyHint')}</p></div> : <EvidenceGroups evidence={evidence} />}
+    {loadError ? <div className="empty-card compact attention"><h2>{t('evidence.empty')}</h2><p className="error">{loadError}</p><button disabled={loading} onClick={() => void loadEvidence()}>{t('common.refresh')}</button></div> : loading && !evidence ? <div className="empty-card compact"><h2>{t('common.loading')}</h2></div> : !evidence ? <div className="empty-card compact"><h2>{t('evidence.empty')}</h2><p>{t('evidence.emptyHint')}</p></div> : <EvidenceGroups evidence={evidence} />}
   </section>;
 }
 
