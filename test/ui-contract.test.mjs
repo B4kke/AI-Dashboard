@@ -151,3 +151,14 @@ test('background registry/profile loads and memory mutations use visible shared 
   assert.doesNotMatch(app, /void api\.updateMasterMemory\(item\.id/);
   assert.doesNotMatch(app, /void api\.forgetMasterMemory\(item\.id/);
 });
+
+
+test('initial load failure has an in-UI recovery action', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(reactUrl, 'utf8'),
+    readFile(new URL('../web/src/styles.css', import.meta.url), 'utf8'),
+  ]);
+  assert.match(app, /className="boot-error" role="alert"/);
+  assert.match(app, /onClick=\{\(\) => void refresh\(\)\}/);
+  assert.match(styles, /\.boot-error/);
+});
