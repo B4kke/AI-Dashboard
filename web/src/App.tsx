@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   api, type Agent, type DashboardState, type Exploration, type ExplorationRun, type MasterConversation, type MasterMemoryItem, type MasterProfile, type MasterStreamEvent,
@@ -566,4 +566,35 @@ function MemoryRow({item,busy,onChanged}:{item:MasterMemoryItem;busy:boolean;onC
 
 function Integration({name,ok,detail}:{name:string;ok:boolean;detail?:string}) { return <div className="integration-row"><span className={`status-dot ${ok?'ok':'warn'}`}/><div><strong>{name}</strong><small>{detail}</small></div><span className={`pill ${ok?'good':''}`}>{ok?'OK':'—'}</span></div>; }
 function Field({label,hint,children}:{label:string;hint?:string;children:any}) { return <label className="field"><span>{label}</span>{children}{hint&&<small>{hint}</small>}</label>; }
-function Modal({title,onClose,children}:{title:string;onClose:()=>void;children:any}) { return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><section className="modal"><header><h2>{title}</h2><button className="icon-button" onClick={onClose}>×</button></header>{children}</section></div>; }
+function Modal({title,onClose,children}:{title:string;onClose:()=>void;children:any}) {
+  const { t } = useTranslation();
+  const titleId = useId();
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])') || [])]
+        .filter((element) => element.offsetParent !== null);
+      if (!focusable.length) { event.preventDefault(); closeRef.current?.focus(); return; }
+      const first = focusable[0]; const last = focusable.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    addEventListener('keydown', handleKeyDown);
+    closeRef.current?.focus();
+    return () => {
+      removeEventListener('keydown', handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, []);
+  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><section ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId}><header><h2 id={titleId}>{title}</h2><button ref={closeRef} className="icon-button" aria-label={t('common.close')} onClick={onClose}>×</button></header>{children}</section></div>;
+}
