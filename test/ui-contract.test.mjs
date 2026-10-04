@@ -182,3 +182,14 @@ test('Master surfaces streaming activity instead of appearing frozen', async () 
   assert.match(i18n, /working: 'Master arbeider…'/);
   assert.match(i18n, /working: 'Master is working…'/);
 });
+
+
+test('action errors stay visible above modal backdrops and setup errors are announced', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(reactUrl, 'utf8'),
+    readFile(new URL('../web/src/styles.css', import.meta.url), 'utf8'),
+  ]);
+  assert.match(styles, /\.error-banner\{position:fixed;top:14px;left:50%;z-index:40/);
+  assert.match(styles, /\.modal-backdrop\{[^}]*z-index:20/);
+  assert.match(app, /className="error-banner" role="alert"><span>\{error\}<\/span><\/div>/);
+});
