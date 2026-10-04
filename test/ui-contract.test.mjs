@@ -131,3 +131,23 @@ test('System surfaces live update health and manual state refresh', async () => 
   assert.match(i18n, /runtimeStatus: 'Systemstatus'/);
   assert.match(i18n, /runtimeStatus: 'System status'/);
 });
+
+
+test('background registry/profile loads and memory mutations use visible shared error handling', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(reactUrl, 'utf8'),
+    readFile(new URL('../web/src/styles.css', import.meta.url), 'utf8'),
+  ]);
+  assert.match(app, /fleetError/);
+  assert.match(app, /mcpLoadError/);
+  assert.match(app, /profileLoadError/);
+  assert.match(app, /function InlineLoadError/);
+  assert.match(app, /role="alert"/);
+  assert.match(app, /void onRetry\(\)\.catch/);
+  assert.match(app, /await api\.updateMasterMemory/);
+  assert.match(app, /await api\.forgetMasterMemory/);
+  assert.match(styles, /\.inline-load-error/);
+  assert.doesNotMatch(app, /void api\.projectAgents\(project\.id\)\.then/);
+  assert.doesNotMatch(app, /void api\.updateMasterMemory\(item\.id/);
+  assert.doesNotMatch(app, /void api\.forgetMasterMemory\(item\.id/);
+});
