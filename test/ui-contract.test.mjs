@@ -193,3 +193,10 @@ test('action errors stay visible above modal backdrops and setup errors are anno
   assert.match(styles, /\.modal-backdrop\{[^}]*z-index:20/);
   assert.match(app, /className="error-banner" role="alert"><span>\{error\}<\/span><\/div>/);
 });
+
+
+test('Project readiness follows canonical SSE-refreshed Project state', async () => {
+  const app = await readFile(reactUrl, 'utf8');
+  assert.match(app, /setReadiness\(project\?\.lastPreflight \|\| null\)/);
+  assert.match(app, /\[projectId, project\?\.lastPreflight\]/);
+});
