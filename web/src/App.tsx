@@ -191,7 +191,7 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
     const activeConv = conv;
     setStreaming({ conversationId: activeConv.id, assistantId: '', content: '', activity: t('master.working'), toolCalls: [], done: false });
     go(projectId ? `/project/${projectId}/master/${activeConv.id}` : `/master/${activeConv.id}`);
-    await api.masterTurn(activeConv.id, content, (event: MasterStreamEvent) => {
+    try { await api.masterTurn(activeConv.id, content, (event: MasterStreamEvent) => {
       setStreaming((current) => {
         const base = current?.conversationId === activeConv.id
           ? current
@@ -212,7 +212,10 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
         if (event.type === 'done' || event.type === 'error') return { ...base, done: true };
         return base;
       });
-    });
+    }); } catch (err) {
+      setStreaming((current) => current?.conversationId === activeConv.id ? { ...current, done: true } : current);
+      throw err;
+    }
   };
   const streamingActive = Boolean(streaming && streaming.conversationId === activeConversationId && !streaming.done);
   return <div className={`master-layout${projectId ? ' project-master-layout' : ''}`}>
