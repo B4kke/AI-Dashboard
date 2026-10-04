@@ -78,3 +78,15 @@ test('action labels avoid unsupported full-width plus glyphs', async () => {
   const app = await readFile(reactUrl, 'utf8');
   assert.doesNotMatch(app, /＋/);
 });
+
+
+test('operator-facing async reads surface recovery instead of failing silently', async () => {
+  const app = await readFile(reactUrl, 'utf8');
+  assert.match(app, /void run\(scan\)/);
+  assert.match(app, /usabilityError/);
+  assert.match(app, /loadError/);
+  assert.match(app, /loadEvidence/);
+  assert.match(app, /role="alert"/);
+  assert.match(app, /t\('common\.refresh'\)/);
+  assert.doesNotMatch(app, /void api\.taskEvidence\(taskId\)\.then\(setEvidence\)/);
+});
