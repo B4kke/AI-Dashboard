@@ -210,3 +210,18 @@ test('Agent fleet refresh signature tracks canonical editable fields', async () 
   assert.match(app, /agent\.workScopes \|\| \[\]/);
   assert.match(app, /agent\.capabilities \|\| \[\]/);
 });
+
+
+test('operator surfaces localize statuses and avoid raw publication JSON', async () => {
+  const [app, i18n] = await Promise.all([readFile(reactUrl, 'utf8'), readFile(i18nUrl, 'utf8')]);
+  assert.match(app, /function statusText/);
+  assert.match(app, /function publicationSummary/);
+  assert.match(app, /statusText\(t, 'explorationStates', exploration\.state\)/);
+  assert.match(app, /statusText\(t, 'runStates', item\.status\)/);
+  assert.match(app, /statusText\(t, 'ciStates', ci\.state\)/);
+  assert.match(app, /publicationSummary\(task\.publication, t\)/);
+  assert.doesNotMatch(app, /task\.publication \? compactJson\(task\.publication\)/);
+  assert.match(i18n, /runStates: \{ queued: 'I kø'/);
+  assert.match(i18n, /ciStates: \{ success: 'Bestått'/);
+  assert.match(i18n, /explorationStates: \{ draft: 'Kladd'/);
+});
