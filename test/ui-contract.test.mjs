@@ -118,3 +118,16 @@ test('modal interaction contract includes semantics, escape close, focus trap an
   assert.match(app, /previousFocus\?\.focus\(\)/);
   assert.match(app, /aria-label=\{t\('common\.close'\)\}/);
 });
+
+
+test('System surfaces live update health and manual state refresh', async () => {
+  const [app, i18n] = await Promise.all([readFile(reactUrl, 'utf8'), readFile(i18nUrl, 'utf8')]);
+  assert.match(app, /eventSource\.onopen = \(\) => setLiveStatus\('connected'\)/);
+  assert.match(app, /eventSource\.onerror = \(\) => setLiveStatus\('reconnecting'\)/);
+  assert.match(app, /setLastRefreshAt\(Date\.now\(\)\)/);
+  assert.match(app, /t\('system\.runtimeStatus'\)/);
+  assert.match(app, /t\('system\.liveUpdates'\)/);
+  assert.match(app, /onClick=\{\(\) => void onRefresh\(\)\}/);
+  assert.match(i18n, /runtimeStatus: 'Systemstatus'/);
+  assert.match(i18n, /runtimeStatus: 'System status'/);
+});
