@@ -162,3 +162,21 @@ test('initial load failure has an in-UI recovery action', async () => {
   assert.match(app, /onClick=\{\(\) => void refresh\(\)\}/);
   assert.match(styles, /\.boot-error/);
 });
+
+
+test('Master surfaces streaming activity instead of appearing frozen', async () => {
+  const [app, styles, i18n] = await Promise.all([
+    readFile(reactUrl, 'utf8'),
+    readFile(new URL('../web/src/styles.css', import.meta.url), 'utf8'),
+    readFile(i18nUrl, 'utf8'),
+  ]);
+  assert.match(app, /event\.type === 'activity'/);
+  assert.match(app, /streamingActive/);
+  assert.match(app, /className="stream-activity" role="status" aria-live="polite"/);
+  assert.match(app, /t\('master\.usingTool'/);
+  assert.match(app, /activeConversationId = selected\?\.id \|\| routeId/);
+  assert.match(styles, /\.stream-activity/);
+  assert.match(styles, /prefers-reduced-motion:reduce/);
+  assert.match(i18n, /working: 'Master arbeider…'/);
+  assert.match(i18n, /working: 'Master is working…'/);
+});
