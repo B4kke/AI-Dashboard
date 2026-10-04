@@ -76,6 +76,7 @@ async function streamSse(path: string, body: unknown, onEvent: (event: MasterStr
   const decoder = new TextDecoder();
   let buffer = '';
   let streamError = '';
+  let terminalSeen = false;
   const consume = (block: string) => {
     for (const line of block.split(/\r?\n/)) {
       if (!line.startsWith('data:')) continue;
@@ -84,6 +85,7 @@ async function streamSse(path: string, body: unknown, onEvent: (event: MasterStr
       try {
         const event = JSON.parse(payload) as MasterStreamEvent;
         onEvent(event);
+        if (event.type === 'done' || event.type === 'error') terminalSeen = true;
         if (event.type === 'error' && event.error) streamError = event.error;
       } catch { /* Keep consuming later valid SSE events. */ }
     }
@@ -99,6 +101,7 @@ async function streamSse(path: string, body: unknown, onEvent: (event: MasterStr
   buffer += decoder.decode();
   if (buffer.trim()) consume(buffer);
   if (streamError) throw new Error(streamError);
+  if (!terminalSeen) throw new Error(i18n.t('master.streamInterrupted'));
 }
 
 async function localizedProjectUsability(id: string) {
