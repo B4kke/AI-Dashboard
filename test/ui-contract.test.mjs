@@ -90,3 +90,19 @@ test('operator-facing async reads surface recovery instead of failing silently',
   assert.match(app, /t\('common\.refresh'\)/);
   assert.doesNotMatch(app, /void api\.taskEvidence\(taskId\)\.then\(setEvidence\)/);
 });
+
+
+test('mobile Master keeps conversation creation and switching available', async () => {
+  const [app, styles, i18n] = await Promise.all([
+    readFile(reactUrl, 'utf8'),
+    readFile(new URL('../web/src/styles.css', import.meta.url), 'utf8'),
+    readFile(i18nUrl, 'utf8'),
+  ]);
+  assert.match(app, /mobile-conversation-controls/);
+  assert.match(app, /mobile-conversation-select/);
+  assert.match(app, /aria-label=\{t\('master\.newChat'\)\}/);
+  assert.match(app, /t\('master\.conversations'\)/);
+  assert.match(styles, /@media\(max-width:820px\)[\s\S]*\.mobile-conversation-controls\{display:grid/);
+  assert.match(i18n, /conversations: 'Samtaler'/);
+  assert.match(i18n, /conversations: 'Conversations'/);
+});
