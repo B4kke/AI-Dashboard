@@ -200,3 +200,13 @@ test('Project readiness follows canonical SSE-refreshed Project state', async ()
   assert.match(app, /setReadiness\(project\?\.lastPreflight \|\| null\)/);
   assert.match(app, /\[projectId, project\?\.lastPreflight\]/);
 });
+
+
+test('Agent fleet refresh signature tracks canonical editable fields', async () => {
+  const app = await readFile(reactUrl, 'utf8');
+  assert.match(app, /agent\.name, agent\.role, agent\.harness/);
+  assert.match(app, /agent\.model \|\| ''/);
+  assert.match(app, /agent\.instructions \|\| ''/);
+  assert.match(app, /agent\.workScopes \|\| \[\]/);
+  assert.match(app, /agent\.capabilities \|\| \[\]/);
+});
