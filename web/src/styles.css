@@ -67,3 +67,8 @@
   .mobile-conversation-controls{grid-template-columns:1fr;padding:10px 14px}
   .mobile-conversation-controls>.primary{width:100%}
 }
+
+.inline-load-error{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 13px;border:1px solid rgba(255,122,138,.24);border-radius:10px;background:rgba(255,122,138,.055);color:#ffc1c8}
+.inline-load-error>span{min-width:0;overflow-wrap:anywhere;line-height:1.45}
+.inline-load-error button{flex:0 0 auto}
+@media(max-width:620px){.inline-load-error{align-items:stretch;flex-direction:column}.inline-load-error button{min-height:44px;width:100%}}
