@@ -174,7 +174,9 @@ test('Master surfaces streaming activity instead of appearing frozen', async () 
   assert.match(app, /streamingActive/);
   assert.match(app, /className="stream-activity" role="status" aria-live="polite"/);
   assert.match(app, /t\('master\.usingTool'/);
-  assert.match(app, /activeConversationId = selected\?\.id \|\| routeId/);
+  assert.match(app, /selected = routeId \? scopedConversations\.find/);
+  assert.match(app, /activeConversationId = routeId \|\| selected\?\.id/);
+  assert.match(app, /else if \(streaming\.content \|\| streaming\.toolCalls\.length\)/);
   assert.match(styles, /\.stream-activity/);
   assert.match(styles, /prefers-reduced-motion:reduce/);
   assert.match(i18n, /working: 'Master arbeider…'/);
