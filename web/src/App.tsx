@@ -418,7 +418,10 @@ function ProjectAgents({ project, agents: initialAgents, codingModels, busy, run
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Agent | null>(null);
   const [name, setName] = useState(''); const [role, setRole] = useState('specialist'); const [model, setModel] = useState(project.modelPolicy?.codingModel || ''); const [workScopes, setWorkScopes] = useState(''); const [capabilities, setCapabilities] = useState(''); const [instructions, setInstructions] = useState('');
-  const agentSignature = initialAgents.map((agent) => `${agent.id}:${agent.enabled}:${agent.activeRun?.id || ''}:${agent.activeRun?.status || ''}`).join('|');
+  const agentSignature = initialAgents.map((agent) => [
+    agent.id, agent.enabled, agent.name, agent.role, agent.harness || '', agent.model || '', agent.instructions || '',
+    (agent.workScopes || []).join(','), (agent.capabilities || []).join(','), agent.activeRun?.id || '', agent.activeRun?.status || '',
+  ].join(':')).join('|');
   const loadFleet = async () => {
     try { const value = await api.projectAgents(project.id); setFleet(value.agents); setFleetError(''); }
     catch (err) { setFleetError(err instanceof Error ? err.message : String(err)); }
