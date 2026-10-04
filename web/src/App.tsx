@@ -209,10 +209,14 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
     });
   };
   return <div className={`master-layout${projectId ? ' project-master-layout' : ''}`}>
-    <aside className="conversation-list"><div className="panel-title"><span>{t('master.title')}</span><button className="icon-button" onClick={()=>void run(create)}>+</button></div>
+    <aside className="conversation-list"><div className="panel-title"><span>{t('master.title')}</span><button className="icon-button" aria-label={t('master.newChat')} onClick={()=>void run(create)}>+</button></div>
       {scopedConversations.map(c=><button key={c.id} className={selected?.id===c.id?'conversation-row active':'conversation-row'} onClick={()=>go(projectId ? `/project/${projectId}/master/${c.id}` : `/master/${c.id}`)}><strong>{c.title}</strong><small>{t('master.messageCount', { count: state.masterMessages.filter(m=>m.conversationId===c.id).length })}</small></button>)}
     </aside>
     <section className="chat-stage"><header><div><p className="eyebrow">{projectId ? projectName || t('master.project') : t('master.eyebrow')}</p><h1>{selected?.title || t('master.title')}</h1></div><span className={`model-chip ${setup.masterModel ? '' : 'warn'}`}>{setup.masterModel || t('master.noModel')}</span></header>
+      <div className="mobile-conversation-controls">
+        <label className="mobile-conversation-select"><span>{t('master.conversations')}</span><select aria-label={t('master.conversations')} value={selected?.id || ''} disabled={!scopedConversations.length} onChange={(event)=>{const id=event.target.value;if(id)go(projectId ? `/project/${projectId}/master/${id}` : `/master/${id}`);}}>{scopedConversations.length ? scopedConversations.map((conversation)=><option key={conversation.id} value={conversation.id}>{conversation.title}</option>) : <option value="">{t('master.noConversations')}</option>}</select></label>
+        <button className="primary" disabled={busy} onClick={()=>void run(create)}>+ {t('master.newChat')}</button>
+      </div>
       <Conversation>{displayMessages.length ? displayMessages.map(m=><Message key={m.id} role={m.role}><div className="message-meta">{m.role==='user'?t('master.you'):'Master'}</div><div className="message-text">{m.content}</div>{m.toolCalls?.length ? <div className="tool-row">{m.toolCalls.map((tool,i)=><Tool key={`${tool.tool}-${i}`} name={tool.tool} status={tool.status}/>)}</div>:null}</Message>) : <div className="master-empty"><div className="brand-glyph hero">✦</div><h2>{t('master.emptyTitle')}</h2><p>{t('master.emptyCopy')}</p></div>}</Conversation>
       <div className="composer-wrap"><PromptInput value={input} onChange={setInput} onSubmit={()=>void run(send)} disabled={busy} placeholder={t('master.placeholder')} action="↑" /></div>
     </section>
