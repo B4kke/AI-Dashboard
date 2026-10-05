@@ -43,3 +43,9 @@ test('API and Master SSE transports preserve structured HTTP/network diagnostics
   assert.ok((api.match(/httpApiError\(response\.status,/g) || []).length >= 2);
   assert.doesNotMatch(api, /throw new Error\(message\);/);
 });
+
+test('successful SSE responses without a body are treated as interrupted transport, not HTTP failures', async () => {
+  const api = await readFile(apiUrl, 'utf8');
+  assert.doesNotMatch(api, /if \(!response\.ok \|\| !response\.body\)/);
+  assert.match(api, /if \(!response\.body\) \{\s*throw networkApiError\(new Error\(i18n\.t\('master\.streamInterrupted'\)\), i18n\.language\);\s*\}/);
+});

@@ -74,9 +74,12 @@ async function streamSse(path: string, body: unknown, onEvent: (event: MasterStr
       body: JSON.stringify(body),
     });
   } catch (error) { throw networkApiError(error, i18n.language); }
-  if (!response.ok || !response.body) {
+  if (!response.ok) {
     const value = await response.json().catch(() => ({})) as { error?: string };
-    throw httpApiError(response.status, value.error || (!response.body ? i18n.t('master.streamInterrupted') : ''), i18n.language);
+    throw httpApiError(response.status, value.error || '', i18n.language);
+  }
+  if (!response.body) {
+    throw networkApiError(new Error(i18n.t('master.streamInterrupted')), i18n.language);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
