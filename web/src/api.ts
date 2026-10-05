@@ -1,4 +1,5 @@
 import i18n from './i18n';
+import { httpApiError, networkApiError } from './api-errors.js';
 
 export type Project = {
   id: string; name: string; description?: string | null; repoPath?: string | null; repository?: string | null;
@@ -47,12 +48,14 @@ export type DashboardState = {
 };
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  let response: Response;
+  try { response = await fetch(path, init); }
+  catch (error) { throw networkApiError(error, i18n.language); }
   let payload: unknown = null;
   try { payload = await response.json(); } catch { /* empty body */ }
   if (!response.ok) {
-    const message = payload && typeof payload === 'object' && 'error' in payload ? String((payload as {error:unknown}).error) : `HTTP ${response.status}`;
-    throw new Error(message);
+    const message = payload && typeof payload === 'object' && 'error' in payload ? String((payload as {error:unknown}).error) : '';
+    throw httpApiError(response.status, message, i18n.language);
   }
   return payload as T;
 }
@@ -63,14 +66,17 @@ export const json = <T>(path: string, method: string, body?: unknown) => request
 });
 
 async function streamSse(path: string, body: unknown, onEvent: (event: MasterStreamEvent) => void): Promise<void> {
-  const response = await fetch(path, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (error) { throw networkApiError(error, i18n.language); }
   if (!response.ok || !response.body) {
     const value = await response.json().catch(() => ({})) as { error?: string };
-    throw new Error(value.error || `HTTP ${response.status}`);
+    throw httpApiError(response.status, value.error || (!response.body ? i18n.t('master.streamInterrupted') : ''), i18n.language);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
