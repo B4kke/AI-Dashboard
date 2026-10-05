@@ -23,6 +23,15 @@ function routeFromHash(): Route {
   return { page: 'projects' };
 }
 function go(path: string) { location.hash = path; }
+function technicalErrorDetail(error: unknown) {
+  if (!error || typeof error !== 'object' || !('technicalDetail' in error)) return '';
+  return String((error as { technicalDetail?: unknown }).technicalDetail || '');
+}
+function ErrorDetail({ detail }: {detail:string}) {
+  const { i18n } = useTranslation();
+  if (!detail) return null;
+  return <details className="error-detail"><summary>{i18n.language === 'en' ? 'Technical details' : 'Tekniske detaljer'}</summary><code>{detail}</code></details>;
+}
 
 export default function App() {
   const { t, i18n } = useTranslation();
@@ -31,6 +40,7 @@ export default function App() {
   const [setup, setSetup] = useState<any>(null);
   const [health, setHealth] = useState<any>(null);
   const [error, setError] = useState('');
+  const [errorDetail, setErrorDetail] = useState('');
   const [busy, setBusy] = useState(false);
   const [liveStatus, setLiveStatus] = useState<'connecting'|'connected'|'reconnecting'>('connecting');
   const [lastRefreshAt, setLastRefreshAt] = useState<number | null>(null);
@@ -38,10 +48,10 @@ export default function App() {
   const refresh = async () => {
     try {
       const [nextState, nextSetup, nextHealth] = await Promise.all([api.state(), api.setup(), api.health()]);
-      setState(nextState); setSetup(nextSetup); setHealth(nextHealth); setError(''); setLastRefreshAt(Date.now());
+      setState(nextState); setSetup(nextSetup); setHealth(nextHealth); setError(''); setErrorDetail(''); setLastRefreshAt(Date.now());
       if (nextSetup?.locale && i18n.language !== nextSetup.locale) await i18n.changeLanguage(nextSetup.locale);
       document.documentElement.lang = nextSetup?.locale === 'en' ? 'en' : 'nb';
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); setErrorDetail(technicalErrorDetail(err)); }
   };
   useEffect(() => { void refresh(); }, []);
   useEffect(() => {
@@ -71,12 +81,12 @@ export default function App() {
     return () => { window.clearTimeout(timer); eventSource.close(); };
   }, []);
 
-  if (!state || !setup) return <div className="boot"><div className="brand-glyph">✦</div><p>{error ? t('common.configure') : t('common.loading')}</p>{error && <div className="boot-error" role="alert"><span>{error}</span><button onClick={() => void refresh()}>{t('common.refresh')}</button></div>}</div>;
+  if (!state || !setup) return <div className="boot"><div className="brand-glyph">✦</div><p>{error ? t('common.configure') : t('common.loading')}</p>{error && <div className="boot-error" role="alert"><div><span>{error}</span><ErrorDetail detail={errorDetail} /></div><button onClick={() => void refresh()}>{t('common.refresh')}</button></div>}</div>;
   if (!setup.completed) return <SetupWizard setup={setup} onDone={refresh} />;
 
   const run = async (fn: () => Promise<unknown>) => {
-    setBusy(true); setError('');
-    try { await fn(); await refresh(); } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    setBusy(true); setError(''); setErrorDetail('');
+    try { await fn(); await refresh(); } catch (err) { setError(err instanceof Error ? err.message : String(err)); setErrorDetail(technicalErrorDetail(err)); }
     finally { setBusy(false); }
   };
 
@@ -93,7 +103,7 @@ export default function App() {
         <span>{health?.integrations?.opencode?.connected ? 'OpenCode' : t('system.opencodeOffline')}</span></div>
     </aside>
     <main className="workspace">
-      {error && <div className="error-banner" role="alert"><span>{error}</span><div className="error-actions"><button disabled={busy} onClick={() => void refresh()}>{t('common.refresh')}</button><button aria-label={t('common.close')} onClick={() => setError('')}>×</button></div></div>}
+      {error && <div className="error-banner" role="alert"><div><span>{error}</span><ErrorDetail detail={errorDetail} /></div><div className="error-actions"><button disabled={busy} onClick={() => void refresh()}>{t('common.refresh')}</button><button aria-label={t('common.close')} onClick={() => { setError(''); setErrorDetail(''); }}>×</button></div></div>}
       {route.page === 'master' && <MasterView state={state} setup={setup} routeId={route.id} busy={busy} run={run} />}
       {route.page === 'explorations' && <ExplorationsView state={state} setup={setup} busy={busy} run={run} />}
       {route.page === 'projects' && <ProjectsView state={state} setup={setup} busy={busy} run={run} />}
@@ -114,16 +124,16 @@ function SetupWizard({ setup, onDone }: {setup:any;onDone:()=>Promise<void>}) {
   const [codingModel, setCodingModel] = useState(setup.recommendations?.codingModel || '');
   const [masterModel, setMasterModel] = useState(setup.recommendations?.masterModel || '');
   const [providerOpen, setProviderOpen] = useState(false); const [provider, setProvider] = useState({ id: '', name: '', baseUrl: '', apiKeyEnv: '', enabled: true });
-  const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [errorDetail, setErrorDetail] = useState('');
   const directModels = (setup.integrations?.modelProviders || []).flatMap((provider:any) => (provider.lastModels || []).map((model:any) => `${provider.id}/${model.id}`));
   useEffect(() => {
     if (setup.recommendations?.codingModel) setCodingModel((current) => current || setup.recommendations.codingModel);
     if (setup.recommendations?.masterModel) setMasterModel((current) => current || setup.recommendations.masterModel);
   }, [setup.recommendations?.codingModel, setup.recommendations?.masterModel]);
   const finish = async () => {
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setErrorDetail('');
     try { await api.completeSetup({ locale, workspaceRoot: root, codingModel, masterModel, researchModel: masterModel }); await i18n.changeLanguage(locale); await onDone(); }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)); } finally { setBusy(false); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); setErrorDetail(technicalErrorDetail(err)); } finally { setBusy(false); }
   };
   return <div className="setup-shell"><section className="setup-card">
     <div className="brand-glyph hero">✦</div><p className="eyebrow">{t('setup.eyebrow')}</p><h1>{t('setup.title')}</h1><p className="lead">{t('setup.intro')}</p>
@@ -135,9 +145,9 @@ function SetupWizard({ setup, onDone }: {setup:any;onDone:()=>Promise<void>}) {
     </div>
     <div className={`integration-note ${setup.integrations?.opencode?.connected ? 'ok' : ''}`}><span className="status-dot" />{setup.integrations?.opencode?.connected ? t('setup.opencodeOk') : t('setup.opencodeMissing')}</div>
     <button disabled={busy} onClick={() => setProviderOpen(true)}>+ {t('setup.addProvider')}</button>
-    {error && <div className="error-banner" role="alert"><span>{error}</span></div>}
+    {error && <div className="error-banner" role="alert"><div><span>{error}</span><ErrorDetail detail={errorDetail} /></div></div>}
     <button className="primary wide" disabled={busy} onClick={finish}>{busy ? t('common.loading') : t('setup.finish')}</button>
-    {providerOpen && <Modal title={t('system.addProvider')} onClose={() => setProviderOpen(false)}><p className="muted">{t('system.providerSecretHint')}</p><div className="form-grid"><Field label={t('system.providerId')}><input value={provider.id} onChange={(event) => setProvider({ ...provider, id: event.target.value })} placeholder="openrouter" /></Field><Field label={t('system.providerName')}><input value={provider.name} onChange={(event) => setProvider({ ...provider, name: event.target.value })} placeholder="OpenRouter" /></Field></div><Field label={t('system.baseUrl')}><input value={provider.baseUrl} onChange={(event) => setProvider({ ...provider, baseUrl: event.target.value })} placeholder="https://example.com/v1" /></Field><Field label={t('system.apiKeyEnv')} hint={t('system.apiKeyEnvHint')}><input value={provider.apiKeyEnv} onChange={(event) => setProvider({ ...provider, apiKeyEnv: event.target.value })} placeholder="OPENROUTER_API_KEY" /></Field><button className="primary wide" disabled={busy || !provider.id.trim() || !provider.baseUrl.trim()} onClick={() => void (async () => { setBusy(true); setError(''); try { const saved = await api.upsertProvider({ ...provider, protocol: 'openai-compatible', apiKeyEnv: provider.apiKeyEnv.trim() || null }); if (!saved.apiKeyEnv || saved.configured) await api.discoverProvider(saved.id); await onDone(); setProviderOpen(false); } catch (err) { setError(err instanceof Error ? err.message : String(err)); } finally { setBusy(false); } })()}>{t('common.save')}</button></Modal>}
+    {providerOpen && <Modal title={t('system.addProvider')} onClose={() => setProviderOpen(false)}><p className="muted">{t('system.providerSecretHint')}</p><div className="form-grid"><Field label={t('system.providerId')}><input value={provider.id} onChange={(event) => setProvider({ ...provider, id: event.target.value })} placeholder="openrouter" /></Field><Field label={t('system.providerName')}><input value={provider.name} onChange={(event) => setProvider({ ...provider, name: event.target.value })} placeholder="OpenRouter" /></Field></div><Field label={t('system.baseUrl')}><input value={provider.baseUrl} onChange={(event) => setProvider({ ...provider, baseUrl: event.target.value })} placeholder="https://example.com/v1" /></Field><Field label={t('system.apiKeyEnv')} hint={t('system.apiKeyEnvHint')}><input value={provider.apiKeyEnv} onChange={(event) => setProvider({ ...provider, apiKeyEnv: event.target.value })} placeholder="OPENROUTER_API_KEY" /></Field><button className="primary wide" disabled={busy || !provider.id.trim() || !provider.baseUrl.trim()} onClick={() => void (async () => { setBusy(true); setError(''); setErrorDetail(''); try { const saved = await api.upsertProvider({ ...provider, protocol: 'openai-compatible', apiKeyEnv: provider.apiKeyEnv.trim() || null }); if (!saved.apiKeyEnv || saved.configured) await api.discoverProvider(saved.id); await onDone(); setProviderOpen(false); } catch (err) { setError(err instanceof Error ? err.message : String(err)); setErrorDetail(technicalErrorDetail(err)); } finally { setBusy(false); } })()}>{t('common.save')}</button></Modal>}
   </section></div>;
 }
 

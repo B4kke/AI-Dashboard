@@ -47,14 +47,15 @@ export class ApiError extends Error {
   constructor({ status = null, detail = '', locale = 'nb', kind = 'http' } = {}) {
     const safeDetail = boundedDetail(detail);
     const summary = summaryFor(status, locale);
-    const technical = status == null
+    const technicalDetail = status == null
       ? safeDetail
       : `HTTP ${status}${safeDetail ? ` · ${safeDetail}` : ''}`;
-    super(technical ? `${summary} ${technical}` : summary);
+    super(summary);
     this.name = 'ApiError';
     this.status = status;
     this.kind = kind;
     this.detail = safeDetail;
+    this.technicalDetail = technicalDetail;
   }
 }
 
