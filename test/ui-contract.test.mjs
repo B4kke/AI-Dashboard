@@ -163,7 +163,6 @@ test('initial load failure has an in-UI recovery action', async () => {
   assert.match(styles, /\.boot-error/);
 });
 
-
 test('Master surfaces streaming activity instead of appearing frozen', async () => {
   const [app, styles, i18n] = await Promise.all([
     readFile(reactUrl, 'utf8'),
@@ -184,14 +183,17 @@ test('Master surfaces streaming activity instead of appearing frozen', async () 
 });
 
 
-test('action errors stay visible above modal backdrops and setup errors are announced', async () => {
+test('action errors stay visible above modal backdrops and progressively disclose diagnostics', async () => {
   const [app, styles] = await Promise.all([
     readFile(reactUrl, 'utf8'),
     readFile(new URL('../web/src/styles.css', import.meta.url), 'utf8'),
   ]);
   assert.match(styles, /\.error-banner\{position:fixed;top:14px;left:50%;z-index:40/);
   assert.match(styles, /\.modal-backdrop\{[^}]*z-index:20/);
-  assert.match(app, /className="error-banner" role="alert"><span>\{error\}<\/span><\/div>/);
+  assert.match(app, /className="error-banner" role="alert"/);
+  assert.match(app, /<span>\{error\}<\/span><ErrorDetail detail=\{errorDetail\} \/>/);
+  assert.match(app, /function ErrorDetail/);
+  assert.match(app, /<details className="error-detail">/);
 });
 
 
