@@ -1,4 +1,5 @@
 const CI_FAILURE_STATES = new Set(['failure', 'failed', 'error', 'timed_out', 'action_required', 'stale']);
+const CI_REPAIR_STATES = new Set(['backlog', 'needs_input', 'awaiting_ci']);
 
 function record(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
@@ -22,7 +23,9 @@ export function taskCiState(task) {
 }
 
 export function taskHasCiFailure(task) {
-  return CI_FAILURE_STATES.has(taskCiState(task));
+  const taskRecord = record(task);
+  const state = typeof taskRecord?.state === 'string' ? taskRecord.state : '';
+  return CI_FAILURE_STATES.has(taskCiState(task)) && (!state || CI_REPAIR_STATES.has(state));
 }
 
 export function taskFailedChecks(task) {
