@@ -27,6 +27,17 @@ test('CI presentation derives failure from canonical publication evidence withou
   assert.equal(task.state, 'backlog');
 });
 
+test('historical CI failure stops dominating operator attention once repair advances', () => {
+  const publication = { ci: { state: 'failure', failed: ['CI'] } };
+  assert.equal(taskHasCiFailure({ state: 'needs_input', publication }), true);
+  assert.equal(taskHasCiFailure({ state: 'awaiting_ci', publication }), true);
+  assert.equal(taskHasCiFailure({ state: 'in_progress', publication }), false);
+  assert.equal(taskHasCiFailure({ state: 'awaiting_publish', publication }), false);
+  assert.equal(taskHasCiFailure({ state: 'awaiting_review', publication }), false);
+  assert.equal(taskHasCiFailure({ state: 'ready_to_merge', publication }), false);
+  assert.equal(taskHasCiFailure({ state: 'done', publication }), false);
+});
+
 test('CI diagnostics preserve bounded workflow/job/step evidence and only safe GitHub links', () => {
   const task = {
     publication: {
