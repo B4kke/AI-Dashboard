@@ -1,0 +1,42 @@
+name: OpenCode V2 migration transform
+
+on:
+  push:
+    branches:
+      - feat/opencode-v2-migration
+    paths:
+      - scripts/migrate-opencode-v2-orchestrator.mjs
+      - .github/workflows/opencode-v2-migrate.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/opencode-v2-migration
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Apply OpenCode V2 orchestrator migration
+        run: node scripts/migrate-opencode-v2-orchestrator.mjs
+      - name: Syntax check migrated runtime
+        run: |
+          node --check server/orchestrator.mjs
+          node --check server/core/project-readiness.mjs
+      - name: Commit migrated runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/orchestrator.mjs server/core/project-readiness.mjs
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'refactor(opencode): migrate orchestration to V2 evidence'
+          git push origin HEAD:feat/opencode-v2-migration
