@@ -55,18 +55,20 @@ export function buildPlannerPrompt({ project, idea }) {
 }
 
 export function buildSupervisorPrompt({ project, task, workerResult, iteration, publication = null, controlEvidence = null }) {
-  const lines = [`Act as the independent supervisor for task: ${task.title}`, '', `Project: ${project.name}`, `Worker iteration: ${iteration}`, ...projectBrief(project), '', 'Worker-reported result (untrusted claim):', JSON.stringify(workerResult || {}, null, 2)];
+  const lines = [`Act as the independent adversarial supervisor for task: ${task.title}`, '', `Project: ${project.name}`, `Worker iteration: ${iteration}`, ...projectBrief(project), '', 'Worker-reported result (untrusted claim):', JSON.stringify(workerResult || {}, null, 2)];
   if (controlEvidence) lines.push('', 'Control-plane generated evidence:', JSON.stringify(controlEvidence, null, 2));
   if (publication) lines.push('', 'GitHub/CI evidence collected by the control plane:', JSON.stringify(publication, null, 2));
   lines.push('', 'Supervisor contract:',
-    '- Independently inspect the diff and relevant repository context.',
+    '- Start by trying to disprove the worker’s completion claim. Approval is the result of failed falsification attempts, not the default.',
+    '- Independently inspect the exact reviewed checkpoint diff and relevant repository context. Reject if the worktree/HEAD differs from the control-plane reviewed head.',
     '- Treat the project bootstrap brief as intent/context, not implementation evidence.',
     '- Use control-plane and GitHub/CI evidence as primary machine evidence; worker claims are untrusted.',
     '- Validate every acceptance criterion explicitly and return one result for each criterion using the exact criterion text.',
+    '- Look specifically for missing tests, negative/error paths, hidden assumptions, regressions, security/trust-boundary mistakes, concurrency/idempotency problems and restart/recovery gaps that are relevant to the changed scope.',
     '- Re-run checks if necessary to establish confidence, but do not modify files.',
-    '- Do not approve if CI is failing/pending/error, configured verification failed, acceptance evidence is missing, the scope is unrelated, or the change is unsafe.',
+    '- Do not approve if CI is failing/pending/error, configured verification failed, acceptance evidence is missing, the scope is unrelated, the reviewed SHA cannot be proven, or the change is unsafe.',
     '- Do not create commits, merge, or push. Review must be read-only.',
-    '- The control plane will independently re-check repository integrity and configured verification before merge.',
-    ...jsonContract({ schemaVersion: RESULT_SCHEMA_VERSION, kind: 'supervisor', verdict: 'approve', summary: 'Independent verification summary', acceptanceCriteria: (task.acceptanceCriteria || []).map((criterion) => ({ criterion, status: 'passed', evidence: 'What independently proves this criterion' })), requiredChanges: [], risks: [] }));
+    '- The control plane will independently re-check repository integrity, evidence completeness, configured verification and exact head identity before merge.',
+    ...jsonContract({ schemaVersion: RESULT_SCHEMA_VERSION, kind: 'supervisor', verdict: 'approve', summary: 'Independent falsification and verification summary', acceptanceCriteria: (task.acceptanceCriteria || []).map((criterion) => ({ criterion, status: 'passed', evidence: 'What independently proves this criterion on the reviewed checkpoint' })), requiredChanges: [], risks: [] }));
   return lines.join('\n');
 }
