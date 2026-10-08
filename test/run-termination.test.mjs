@@ -6,31 +6,25 @@ import { tmpdir } from 'node:os';
 import { StateStore } from '../server/core/state-store.mjs';
 import { activeScopeConflicts } from '../server/core/run-admission-guard.mjs';
 import { createOrchestrator } from '../server/orchestrator.mjs';
+import { v2SessionEvidence } from './support/opencode-v2-evidence.mjs';
 
-function workerResultMessages({ terminal = null, retryAttempt = 0 } = {}) {
+const SESSION_ID = 'session-1';
+const PROMPT_MESSAGE_ID = 'msg-run-termination';
+
+function workerResultMessages() {
   const result = {
     schemaVersion: 1, kind: 'worker', status: 'success', summary: 'done',
     evidence: { tests: [], notes: [] }, risks: [], needsInput: null,
   };
-  const messages = [{
+  return [{
     id: 'msg_assistant', type: 'assistant', agent: 'build', model: { providerID: 'p', id: 'm' },
     content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }],
-    ...(retryAttempt ? { retry: { attempt: retryAttempt, at: Date.now(), error: { type: 'provider', message: 'retrying' } } } : {}),
   }];
-  if (terminal) messages.push({ id: 'msg_idle', type: 'idle', outcome: terminal });
-  return messages;
 }
 
-function evidence({ active = true, missing = false, terminal = null, messages = [], malformed = false } = {}) {
+function evidence({ active = true, missing = false, terminal = null, retryAttempt = 0, messages = [], malformed = false } = {}) {
   if (malformed) return { active: null, session: null, messages: null, missing: false };
-  return {
-    active: active ? { 'session-1': { type: 'running' } } : {},
-    session: missing ? null : { id: 'session-1', ...(terminal ? { outcome: terminal } : {}) },
-    messages: terminal && !messages.some((item) => item.type === 'idle')
-      ? [...messages, { id: 'msg_idle', type: 'idle', outcome: terminal }]
-      : messages,
-    missing,
-  };
+  return v2SessionEvidence(SESSION_ID, PROMPT_MESSAGE_ID, { active, missing, terminal, retryAttempt, messages });
 }
 
 async function fixture({ maxRunMinutes = 45, maxRetryAttempts = 5, rawEvidence = evidence(), interruptError = null } = {}) {
@@ -44,7 +38,12 @@ async function fixture({ maxRunMinutes = 45, maxRetryAttempts = 5, rawEvidence =
   });
   const task = await store.addTask({ projectId: project.id, title: 'Active work', state: 'in_progress', iteration: 1, workScopes: ['server'] });
   let run = await store.createRun({ taskId: task.id, projectId: project.id, kind: 'worker', status: 'running', worktreePath, branch: 'ai/active', iteration: 1 });
-  run = await store.updateRun(run.id, { sessionId: 'session-1', status: 'running', startedAt: new Date(Date.now() - 120_000).toISOString() });
+  run = await store.updateRun(run.id, {
+    sessionId: SESSION_ID,
+    promptMessageId: PROMPT_MESSAGE_ID,
+    status: 'running',
+    startedAt: new Date(Date.now() - 120_000).toISOString(),
+  });
   let currentEvidence = rawEvidence;
   const opencode = {
     async interrupt() { if (interruptError) throw interruptError; return { interrupted: true }; },
@@ -76,7 +75,7 @@ test('timeout keeps scope ownership when V2 termination cannot be proven', async
 test('retry-budget exhaustion keeps scope ownership while the V2 session remains active', async () => {
   const f = await fixture({
     maxRunMinutes: 60, maxRetryAttempts: 0,
-    rawEvidence: evidence({ active: true, messages: workerResultMessages({ retryAttempt: 2 }) }),
+    rawEvidence: evidence({ active: true, retryAttempt: 2, messages: workerResultMessages() }),
   });
   try {
     const result = await f.orchestrator.reconcileRun(f.run.id);
@@ -168,11 +167,15 @@ test('durable planner interruption releases source Idea from planning', async ()
     const idea = await store.addIdea({ projectId: project.id, title: 'Plan me', state: 'planning' });
     const task = await store.addTask({ projectId: project.id, sourceIdeaId: idea.id, kind: 'planning', title: 'Plan idea', state: 'planning' });
     let run = await store.createRun({ taskId: task.id, projectId: project.id, kind: 'planner', status: 'running', worktreePath, branch: 'ai/planner' });
-    run = await store.updateRun(run.id, { sessionId: 'planner-session', startedAt: new Date().toISOString() });
+    run = await store.updateRun(run.id, {
+      sessionId: 'planner-session',
+      promptMessageId: 'msg-planner-abort',
+      startedAt: new Date().toISOString(),
+    });
     const opencode = {
       async interrupt() {},
       async sessionEvidence() {
-        return { active: {}, session: { id: 'planner-session', outcome: 'interrupted' }, messages: [{ id: 'idle', type: 'idle', outcome: 'interrupted' }], missing: false };
+        return v2SessionEvidence('planner-session', 'msg-planner-abort', { terminal: 'interrupted' });
       },
     };
     const orchestrator = createOrchestrator({ store, opencode, github: {} });
