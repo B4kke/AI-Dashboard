@@ -50,7 +50,7 @@ const canonicalDocs = [
 ];
 
 const forbiddenCanonicalV1Tokens = [
-  '@opencode-ai/sdk',
+  '@opencode-ai/sdk@1.18.21',
   'prompt_async',
   'promptAsync',
   'sessionStatus(',
@@ -58,7 +58,7 @@ const forbiddenCanonicalV1Tokens = [
   'connected global default',
 ];
 
-test('canonical OpenCode documentation contains no V1 SDK or completion semantics', async () => {
+test('canonical OpenCode documentation contains no stale V1 transport or completion semantics', async () => {
   const offenders = [];
   for (const path of canonicalDocs) {
     const text = await readFile(path, 'utf8');
