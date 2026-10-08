@@ -31,9 +31,9 @@ Neither direction transfers checkpointing, CI truth, supervisor approval or merg
 
 The implementation targets MCP `2026-07-28` through pinned split TypeScript SDK v2 packages:
 
-- `@modelcontextprotocol/server@2.0.0`
-- `@modelcontextprotocol/client@2.0.0`
-- `@modelcontextprotocol/node@2.0.0`
+- `@modelcontextprotocol/server@2.3.1`
+- `@modelcontextprotocol/client@2.3.1`
+- `@modelcontextprotocol/node@2.1.1`
 - `zod@4.4.3`
 
 The host uses SDK version negotiation in auto mode. Do not depend on the deprecated monolithic TypeScript package or build new architecture around legacy HTTP+SSE transport, Roots, Sampling or MCP Logging.

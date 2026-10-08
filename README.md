@@ -67,9 +67,9 @@ The first-run and System UI can add or edit custom OpenAI-compatible providers b
 AI Dashboard targets MCP protocol generation **2026-07-28** using pinned official TypeScript SDK v2 packages:
 
 ```text
-@modelcontextprotocol/server  2.0.0
-@modelcontextprotocol/client  2.0.0
-@modelcontextprotocol/node    2.0.0
+@modelcontextprotocol/server  2.3.1
+@modelcontextprotocol/client  2.3.1
+@modelcontextprotocol/node    2.1.1
 zod                           4.4.3
 ```
 
