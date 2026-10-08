@@ -218,8 +218,8 @@ export async function inspectProjectReadiness({
         available
           ? (requestedModel ? `Selected model ${requestedModel} is available.` : `OpenCode default model ${defaultModel.id} is available.`)
           : (requestedModel
-            ? `Selected model ${requestedModel} is not available from a OpenCode V2 model catalog.`
-            : (defaultModels.length > 1 ? 'OpenCode reported multiple global default models; execution identity is ambiguous.' : 'No connected OpenCode global default model could be identified.')),
+            ? `Selected model ${requestedModel} is not available from the OpenCode V2 model catalog.`
+            : (defaultModels.length > 1 ? 'OpenCode reported multiple global default models; execution identity is ambiguous.' : 'No available OpenCode V2 global default model could be identified.')),
         { requested: requestedModel, resolvedDefault: defaultModel?.id || null, defaultCount: defaultModels.length, availableCount: availableModels.length },
         { scope: modelSelection.scope },
       ));

@@ -2,9 +2,8 @@ import { deleteTaskBranch, listRepositoryWorktrees, removeTaskWorktree, syncBase
 import { inspectProjectReadiness } from './project-readiness.mjs';
 import { projectAdmissionIdentity, taskAdmissionIdentity } from './admission-identity.mjs';
 import { activeScopeConflicts } from './run-admission-guard.mjs';
-import { inspectSessionMessages, inspectSessionStatusRecord } from './runner-session-status.mjs';
+import { inspectSessionEvidence, sessionTerminationConfirmed } from './runner-session-status.mjs';
 
-const DISPATCH_GRACE_SECONDS = 30;
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'merged', 'failed', 'aborted']);
 
 function projectForTask(store, taskId) {
@@ -159,9 +158,8 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
         expectedModel: admission.expectedModel,
       });
     } catch (error) {
-      // OpenCode prompt_async can have an ambiguous outcome: the request may have been accepted even when
-      // the client loses the 204 acknowledgement. Only a session created by this exact start attempt may be
-      // recovered; an older failed run must never be revived because a new start failed before creating a run.
+      // OpenCode V2 prompt admission can have an ambiguous acknowledgement. Only a Run created by this exact
+      // start attempt may be quarantined; deterministic session/message IDs prevent reviving older work.
       const run = latestTaskRun(store, taskId, (item) => (
         !runsBefore.has(item.id)
         && item.kind === 'worker'
@@ -209,90 +207,89 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
   }
 
   async function reconcileUncertainDispatch(run) {
-    if (!opencode || !run?.sessionId || !run?.worktreePath) {
-      const message = 'Cannot reconcile uncertain OpenCode dispatch because session/worktree evidence is missing.';
+    if (!opencode || !run?.sessionId || !run?.promptMessageId) {
+      const message = 'Cannot reconcile uncertain OpenCode V2 dispatch because deterministic session/message evidence is missing.';
       await store.updateRun(run.id, { status: 'dispatch_unknown', dispatchUncertain: true, error: message, finishedAt: null });
       if (run.taskId) await store.updateTask(run.taskId, { state: 'needs_input', supervisorFeedback: message });
       return { status: 'dispatch_unconfirmed', error: message };
     }
 
-    let statuses;
-    let messages;
     try {
-      [statuses, messages] = await Promise.all([
-        opencode.sessionStatus(run.worktreePath),
-        opencode.messages({ directory: run.worktreePath, sessionId: run.sessionId, limit: 50 }),
-      ]);
+      const admission = await opencode.promptAdmission({ sessionId: run.sessionId, messageId: run.promptMessageId });
+      if (admission) {
+        await store.updateRun(run.id, {
+          status: 'running',
+          dispatchPhase: 'dispatched',
+          dispatchedAt: run.dispatchedAt || new Date().toISOString(),
+          dispatchUncertain: false,
+          promptAckRecovered: true,
+          error: null,
+        });
+        return { status: 'running', dispatchReconciled: true, admissionSource: admission.source || null };
+      }
     } catch (error) {
-      await store.updateRun(run.id, { error: `Runner unavailable while reconciling uncertain dispatch: ${error.message}` });
+      await store.updateRun(run.id, { error: `OpenCode V2 prompt admission unavailable while reconciling uncertain dispatch: ${error.message}` });
       return { status: 'runner_unavailable', error: error.message };
     }
 
-    const statusEvidence = inspectSessionStatusRecord(statuses, run.sessionId);
-    if (!statusEvidence.valid) {
-      const message = 'Runner returned malformed session-status evidence while reconciling uncertain dispatch; retaining ownership.';
-      await store.updateRun(run.id, { error: message });
-      return { status: 'runner_status_invalid', error: message };
+    let evidence;
+    try {
+      evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId);
+    } catch (error) {
+      await store.updateRun(run.id, { error: `OpenCode V2 session evidence unavailable while reconciling uncertain dispatch: ${error.message}` });
+      return { status: 'runner_unavailable', error: error.message };
     }
-    const messageEvidence = inspectSessionMessages(messages);
-    if (!messageEvidence.valid) {
-      const message = 'Runner returned malformed session-message evidence while reconciling uncertain dispatch; retaining ownership.';
+    if (!evidence.valid) {
+      const message = 'OpenCode V2 returned malformed session evidence while reconciling uncertain dispatch; retaining ownership.';
       await store.updateRun(run.id, { error: message });
-      return { status: 'runner_messages_invalid', error: message };
+      return { status: 'runner_evidence_invalid', error: message };
     }
-    const status = statusEvidence.present ? statusEvidence.status : { type: 'idle' };
-    const assistantObserved = messageEvidence.messages.some((message) => message.info.role === 'assistant');
-    if (status.type === 'busy' || status.type === 'retry' || assistantObserved) {
-      await store.updateRun(run.id, {
-        status: 'running',
-        dispatchPhase: 'dispatched',
-        dispatchedAt: run.dispatchedAt || new Date().toISOString(),
-        dispatchUncertain: false,
-        error: null,
-      });
-      return { status: 'running', dispatchReconciled: true };
+    if (!sessionTerminationConfirmed(evidence)) {
+      const message = evidence.state === 'inactive_unknown'
+        ? 'OpenCode V2 prompt admission is unconfirmed and the session is inactive without a durable terminal outcome; retaining ownership.'
+        : 'OpenCode V2 prompt admission is unconfirmed while the external session may still be active; retaining ownership.';
+      await store.updateRun(run.id, { status: 'dispatch_unknown', dispatchUncertain: true, error: message, finishedAt: null });
+      return { status: 'dispatch_unknown', error: message };
     }
 
-    if (status.type === 'idle' && secondsSince(run.startedAt) >= DISPATCH_GRACE_SECONDS) {
-      const message = 'OpenCode dispatch could not be confirmed: the persisted session remained idle without an assistant message. Automatic retry is blocked to avoid duplicate workers.';
-      const finishedAt = new Date().toISOString();
-      await store.updateRun(run.id, { status: 'failed', error: message, finishedAt, terminationConfirmedAt: finishedAt, dispatchUncertain: false });
-      if (run.taskId) await store.updateTask(run.taskId, { state: 'needs_input', supervisorFeedback: message });
-      return { status: 'dispatch_unconfirmed', error: message };
-    }
-
-    return { status: 'dispatch_unknown' };
+    const message = 'OpenCode V2 prompt was not found by deterministic message ID and the exact session is durably terminated/missing. Automatic replay is blocked.';
+    const finishedAt = new Date().toISOString();
+    await store.updateRun(run.id, {
+      status: 'failed', dispatchUncertain: false, error: message,
+      finishedAt, terminationConfirmedAt: finishedAt,
+    });
+    if (run.taskId) await store.updateTask(run.taskId, { state: 'needs_input', supervisorFeedback: message });
+    return { status: 'dispatch_unconfirmed', error: message };
   }
 
   async function reconcileQuarantinedRun(run) {
     const message = run.quarantineReason || 'Planner recovery quarantined an external worker session.';
-    if (!opencode || !run?.sessionId || !run?.worktreePath) {
+    if (!opencode || !run?.sessionId) {
       await store.updateRun(run.id, {
         status: 'dispatch_unknown', dispatchUncertain: true,
-        error: message + ' External session termination cannot be confirmed because runner/session/worktree evidence is unavailable.',
+        error: message + ' External session termination cannot be confirmed because deterministic OpenCode V2 session evidence is unavailable.',
         finishedAt: null,
       });
       if (run.taskId) await store.updateTask(run.taskId, { state: 'needs_input', supervisorFeedback: message });
       return { status: 'quarantine_abort_pending', runId: run.id };
     }
-    await opencode.abort({ directory: run.worktreePath, sessionId: run.sessionId }).catch(() => {});
+    await opencode.interrupt({ sessionId: run.sessionId }).catch(() => {});
     try {
-      const statuses = await opencode.sessionStatus(run.worktreePath);
-      const statusEvidence = inspectSessionStatusRecord(statuses, run.sessionId);
-      if (!statusEvidence.valid || (statusEvidence.present && statusEvidence.status.type !== 'idle')) {
+      const evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId);
+      if (!sessionTerminationConfirmed(evidence)) {
         await store.updateRun(run.id, {
           status: 'dispatch_unknown', dispatchUncertain: true,
-          error: message + (statusEvidence.valid
-            ? ' Abort was requested, but the external session is still active.'
-            : ' Abort was requested, but runner status evidence was malformed.'),
+          error: message + (evidence.valid
+            ? ' Interrupt was requested, but durable OpenCode V2 termination is still unproven.'
+            : ' Interrupt was requested, but OpenCode V2 session evidence was malformed.'),
           finishedAt: null,
         });
         return { status: 'quarantine_abort_pending', runId: run.id };
       }
       const finishedAt = new Date().toISOString();
       await store.updateRun(run.id, {
-        status: 'failed', dispatchUncertain: false,
-        error: message + ' External session termination was confirmed.',
+        status: 'failed', dispatchUncertain: false, quarantineReason: null,
+        error: message + ' Durable OpenCode V2 session termination was confirmed.',
         finishedAt, terminationConfirmedAt: finishedAt, legacyTerminationUnconfirmed: false,
       });
       if (run.taskId) await store.updateTask(run.taskId, { state: 'needs_input', supervisorFeedback: message });
@@ -300,7 +297,7 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
     } catch {
       await store.updateRun(run.id, {
         status: 'dispatch_unknown', dispatchUncertain: true,
-        error: message + ' External session termination could not be confirmed.',
+        error: message + ' Durable OpenCode V2 session termination could not be confirmed.',
         finishedAt: null,
       });
       return { status: 'quarantine_abort_pending', runId: run.id };
@@ -308,14 +305,10 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
   }
 
   async function reconcileTerminalTermination(run) {
-    if (!opencode || !run?.sessionId || !run?.worktreePath) {
-      return { status: 'terminal_termination_pending', runId: run.id };
-    }
+    if (!opencode || !run?.sessionId) return { status: 'terminal_termination_pending', runId: run.id };
     try {
-      const evidence = inspectSessionStatusRecord(await opencode.sessionStatus(run.worktreePath), run.sessionId);
-      if (!evidence.valid || (evidence.present && evidence.status.type !== 'idle')) {
-        return { status: 'terminal_termination_pending', runId: run.id };
-      }
+      const evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId);
+      if (!sessionTerminationConfirmed(evidence)) return { status: 'terminal_termination_pending', runId: run.id };
       await store.updateRun(run.id, {
         dispatchUncertain: false, quarantineReason: null, legacyTerminationUnconfirmed: false,
         terminationConfirmedAt: run.terminationConfirmedAt || new Date().toISOString(),

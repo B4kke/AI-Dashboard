@@ -301,11 +301,12 @@ export class OpenCodeClient {
     return normalizeMcpStatuses(await this.mcpServers(directory));
   }
 
-  mcpResources(directory) {
-    return this.call('mcp.resource.catalog', () => this.client.mcp.resource.catalog(
+  async mcpResources(directory) {
+    const value = await this.call('mcp.resource.catalog', () => this.client.mcp.resource.catalog(
       v2Location(directory),
       this.requestOptions(10_000),
     ));
+    return value?.data || value || { resources: [], templates: [] };
   }
 
   async ensureMcpServer({ name, url, directory } = {}) {
