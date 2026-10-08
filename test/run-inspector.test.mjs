@@ -15,5 +15,5 @@ test('Run Inspector is CSP-safe, mobile-oriented and consumes only read-only rel
   assert.match(js, /\/api\/state/);
   assert.match(js, /EventSource\('\/api\/events'\)/);
   assert.doesNotMatch(js, /fetch\([^\n]+method:\s*['"](?:POST|PUT|PATCH|DELETE)/i);
-  assert.match(css, /@media \(max-width: 560px\)/);
+  assert.match(css, /@media\s*\(max-width:\s*560px\)/);
 });
