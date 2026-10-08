@@ -14,6 +14,7 @@ import { buildPlannerPrompt, buildTaskPrompt } from '../server/core/task-prompt.
 import { taskWorkScopes } from '../server/core/work-scope.mjs';
 import { commitWorktree, createTaskWorktree, listRepositoryWorktrees, worktreePathKey } from '../server/git/worktrees.mjs';
 import { createOrchestrator } from '../server/orchestrator.mjs';
+import { v2SessionEvidence } from './support/opencode-v2-evidence.mjs';
 
 const exec = promisify(execFile);
 
@@ -389,7 +390,7 @@ test('base planner orchestration persists workScopes when generated Tasks are fi
     const planning = await store.addTask({ projectId: project.id, sourceIdeaId: idea.id, kind: 'planning', title: 'Plan', state: 'planning' });
     await store.updateIdea(idea.id, { planningTaskId: planning.id });
     const run = await store.createRun({ taskId: planning.id, projectId: project.id, kind: 'planner', worktreePath: f.worktreePath, branch: f.branch, baseHead: f.baseHead });
-    await store.updateRun(run.id, { status: 'running', sessionId: 'planner-session', startedAt: new Date().toISOString() });
+    await store.updateRun(run.id, { status: 'running', sessionId: 'planner-session', promptMessageId: 'msg-planner-session', startedAt: new Date().toISOString() });
     const result = {
       schemaVersion: 1,
       kind: 'planner',
@@ -401,13 +402,10 @@ test('base planner orchestration persists workScopes when generated Tasks are fi
     };
     const opencode = {
       async sessionEvidence({ sessionId }) {
-        return {
-          active: {}, session: { id: sessionId }, missing: false,
-          messages: [
-            { id: 'msg_planner_result', type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] },
-            { id: 'idle_planner_result', type: 'idle', outcome: 'succeeded' },
-          ],
-        };
+        const messages = [
+          { id: 'msg_planner_result', type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] },
+        ];
+        return v2SessionEvidence(sessionId, 'msg-planner-session', { terminal: 'succeeded', messages });
       },
     };
     const orchestrator = createOrchestrator({ store, opencode, github: {} });
