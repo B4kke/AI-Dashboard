@@ -6,21 +6,32 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { StateStore } from '../server/core/state-store.mjs';
+import { createRecoverableOpenCode } from '../server/core/opencode-dispatch-safety.mjs';
 import { createOrchestrator } from '../server/orchestrator.mjs';
+import { v2SessionEvidence } from './support/opencode-v2-evidence.mjs';
 
 const exec = promisify(execFile);
 
-function messages(result) {
-  return [{ info: { role: 'assistant' }, parts: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] }];
+function messages(sessionId, result) {
+  return [
+    { id: `msg_result_${sessionId}`, type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] },
+  ];
 }
 
 class FakeOpenCode {
-  constructor() { this.next = 1; this.results = new Map(); }
-  async createSession() { return { id: `session-${this.next++}` }; }
-  async promptAsync() {}
-  async sessionStatus() { return Object.fromEntries([...this.results.keys()].map((id) => [id, { type: 'idle' }])); }
-  async messages({ sessionId }) { return this.results.get(sessionId) || []; }
-  set(sessionId, result) { this.results.set(sessionId, messages(result)); }
+  constructor() { this.next = 1; this.results = new Map(); this.promptIds = new Map(); }
+  async createSession(input = {}) { return { id: input.id || `session-${this.next++}` }; }
+  async dispatchPrompt({ sessionId, messageId }) { this.promptIds.set(sessionId, messageId); }
+  async sessionEvidence({ sessionId }) {
+    const result = this.results.get(sessionId);
+    const promptMessageId = this.promptIds.get(sessionId);
+    return v2SessionEvidence(sessionId, promptMessageId, {
+      active: !result,
+      terminal: result ? 'succeeded' : null,
+      messages: result || [],
+    });
+  }
+  set(sessionId, result) { this.results.set(sessionId, messages(sessionId, result)); }
 }
 
 async function fixture() {
@@ -36,13 +47,15 @@ async function fixture() {
   const store = new StateStore(join(dir, 'state.json')); await store.load();
   const project = await store.addProject({ name: 'Supervisor integrity', repoPath: repo, verificationCommands: ['node verify.mjs'] });
   const task = await store.addTask({ projectId: project.id, title: 'Implement safely', acceptanceCriteria: ['feature exists'], workScopes: ['src'] });
-  const opencode = new FakeOpenCode(); const orchestrator = createOrchestrator({ store, opencode, github: {} });
+  const rawOpenCode = new FakeOpenCode();
+  const opencode = createRecoverableOpenCode({ client: rawOpenCode, store });
+  const orchestrator = createOrchestrator({ store, opencode, github: {} });
   const worker = await orchestrator.startWorker(task.id);
   await writeFile(join(worker.worktreePath, 'src', 'feature.txt'), 'implemented\n');
-  opencode.set(worker.sessionId, { schemaVersion: 1, kind: 'worker', status: 'success', summary: 'Implemented', evidence: { tests: ['node verify.mjs'], notes: [] }, risks: [], needsInput: null });
+  rawOpenCode.set(worker.sessionId, { schemaVersion: 1, kind: 'worker', status: 'success', summary: 'Implemented', evidence: { tests: ['node verify.mjs'], notes: [] }, risks: [], needsInput: null });
   await orchestrator.reconcileRun(worker.id);
   assert.equal(store.getTask(task.id).state, 'awaiting_review');
-  return { dir, repo, store, task, opencode, orchestrator };
+  return { dir, repo, store, task, opencode: rawOpenCode, orchestrator };
 }
 
 function rejectionResult() {

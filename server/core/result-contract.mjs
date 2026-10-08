@@ -2,7 +2,7 @@ const MARKER = 'AI_DASHBOARD_RESULT';
 export const RESULT_SCHEMA_VERSION = 1;
 
 function textFromMessage(message) {
-  return (message?.parts || [])
+  return (message?.content || [])
     .filter((part) => part?.type === 'text' && typeof part.text === 'string')
     .map((part) => part.text)
     .join('\n');
@@ -11,7 +11,7 @@ function textFromMessage(message) {
 export function latestAssistantText(messages = []) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.info?.role === 'assistant') {
+    if (message?.type === 'assistant') {
       const text = textFromMessage(message).trim();
       if (text) return text;
     }

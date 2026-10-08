@@ -4,7 +4,7 @@ No substantial third-party source files are vendored in the current foundation b
 
 Runtime dependencies used through public SDK/library APIs:
 
-- `@opencode-ai/sdk` — OpenCode SDK — MIT — https://github.com/anomalyco/opencode
+- `@opencode/client` — OpenCode V2 client — MIT — https://github.com/anomalyco/opencode
 - `octokit` — GitHub SDK — MIT — https://github.com/octokit/octokit.js
 - `@modelcontextprotocol/server` — Model Context Protocol TypeScript SDK v2 server package — MIT — https://github.com/modelcontextprotocol/typescript-sdk
 - `@modelcontextprotocol/client` — Model Context Protocol TypeScript SDK v2 client package — MIT — https://github.com/modelcontextprotocol/typescript-sdk
@@ -16,7 +16,7 @@ Projects explicitly used as design/implementation references:
 - VibeBoard — https://github.com/zanuartri/vibeboard — MIT
 - OpenHands — https://github.com/OpenHands/OpenHands — MIT
 - Codeman — https://github.com/Ark0N/Codeman — MIT
-- OpenCode — https://github.com/anomalyco/opencode — integration target and SDK provider
+- OpenCode — https://github.com/anomalyco/opencode — integration target and V2 client provider
 - Model Context Protocol TypeScript SDK — https://github.com/modelcontextprotocol/typescript-sdk — protocol/SDK reference
 
 Odysseus has been used as product/UX inspiration for broader Master-AI/workspace direction. Do not copy its AGPL-covered source/assets into AI Dashboard without an explicit compatibility/licensing decision and required attribution/source obligations.

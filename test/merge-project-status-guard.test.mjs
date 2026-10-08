@@ -6,22 +6,33 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { decorateControlPlane } from '../server/core/control-guards.mjs';
+import { createRecoverableOpenCode } from '../server/core/opencode-dispatch-safety.mjs';
 import { StateStore } from '../server/core/state-store.mjs';
 import { createOrchestrator } from '../server/orchestrator.mjs';
+import { v2SessionEvidence } from './support/opencode-v2-evidence.mjs';
 
 const exec = promisify(execFile);
 
-function resultMessages(result) {
-  return [{ info: { role: 'assistant' }, parts: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] }];
+function resultMessages(sessionId, result) {
+  return [
+    { id: `msg_result_${sessionId}`, type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] },
+  ];
 }
 
 class FakeOpenCode {
-  constructor() { this.next = 1; this.results = new Map(); }
-  async createSession() { return { id: `session-${this.next++}` }; }
-  async promptAsync() {}
-  async sessionStatus() { return Object.fromEntries([...this.results.keys()].map((id) => [id, { type: 'idle' }])); }
-  async messages({ sessionId }) { return this.results.get(sessionId) || []; }
-  set(sessionId, result) { this.results.set(sessionId, resultMessages(result)); }
+  constructor() { this.next = 1; this.results = new Map(); this.promptIds = new Map(); }
+  async createSession(input = {}) { return { id: input.id || `session-${this.next++}` }; }
+  async dispatchPrompt({ sessionId, messageId }) { this.promptIds.set(sessionId, messageId); }
+  async sessionEvidence({ sessionId }) {
+    const result = this.results.get(sessionId);
+    const promptMessageId = this.promptIds.get(sessionId);
+    return v2SessionEvidence(sessionId, promptMessageId, {
+      active: !result,
+      terminal: result ? 'succeeded' : null,
+      messages: result || [],
+    });
+  }
+  set(sessionId, result) { this.results.set(sessionId, resultMessages(sessionId, result)); }
 }
 
 test('Project status flip immediately before merge blocks the irreversible GitHub side effect', async () => {
@@ -52,13 +63,14 @@ test('Project status flip immediately before merge blocks the irreversible GitHu
       acceptanceCriteria: ['feature exists'],
       workScopes: ['src'],
     });
-    const opencode = new FakeOpenCode();
+    const rawOpenCode = new FakeOpenCode();
+    const opencode = createRecoverableOpenCode({ client: rawOpenCode, store });
     const github = {};
     const orchestrator = createOrchestrator({ store, opencode, github });
 
     const worker = await orchestrator.startWorker(task.id);
     await writeFile(join(worker.worktreePath, 'src', 'feature.txt'), 'implemented\n');
-    opencode.set(worker.sessionId, {
+    rawOpenCode.set(worker.sessionId, {
       schemaVersion: 1,
       kind: 'worker',
       status: 'success',
@@ -70,7 +82,7 @@ test('Project status flip immediately before merge blocks the irreversible GitHu
     await orchestrator.reconcileRun(worker.id);
 
     const supervisor = await orchestrator.startSupervisor(task.id);
-    opencode.set(supervisor.sessionId, {
+    rawOpenCode.set(supervisor.sessionId, {
       schemaVersion: 1,
       kind: 'supervisor',
       verdict: 'approve',
