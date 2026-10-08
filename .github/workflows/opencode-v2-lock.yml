@@ -26,7 +26,18 @@ jobs:
           node-version: 22
           package-manager-cache: false
       - name: Apply OpenCode V2 runtime transform
-        run: node scripts/migrate-opencode-v2-orchestrator.mjs
+        run: |
+          node scripts/migrate-opencode-v2-orchestrator.mjs
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+          const path = 'server/core/project-readiness.mjs';
+          let text = await readFile(path, 'utf8');
+          text = text.replace('const available = (Array.isArray(models) ? models : []).filter((model) => model?.available === true);', 'const availableModels = (Array.isArray(models) ? models : []).filter((model) => model?.available === true);');
+          text = text.replaceAll('available.find((model) => model.id === requestedModel)', 'availableModels.find((model) => model.id === requestedModel)');
+          text = text.replaceAll('available.filter((model) => model.default === true)', 'availableModels.filter((model) => model.default === true)');
+          text = text.replaceAll('availableCount: available.length', 'availableCount: availableModels.length');
+          await writeFile(path, text);
+          NODE
       - name: Regenerate exact lockfile
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       - name: Verify migration invariants
