@@ -235,7 +235,7 @@ test('uncertain reconciliation cannot resurrect a Run while a confirmed abort wa
     const task = await store.addTask({ projectId: project.id, title: 'Abort uncertain work', state: 'in_progress', workScopes: ['server'] });
     let run = await store.createRun({ taskId: task.id, projectId: project.id, kind: 'worker', status: 'dispatch_unknown', worktreePath, branch: 'ai/race' });
     run = await store.updateRun(run.id, {
-      sessionId: 'session-race', dispatchUncertain: true, startedAt: new Date().toISOString(), finishedAt: null,
+      sessionId: 'session-race', promptMessageId: 'msg-race', dispatchUncertain: true, startedAt: new Date().toISOString(), finishedAt: null,
     });
     const sharedLocks = new QueuedLocks();
     let releaseFirstStatus;
