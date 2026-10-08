@@ -1,4 +1,4 @@
-name: OpenCode V2 SDK introspection
+name: OpenCode V2 durable session-log migration
 
 on:
   push:
@@ -8,22 +8,33 @@ on:
       - .github/workflows/opencode-v2-sdk-introspect.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  inspect:
+  migrate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: feat/opencode-v2-migration
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           package-manager-cache: false
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Inspect exact @opencode/client@2.0.24 inbox item identity
+      - name: Apply runtime migration
+        shell: bash
         run: |
-          TYPES=node_modules/@opencode/client/dist/promise/generated/types.d.ts
-          sed -n '3138,3238p' "$TYPES"
-          echo '--- prompt input ---'
-          sed -n '6060,6128p' "$TYPES"
+          set -euo pipefail
+          node scripts/apply-v2-session-log-evidence.mjs
+          rm scripts/apply-v2-session-log-evidence.mjs
+          node --check server/integrations/opencode.mjs
+          node --check server/core/runner-session-status.mjs
+          node --check server/core/control-guards.mjs
+          node --check server/orchestrator.mjs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server scripts/apply-v2-session-log-evidence.mjs
+          git commit -m 'fix(opencode): use durable V2 session log for termination evidence'
+          git push origin HEAD:feat/opencode-v2-migration
