@@ -21,7 +21,7 @@ jobs:
           node-version: 22
           package-manager-cache: false
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Inspect published @opencode/client@2.0.24
+      - name: Inspect published @opencode/client@2.0.24 session log wrapper
         run: |
           node --input-type=module <<'NODE'
           import { OpenCode } from '@opencode/client';
@@ -29,10 +29,12 @@ jobs:
           const pkg = JSON.parse(await readFile('node_modules/@opencode/client/package.json', 'utf8'));
           const client = OpenCode.make({ baseUrl: 'http://127.0.0.1:9' });
           console.log('package', pkg.name, pkg.version);
-          console.log('session keys', Object.keys(client.session).sort());
           console.log('session.log typeof', typeof client.session?.log);
-          console.log('event.subscribe typeof', typeof client.event?.subscribe);
-          console.log('exports', pkg.exports || null);
+          console.log('session.log source', String(client.session.log));
           NODE
-          grep -R --line-number --fixed-string 'session.log' node_modules/@opencode/client | head -20 || true
-          grep -R --line-number --fixed-string '/api/experimental/session/' node_modules/@opencode/client | head -20 || true
+          FILE=$(grep -Rl --fixed-string 'var EndpointSessionLog' node_modules/@opencode/client/dist | head -1)
+          echo "wrapper-file=$FILE"
+          LINE=$(grep -n --fixed-string 'var EndpointSessionLog' "$FILE" | head -1 | cut -d: -f1)
+          START=$((LINE-4)); END=$((LINE+16)); sed -n "${START},${END}p" "$FILE"
+          echo '--- declaration matches ---'
+          grep -R --line-number -E 'log:.*Session|log\(|SessionLog' node_modules/@opencode/client/dist --include='*.d.ts' | head -80 || true
