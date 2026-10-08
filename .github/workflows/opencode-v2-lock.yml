@@ -21,17 +21,17 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
-      - name: Migrate remaining V2 test fixtures
+      - name: Apply one-shot V2 fixture repair
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f scripts/migrate-opencode-v2-test-fixtures.mjs ]; then
-            node scripts/migrate-opencode-v2-test-fixtures.mjs
-            rm scripts/migrate-opencode-v2-test-fixtures.mjs
+          if [ -f scripts/fix-opencode-v2-race-fixture.mjs ]; then
+            node scripts/fix-opencode-v2-race-fixture.mjs
+            rm scripts/fix-opencode-v2-race-fixture.mjs
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add test scripts/migrate-opencode-v2-test-fixtures.mjs
-            git commit -m 'test(opencode): finish V2 fixture migration'
+            git add test/control-guards.test.mjs scripts/fix-opencode-v2-race-fixture.mjs
+            git commit -m 'test(opencode): fix deterministic V2 dispatch race fixture'
             git push origin HEAD:feat/opencode-v2-migration
           fi
       - name: Regenerate exact lockfile
