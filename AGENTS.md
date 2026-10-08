@@ -224,7 +224,7 @@ Agent summaries, MCP text, operator context and memory are not machine evidence.
 
 Prefer maintained official SDKs for wire protocols while keeping AI Dashboard's domain/control policy local:
 
-- OpenCode SDK owns OpenCode transport/session/tool/event APIs; Dashboard owns Run identity, worktrees, evidence and recovery.
+- OpenCode uses pinned `@opencode/client` V2 for transport/session/message/inbox/active/interrupt/model/agent/MCP/event/permission APIs; Dashboard owns deterministic Run/session/message identity, worktrees, evidence and recovery. Never reintroduce V1 `@opencode-ai/sdk`, title-based recovery or “not active = done” semantics.
 - Octokit owns GitHub API transport/auth/pagination; Dashboard owns repository identity, CI completeness, branch policy and merge proof.
 - MCP SDK owns protocol encoding/negotiation/transports/input-required mechanics; Dashboard owns authorization, role profiles, agents/scopes and state transitions.
 - Future ACP may provide generic harness control; keep OpenCode-native SDK support where richer capabilities matter.

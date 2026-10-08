@@ -72,24 +72,26 @@ See `docs/07-mcp-agent-architecture.md` for the server/host and specialist-agent
 
 ## OpenCode
 
-The OpenCode harness adapter uses pinned `@opencode-ai/sdk@1.18.21` and connects to an existing OpenCode server.
+The OpenCode harness adapter uses pinned `@opencode/client@2.0.24` and connects to an existing OpenCode V2 server. V2 transport shapes stay inside `server/integrations/opencode.mjs`; core Project/Task/Run state does not depend on raw SDK objects.
 
-The SDK owns transport for:
+The V2 client owns transport for:
 
-- session create/list/delete,
-- session status/messages/diff/abort,
-- synchronous/asynchronous prompt dispatch,
-- provider/model discovery,
-- agent discovery,
-- model/tool discovery,
-- MCP/LSP/formatter status,
+- session create/get/list/delete and diff,
+- foreground-active session snapshots,
+- durable session message + inbox admission lookup,
+- prompt dispatch with deterministic message IDs,
+- session interrupt/resume transport,
+- model catalog + default-model discovery,
+- primary/subagent-aware agent discovery,
+- MCP status/registration/resource catalog,
 - event subscription,
-- permission responses.
+- permission responses,
+- V1 migration-status diagnostics.
 
 AI Dashboard still owns:
 
 - Project/Task/Run identity,
-- deterministic run/session identity used for recovery,
+- deterministic Run-scoped session and prompt-message identity,
 - persisted dispatch phases and lost-ack reconciliation,
 - worktree/branch isolation,
 - planner/worker/supervisor semantics,
@@ -99,23 +101,27 @@ AI Dashboard still owns:
 - retry/concurrency/time policy,
 - approval and irreversible actions.
 
-### Agent roles
+### V2 recovery contract
 
-Dashboard roles are not assumed to equal OpenCode agent IDs. The adapter queries the live OpenCode agent catalog before sending a configured name. Unsupported names are omitted while role semantics remain in the control-plane prompt. Custom OpenCode agents can therefore become usable without hardcoding their IDs into Dashboard core.
+`session.active` is a foreground activity snapshot, not durable completion evidence. Absence from that map is treated as `inactive_unknown` unless durable session messages contain a terminal idle outcome or the exact session is proven missing. The control plane therefore never maps “not active” to success.
 
-Dashboard Agent Registry is a separate domain concept. A registered Dashboard specialist can select OpenCode as its harness and can carry role/model/instructions/workScopes. The OpenCode SDK controls the harness; Dashboard controls assignment and authority.
+Dispatch identities are deterministic before the external side effect. If session creation acknowledgement is lost, recovery reads only the exact deterministic session. If prompt acknowledgement is lost, recovery searches the exact deterministic message ID through durable message/inbox admission. If admission cannot be proved, the Run remains `dispatch_unknown`; the prompt is not replayed automatically.
 
-### Chat/tool capabilities
+A durable terminal idle outcome of `succeeded` is required before an assistant result can be applied. `failed` or `interrupted` fails closed. A missing exact session may release external-session ownership but cannot fabricate a successful result.
 
-OpenCode model discovery records SDK-provided tool-calling/reasoning/attachment/context/output/modality metadata. The adapter exposes tool IDs, per-model tool schemas, MCP/LSP/formatter status, synchronous prompt dispatch, permission responses and the event stream.
+### Agent roles and permissions
 
-These primitives can support a future Master/chat agent, but they do not grant authority over checkpoint, approval or merge.
+Dashboard roles are not assumed to equal OpenCode agent IDs. The adapter queries the live V2 agent catalog and accepts only primary-capable entries as session entrypoints. A subagent-only agent is never promoted to worker/planner/supervisor entrypoint. Unsupported configured names are omitted while role semantics remain in the control-plane prompt.
 
-### Structured output caution
+Dashboard Agent Registry is a separate domain concept. A registered Dashboard specialist can select OpenCode as its harness and carry role/model/instructions/workScopes. OpenCode controls harness transport; Dashboard controls assignment and authority.
 
-OpenCode documentation describes schema-constrained structured output, but the generated request types shipped in pinned `@opencode-ai/sdk@1.18.21` did not expose the documented `format` field when inspected for this branch.
+V2 permission policy is defense-in-depth. Planner/supervisor sessions are read-only at the harness layer, mutating Git/shell operations are denied where representable, and a persistent `always` approval is rejected unless an explicit operator-authorized path requests it. Permission transport never grants checkpoint, review or merge authority.
 
-The versioned `AI_DASHBOARD_RESULT` contract therefore remains authoritative for planner/worker/supervisor results. Do not add raw HTTP solely to depend on a documentation-only request shape. Revisit only when the pinned published SDK exposes the capability and regression tests prove it.
+### V2 capabilities
+
+The adapter exposes model/default-model metadata, primary-agent availability, MCP status/resources, event transport and V1 migration diagnostics. These are capability/diagnostic surfaces, not domain truth. Migration status may warn that the connected OpenCode installation still carries V1 configuration; it is never used as Run-completion evidence.
+
+The versioned `AI_DASHBOARD_RESULT` contract remains authoritative for planner/worker/supervisor outputs. Transport-level success or richer native output features do not replace role-specific schema validation, control-plane verification or machine evidence.
 
 ## AI SDK and Master runtime
 

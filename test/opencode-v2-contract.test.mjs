@@ -41,6 +41,34 @@ test('OpenCode runtime contains no legacy V1 SDK or recovery paths', async () =>
   assert.deepEqual(offenders, []);
 });
 
+const canonicalDocs = [
+  'README.md',
+  'AGENTS.md',
+  'docs/02-architecture.md',
+  'docs/04-roadmap.md',
+  'docs/06-sdk-integrations.md',
+];
+
+const forbiddenCanonicalV1Tokens = [
+  '@opencode-ai/sdk',
+  'prompt_async',
+  'promptAsync',
+  'sessionStatus(',
+  'proven `idle` or missing',
+  'connected global default',
+];
+
+test('canonical OpenCode documentation contains no V1 SDK or completion semantics', async () => {
+  const offenders = [];
+  for (const path of canonicalDocs) {
+    const text = await readFile(path, 'utf8');
+    for (const token of forbiddenCanonicalV1Tokens) {
+      if (text.includes(token)) offenders.push(`${path}: ${token}`);
+    }
+  }
+  assert.deepEqual(offenders, []);
+});
+
 test('OpenCode V2 client is exactly pinned and V1 SDK is absent from lockfile', async () => {
   const pkg = JSON.parse(await readFile('package.json', 'utf8'));
   const lock = JSON.parse(await readFile('package-lock.json', 'utf8'));
