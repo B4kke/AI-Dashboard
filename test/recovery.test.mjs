@@ -5,14 +5,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { StateStore } from '../server/core/state-store.mjs';
 import { createOrchestrator } from '../server/orchestrator.mjs';
+import { v2SessionEvidence } from './support/opencode-v2-evidence.mjs';
 
-function v2Evidence(sessionId, { active = false, terminal = null, missing = false } = {}) {
-  return {
-    active: active ? { [sessionId]: { type: 'running' } } : {},
-    session: missing ? null : { id: sessionId, ...(terminal ? { outcome: terminal } : {}) },
-    messages: terminal ? [{ id: `idle-${sessionId}`, type: 'idle', outcome: terminal }] : [],
-    missing,
-  };
+function promptMessageId(sessionId) {
+  return `msg-${sessionId}`;
+}
+
+function v2Evidence(sessionId, options = {}) {
+  return v2SessionEvidence(sessionId, promptMessageId(sessionId), options);
 }
 
 test('restart recovery quarantines incomplete active Runs and reopens unrelated orphaned review state', async () => {
@@ -62,7 +62,7 @@ test('restart keeps inactive V2 session without durable terminal outcome under R
     const project = await store.addProject({ name: 'Inactive unknown', repoPath: dir, autonomy: { mode: 'manual' } });
     const task = await store.addTask({ projectId: project.id, title: 'Review', state: 'reviewing', acceptanceCriteria: ['done'], verificationCommands: ['node --version'] });
     const run = await store.createRun({ taskId: task.id, projectId: project.id, kind: 'supervisor', status: 'running', iteration: 1 });
-    await store.updateRun(run.id, { sessionId: 'ses_inactive', worktreePath: join(dir, 'wt') });
+    await store.updateRun(run.id, { sessionId: 'ses_inactive', promptMessageId: promptMessageId('ses_inactive'), worktreePath: join(dir, 'wt') });
     const opencode = { sessionEvidence: async () => v2Evidence('ses_inactive', { active: false }) };
     const orchestrator = createOrchestrator({ store, opencode, github: {} });
     const actions = await orchestrator.recover();
@@ -80,7 +80,7 @@ test('restart keeps foreground-active V2 sessions running without fabricating te
     const project = await store.addProject({ name: 'Alive', repoPath: dir, autonomy: { mode: 'manual' } });
     const task = await store.addTask({ projectId: project.id, title: 'Alive active task', state: 'reviewing', acceptanceCriteria: ['done'], verificationCommands: ['node --version'] });
     const run = await store.createRun({ taskId: task.id, projectId: project.id, kind: 'supervisor', status: 'running', iteration: 1 });
-    await store.updateRun(run.id, { sessionId: 'ses_alive', worktreePath: join(dir, 'wt') });
+    await store.updateRun(run.id, { sessionId: 'ses_alive', promptMessageId: promptMessageId('ses_alive'), worktreePath: join(dir, 'wt') });
     const opencode = { sessionEvidence: async () => v2Evidence('ses_alive', { active: true }) };
     const orchestrator = createOrchestrator({ store, opencode, github: {} });
     await orchestrator.recover();
@@ -96,7 +96,7 @@ test('restart records terminal/missing V2 evidence for normal reconciliation ins
     const project = await store.addProject({ name: 'Terminal', repoPath: dir, autonomy: { mode: 'manual' } });
     const task = await store.addTask({ projectId: project.id, title: 'Terminal task', state: 'reviewing', acceptanceCriteria: ['done'], verificationCommands: ['node --version'] });
     const run = await store.createRun({ taskId: task.id, projectId: project.id, kind: 'supervisor', status: 'running', iteration: 1 });
-    await store.updateRun(run.id, { sessionId: 'ses_terminal', worktreePath: join(dir, 'wt') });
+    await store.updateRun(run.id, { sessionId: 'ses_terminal', promptMessageId: promptMessageId('ses_terminal'), worktreePath: join(dir, 'wt') });
     const opencode = { sessionEvidence: async () => v2Evidence('ses_terminal', { terminal: 'failed' }) };
     const orchestrator = createOrchestrator({ store, opencode, github: {} });
     const actions = await orchestrator.recover();
