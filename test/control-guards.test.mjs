@@ -10,6 +10,7 @@ import { decorateControlPlane } from '../server/core/control-guards.mjs';
 import { activeScopeConflicts } from '../server/core/run-admission-guard.mjs';
 import { createTaskWorktree, worktreePathKey } from '../server/git/worktrees.mjs';
 import { createOrchestrator } from '../server/orchestrator.mjs';
+import { v2SessionEvidence } from './support/opencode-v2-evidence.mjs';
 
 const exec = promisify(execFile);
 const locks = { withLock: async (_key, fn) => fn() };
@@ -203,7 +204,7 @@ test('lost OpenCode prompt acknowledgement keeps the existing session active ins
       async availableModels() { return [{ id: 'provider/model', available: true }]; },
       async promptAdmission({ messageId }) { return { source: 'inbox', value: { id: messageId } }; },
       async sessionEvidence({ sessionId }) {
-        return { active: { [sessionId]: { type: 'running' } }, session: { id: sessionId }, messages: [], missing: false };
+        return v2SessionEvidence(sessionId, 'msg-dispatch', { active: true });
       },
     };
     const guarded = decorateControlPlane({ orchestrator: fixture.orchestrator, store: fixture.store, locks, opencode });
@@ -249,14 +250,9 @@ test('uncertain reconciliation cannot resurrect a Run while a confirmed abort wa
         statusCalls += 1;
         if (statusCalls === 1) {
           firstStatusStarted();
-          return new Promise((resolve) => { releaseFirstStatus = () => resolve({
-            active: { [sessionId]: { type: 'running' } }, session: { id: sessionId }, messages: [], missing: false,
-          }); });
+          return new Promise((resolve) => { releaseFirstStatus = () => resolve(v2SessionEvidence(sessionId, 'msg-race', { active: true })); });
         }
-        return {
-          active: {}, session: { id: sessionId }, missing: false,
-          messages: [{ id: 'idle-race', type: 'idle', outcome: 'interrupted' }],
-        };
+        return v2SessionEvidence(sessionId, 'msg-race', { terminal: 'interrupted' });
       },
     };
     const base = createOrchestrator({ store, opencode, github: {}, locks: sharedLocks });
@@ -292,7 +288,7 @@ test('planner quarantine wins atomically over an in-flight worker result applica
       acceptanceCriteria: ['Do the work'], verificationCommands: ['node --version'], workScopes: ['server'],
     });
     let run = await store.createRun({ taskId: task.id, projectId: project.id, kind: 'worker', status: 'running', worktreePath, branch: 'ai/old' });
-    run = await store.updateRun(run.id, { sessionId: 'old-session', startedAt: new Date().toISOString() });
+    run = await store.updateRun(run.id, { sessionId: 'old-session', promptMessageId: 'msg-old-session', startedAt: new Date().toISOString() });
     let releaseStatus;
     let statusStarted;
     const started = new Promise((resolve) => { statusStarted = resolve; });
@@ -304,13 +300,10 @@ test('planner quarantine wins atomically over an in-flight worker result applica
     const opencode = {
       async sessionEvidence({ sessionId }) {
         statusStarted();
-        return new Promise((resolve) => { releaseStatus = () => resolve({
-          active: {}, session: { id: sessionId }, missing: false,
-          messages: [
-            { id: 'msg-old-result', type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] },
-            { id: 'idle-old-result', type: 'idle', outcome: 'succeeded' },
-          ],
-        }); });
+        const messages = [
+          { id: 'msg-old-result', type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] },
+        ];
+        return new Promise((resolve) => { releaseStatus = () => resolve(v2SessionEvidence(sessionId, 'msg-old-session', { terminal: 'succeeded', messages })); });
       },
     };
     const base = createOrchestrator({ store, opencode, github: {}, locks: sharedLocks });
@@ -347,7 +340,7 @@ test('planner result remains active when candidate locking is busy and materiali
       taskId: planningTask.id, projectId: project.id, kind: 'planner', status: 'running',
       worktreePath, branch: 'ai/planner-lock',
     });
-    run = await store.updateRun(run.id, { sessionId: 'planner-session', startedAt: new Date().toISOString() });
+    run = await store.updateRun(run.id, { sessionId: 'planner-session', promptMessageId: 'msg-planner-session', startedAt: new Date().toISOString() });
     const result = {
       schemaVersion: 1, kind: 'planner', status: 'needs_input', summary: 'Need an operator decision',
       tasks: [], questions: ['Choose the behavior'], risks: [],
@@ -364,13 +357,10 @@ test('planner result remains active when candidate locking is busy and materiali
     };
     const opencode = {
       async sessionEvidence({ sessionId }) {
-        return {
-          active: {}, session: { id: sessionId }, missing: false,
-          messages: [
-            { id: 'msg-planner-lock', type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] },
-            { id: 'idle-planner-lock', type: 'idle', outcome: 'succeeded' },
-          ],
-        };
+        const messages = [
+          { id: 'msg-planner-lock', type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] },
+        ];
+        return v2SessionEvidence(sessionId, 'msg-planner-session', { terminal: 'succeeded', messages });
       },
     };
     const orchestrator = createOrchestrator({ store, opencode, github: {}, locks: failOnceLocks });
@@ -395,7 +385,7 @@ test('unconfirmed inactive OpenCode V2 dispatch retains ownership instead of aut
       async availableModels() { return [{ id: 'provider/model', available: true }]; },
       async promptAdmission() { return null; },
       async sessionEvidence({ sessionId }) {
-        return { active: {}, session: { id: sessionId }, messages: [], missing: false };
+        return v2SessionEvidence(sessionId, 'msg-dispatch');
       },
     };
     const guarded = decorateControlPlane({ orchestrator: fixture.orchestrator, store: fixture.store, locks, opencode });
@@ -470,7 +460,7 @@ test('planner-quarantined worker output is never applied before external session
       worktreePath: dir, branch: 'ai/unsafe',
     });
     await store.updateRun(run.id, {
-      sessionId: 'unsafe-session', dispatchUncertain: false,
+      sessionId: 'unsafe-session', promptMessageId: 'msg-unsafe-session', dispatchUncertain: false,
       quarantineReason: 'Planner recovery quarantined partial work',
     });
     let phase = 'running'; let innerCalls = 0; let interruptCalls = 0;
@@ -480,8 +470,8 @@ test('planner-quarantined worker output is never applied before external session
       opencode: {
         async interrupt() { interruptCalls += 1; },
         async sessionEvidence({ sessionId }) {
-          if (phase === 'running') return { active: { [sessionId]: { type: 'running' } }, session: { id: sessionId }, messages: [], missing: false };
-          return { active: {}, session: { id: sessionId }, messages: [{ id: 'idle-quarantine', type: 'idle', outcome: 'interrupted' }], missing: false };
+          if (phase === 'running') return v2SessionEvidence(sessionId, 'msg-unsafe-session', { active: true });
+          return v2SessionEvidence(sessionId, 'msg-unsafe-session', { terminal: 'interrupted' });
         },
       },
     });
