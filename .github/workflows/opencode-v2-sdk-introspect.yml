@@ -21,12 +21,9 @@ jobs:
           node-version: 22
           package-manager-cache: false
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Inspect published @opencode/client@2.0.24 inbox/execution log shapes
+      - name: Inspect exact @opencode/client@2.0.24 inbox item identity
         run: |
           TYPES=node_modules/@opencode/client/dist/promise/generated/types.d.ts
-          for NAME in SessionInboxUser SessionInboxEnqueued SessionInboxDelivered SessionInboxCancelled SessionInboxDeliveryChanged SessionExecutionStarted SessionExecutionSucceeded SessionExecutionFailed SessionExecutionInterrupted SessionRetryScheduled EventLogSynced; do
-            LINE=$(grep -n "^export type $NAME" "$TYPES" | head -1 | cut -d: -f1 || true)
-            if [ -n "$LINE" ]; then START=$LINE; END=$((LINE+35)); echo "### $NAME @ $LINE"; sed -n "${START},${END}p" "$TYPES"; fi
-          done
-          echo '--- related inbox aliases ---'
-          grep -n -E '^export type SessionInbox' "$TYPES" | head -80
+          sed -n '3138,3238p' "$TYPES"
+          echo '--- prompt input ---'
+          sed -n '6060,6128p' "$TYPES"
