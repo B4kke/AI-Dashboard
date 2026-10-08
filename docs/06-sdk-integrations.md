@@ -78,7 +78,7 @@ The V2 client owns transport for:
 
 - session create/get/list/delete and diff,
 - foreground-active session snapshots,
-- durable session message + inbox admission lookup,
+- durable session messages and the experimental durable session-log stream,
 - prompt dispatch with deterministic message IDs,
 - session interrupt/resume transport,
 - model catalog + default-model discovery,
@@ -103,11 +103,11 @@ AI Dashboard still owns:
 
 ### V2 recovery contract
 
-`session.active` is a foreground activity snapshot, not durable completion evidence. Absence from that map is treated as `inactive_unknown` unless durable session messages contain a terminal idle outcome or the exact session is proven missing. The control plane therefore never maps “not active” to success.
+`session.active` is a foreground activity snapshot, not durable completion evidence. Absence from that map is treated as `inactive_unknown` unless the exact session is proven missing or its durable session log proves a terminal execution outcome. The control plane therefore never maps “not active” to success.
 
-Dispatch identities are deterministic before the external side effect. If session creation acknowledgement is lost, recovery reads only the exact deterministic session. If prompt acknowledgement is lost, recovery searches the exact deterministic message ID through durable message/inbox admission. If admission cannot be proved, the Run remains `dispatch_unknown`; the prompt is not replayed automatically.
+Dispatch identities are deterministic before the external side effect. If session creation acknowledgement is lost, recovery reads only the exact deterministic session. If prompt acknowledgement is lost, recovery proves the exact deterministic message ID through durable admission evidence. A valid Run log must bind the prompt through `session.inbox.enqueued`, then show `session.execution.started`; the stream is trusted only after the matching `log.synced` marker. If admission cannot be proved, the Run remains `dispatch_unknown`; the prompt is not replayed automatically.
 
-A durable terminal idle outcome of `succeeded` is required before an assistant result can be applied. `failed` or `interrupted` fails closed. A missing exact session may release external-session ownership but cannot fabricate a successful result.
+An assistant result can be applied only when the same synced durable log proves `session.execution.succeeded`. `session.execution.failed` and `session.execution.interrupted` fail closed. An inactive session without a durable terminal execution event remains terminal-unknown. A missing exact session may release external-session ownership but cannot fabricate a successful result.
 
 ### Agent roles and permissions
 
