@@ -2,10 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { OpenCodeClient, normalizeOpenCodeUrl, normalizeOpencodeAgent } from '../server/integrations/opencode.mjs';
+import { OpenCodeClient, normalizeOpenCodeUrl, normalizeOpencodeAgent, openCodeSessionPermissions } from '../server/integrations/opencode.mjs';
 
-function requestPath(req) {
+function requestUrl(req) {
   return new URL(req.url, 'http://127.0.0.1');
+}
+
+async function body(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  return chunks.length ? JSON.parse(Buffer.concat(chunks)) : null;
 }
 
 async function listen(handler) {
@@ -20,42 +26,21 @@ async function close(server) {
   await once(server, 'close');
 }
 
-test('OpenCode agent roles are discovered instead of hardcoded before prompt dispatch', async () => {
-  const prompts = [];
-  const server = await listen(async (req, res) => {
-    const url = requestPath(req);
-    res.setHeader('content-type', 'application/json');
-    if (url.pathname === '/agent' && req.method === 'GET') {
-      return res.end(JSON.stringify([{ name: 'build', description: 'Build agent' }, { name: 'reviewer' }]));
-    }
-    if (url.pathname === '/session/s1/prompt_async' && req.method === 'POST') {
-      const chunks = [];
-      for await (const chunk of req) chunks.push(chunk);
-      prompts.push(JSON.parse(Buffer.concat(chunks)));
-      res.statusCode = 204;
-      return res.end();
-    }
-    res.statusCode = 404;
-    res.end('{}');
-  });
-  try {
-    const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
-    await client.promptAsync({ directory: '/tmp/worktree', sessionId: 's1', prompt: 'Review', agent: 'supervisor' });
-    await client.promptAsync({ directory: '/tmp/worktree', sessionId: 's1', prompt: 'Build', agent: 'build' });
-    assert.equal('agent' in prompts[0], false);
-    assert.equal(prompts[1].agent, 'build');
-  } finally {
-    await close(server);
-  }
-});
-
-test('normalizeOpencodeAgent preserves configured roles for SDK capability resolution', () => {
-  assert.equal(normalizeOpencodeAgent(' supervisor '), 'supervisor');
-  assert.equal(normalizeOpencodeAgent('custom-reviewer'), 'custom-reviewer');
-  assert.equal(normalizeOpencodeAgent(undefined), undefined);
-  assert.equal(normalizeOpencodeAgent(null), undefined);
-  assert.equal(normalizeOpencodeAgent(''), undefined);
-});
+function model(id = 'qwen3') {
+  return {
+    id,
+    modelID: `upstream/${id}`,
+    providerID: 'lmstudio',
+    name: 'Qwen 3',
+    capabilities: { tools: true, input: ['text', 'image'], output: ['text'] },
+    variants: [{ id: 'fast' }],
+    time: { released: 0 },
+    cost: [],
+    status: 'active',
+    enabled: true,
+    limit: { context: 32768, input: 30000, output: 8192 },
+  };
+}
 
 test('OpenCode endpoint URLs reject embedded credentials, query parameters and fragments', () => {
   assert.equal(normalizeOpenCodeUrl('http://127.0.0.1:4096/'), 'http://127.0.0.1:4096');
@@ -64,36 +49,143 @@ test('OpenCode endpoint URLs reject embedded credentials, query parameters and f
   assert.throws(() => normalizeOpenCodeUrl('file:///tmp/opencode.sock'), /must use http or https/);
 });
 
-test('OpenCode SDK adapter creates scoped session and sends provider/model object', async () => {
+test('normalizeOpencodeAgent preserves configured role names', () => {
+  assert.equal(normalizeOpencodeAgent(' supervisor '), 'supervisor');
+  assert.equal(normalizeOpencodeAgent('custom-reviewer'), 'custom-reviewer');
+  assert.equal(normalizeOpencodeAgent(undefined), undefined);
+  assert.equal(normalizeOpencodeAgent(''), undefined);
+});
+
+test('OpenCode V2 creates a location-bound session with model, primary agent and fail-closed permissions', async () => {
   const seen = [];
   const server = await listen(async (req, res) => {
-    const url = requestPath(req);
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    seen.push({ pathname: url.pathname, directory: url.searchParams.get('directory'), body: chunks.length ? JSON.parse(Buffer.concat(chunks)) : null });
+    const url = requestUrl(req);
     res.setHeader('content-type', 'application/json');
-    if (url.pathname === '/session' && req.method === 'POST') return res.end(JSON.stringify({ id: 'session-1' }));
-    if (url.pathname === '/agent' && req.method === 'GET') return res.end(JSON.stringify([{ name: 'build' }]));
-    if (url.pathname === '/session/session-1/prompt_async' && req.method === 'POST') { res.statusCode = 204; return res.end(); }
-    res.statusCode = 404;
-    res.end('{}');
+    if (url.pathname === '/api/agent') {
+      return res.end(JSON.stringify({ location: { directory: '/tmp/worktree' }, data: [
+        { id: 'build', name: 'build', mode: 'primary', hidden: false },
+        { id: 'helper', name: 'helper', mode: 'subagent', hidden: false },
+      ] }));
+    }
+    if (url.pathname === '/api/session' && req.method === 'POST') {
+      const value = await body(req);
+      seen.push(value);
+      return res.end(JSON.stringify({ data: { id: value.id, projectID: 'p1', cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 }, location: value.location } }));
+    }
+    res.statusCode = 404; res.end(JSON.stringify({ error: 'missing' }));
   });
   try {
     const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
-    const session = await client.createSession({ directory: '/tmp/worktree', title: 'Task' });
-    await client.promptAsync({ directory: '/tmp/worktree', sessionId: session.id, prompt: 'Do the task', agent: 'build', model: 'lmstudio/qwen/qwen3-coder' });
-    const create = seen.find((item) => item.pathname === '/session');
-    const prompt = seen.find((item) => item.pathname.endsWith('/prompt_async'));
-    assert.equal(create.directory, '/tmp/worktree');
-    assert.equal(prompt.body.parts[0].text, 'Do the task');
-    assert.equal(prompt.body.agent, 'build');
-    assert.deepEqual(prompt.body.model, { providerID: 'lmstudio', modelID: 'qwen/qwen3-coder' });
-  } finally {
-    await close(server);
-  }
+    const session = await client.createSession({
+      directory: '/tmp/worktree', id: 'sesabc', title: 'Task', agent: 'build', model: 'lmstudio/qwen3', kind: 'worker',
+    });
+    assert.equal(session.id, 'sesabc');
+    assert.deepEqual(seen[0].location, { directory: '/tmp/worktree' });
+    assert.deepEqual(seen[0].model, { providerID: 'lmstudio', id: 'qwen3' });
+    assert.equal(seen[0].agent, 'build');
+    assert.equal(seen[0].permissions.some((rule) => rule.action === 'shell' && rule.resource === 'git push *' && rule.effect === 'deny'), true);
+    assert.equal(seen[0].permissions.some((rule) => rule.action === 'external_directory' && rule.effect === 'deny'), true);
+  } finally { await close(server); }
 });
 
-test('OpenCode SDK failures do not surface arbitrary runner response bodies', async () => {
+test('OpenCode V2 never promotes a subagent-only role to session entrypoint', async () => {
+  let createBody = null;
+  const server = await listen(async (req, res) => {
+    const url = requestUrl(req);
+    res.setHeader('content-type', 'application/json');
+    if (url.pathname === '/api/agent') return res.end(JSON.stringify({ location: { directory: '/tmp/repo' }, data: [{ id: 'helper', name: 'helper', mode: 'subagent', hidden: false }] }));
+    if (url.pathname === '/api/session') {
+      createBody = await body(req);
+      return res.end(JSON.stringify({ data: { id: createBody.id, projectID: 'p1', cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 }, location: createBody.location } }));
+    }
+    res.statusCode = 404; res.end('{}');
+  });
+  try {
+    const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+    await client.createSession({ directory: '/tmp/repo', id: 'sesabc', agent: 'helper', kind: 'supervisor' });
+    assert.equal('agent' in createBody, false);
+    assert.equal(createBody.permissions.some((rule) => rule.action === 'edit' && rule.resource === '*' && rule.effect === 'deny'), true);
+  } finally { await close(server); }
+});
+
+test('OpenCode V2 prompt dispatch uses deterministic message id and durable admission lookup', async () => {
+  const seen = { prompt: null };
+  const server = await listen(async (req, res) => {
+    const url = requestUrl(req);
+    res.setHeader('content-type', 'application/json');
+    if (url.pathname === '/api/session/ses1/prompt' && req.method === 'POST') {
+      seen.prompt = await body(req);
+      return res.end(JSON.stringify({ data: { id: seen.prompt.id, sessionID: 'ses1', time: { created: 1 }, type: 'user', payload: { text: seen.prompt.text }, delivery: seen.prompt.delivery } }));
+    }
+    if (url.pathname === '/api/session/ses1/message/msg_one') {
+      return res.end(JSON.stringify({ data: { id: 'msg_one', type: 'user', text: 'Do the task', time: { created: 1 } } }));
+    }
+    res.statusCode = 404; res.end('{}');
+  });
+  try {
+    const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+    await client.dispatchPrompt({ sessionId: 'ses1', messageId: 'msg_one', prompt: 'Do the task' });
+    assert.deepEqual(seen.prompt, { id: 'msg_one', text: 'Do the task', delivery: 'queue' });
+    const admission = await client.promptAdmission({ sessionId: 'ses1', messageId: 'msg_one' });
+    assert.equal(admission.source, 'message');
+    assert.equal(admission.value.id, 'msg_one');
+  } finally { await close(server); }
+});
+
+test('OpenCode V2 model, health, MCP and migration discovery expose supported capabilities only', async () => {
+  const server = await listen((req, res) => {
+    const url = requestUrl(req);
+    res.setHeader('content-type', 'application/json');
+    if (url.pathname === '/api/info') return res.end(JSON.stringify({ version: '2.0.24', pid: 42, urls: ['http://127.0.0.1'], paths: { tmp: '/tmp' } }));
+    if (url.pathname === '/api/session') return res.end(JSON.stringify({ data: [], cursor: {} }));
+    if (url.pathname === '/api/session/active') return res.end(JSON.stringify({ data: {} }));
+    if (url.pathname === '/api/agent') return res.end(JSON.stringify({ location: { directory: '/tmp/repo' }, data: [{ id: 'build', name: 'build', mode: 'primary', hidden: false }] }));
+    if (url.pathname === '/api/model') return res.end(JSON.stringify({ location: { directory: '/tmp/repo' }, data: [model()] }));
+    if (url.pathname === '/api/model/default') return res.end(JSON.stringify({ location: { directory: '/tmp/repo' }, data: model() }));
+    if (url.pathname === '/api/mcp') return res.end(JSON.stringify({ location: { directory: '/tmp/repo' }, data: [{ name: 'github', status: { status: 'connected' } }] }));
+    if (url.pathname === '/api/mcp/resource') return res.end(JSON.stringify({ location: { directory: '/tmp/repo' }, data: { resources: [{ server: 'github', name: 'repo', uri: 'github://repo' }], templates: [] } }));
+    if (url.pathname === '/api/experimental/migration/v1') return res.end(JSON.stringify({ status: 'completed' }));
+    res.statusCode = 404; res.end('{}');
+  });
+  try {
+    const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+    const models = await client.availableModels('/tmp/repo');
+    assert.equal(models[0].default, true);
+    assert.equal(models[0].available, true);
+    assert.equal(models[0].supportsTools, true);
+    assert.deepEqual(models[0].inputModalities, ['text', 'image']);
+    const capabilities = await client.capabilities('/tmp/repo');
+    assert.equal(capabilities.transport, '@opencode/client');
+    assert.equal(capabilities.apiGeneration, 'v2');
+    assert.equal(capabilities.durablePromptAdmission, true);
+    assert.deepEqual(capabilities.chat.toolCallingModels, ['lmstudio/qwen3']);
+    assert.equal(capabilities.v1Migration.status, 'completed');
+    const overview = await client.overview('/tmp/repo');
+    assert.equal(overview.healthy, true);
+    assert.equal(overview.version, '2.0.24');
+  } finally { await close(server); }
+});
+
+test('OpenCode V2 permission API refuses persistent always approval without explicit operator authorization', async () => {
+  const seen = [];
+  const server = await listen(async (req, res) => {
+    const url = requestUrl(req);
+    if (url.pathname === '/api/session/ses1/permission/perm1/reply') {
+      seen.push(await body(req));
+      res.statusCode = 204; return res.end();
+    }
+    res.statusCode = 404; res.end('{}');
+  });
+  try {
+    const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+    await client.respondPermission({ sessionId: 'ses1', permissionId: 'perm1', response: 'once' });
+    await assert.rejects(() => client.respondPermission({ sessionId: 'ses1', permissionId: 'perm1', response: 'always' }), /explicit operator-authorized/);
+    await client.respondPermission({ sessionId: 'ses1', permissionId: 'perm1', response: 'always', allowPersistent: true });
+    assert.deepEqual(seen, [{ decision: 'once' }, { decision: 'always' }]);
+  } finally { await close(server); }
+});
+
+test('OpenCode V2 SDK errors do not surface arbitrary runner response bodies', async () => {
   const server = await listen((req, res) => {
     res.statusCode = 500;
     res.setHeader('content-type', 'application/json');
@@ -102,127 +194,15 @@ test('OpenCode SDK failures do not surface arbitrary runner response bodies', as
   try {
     const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
     await assert.rejects(
-      () => client.sessions('/tmp/repo'),
-      (error) => error.name === 'OpenCodeSdkError' && !error.message.includes('echoed-prompt-or-secret-that-must-not-leak'),
+      () => client.serverInfo(),
+      (error) => error.name === 'OpenCodeClientError' && !error.message.includes('echoed-prompt-or-secret-that-must-not-leak'),
     );
-  } finally {
-    await close(server);
-  }
+  } finally { await close(server); }
 });
 
-test('OpenCode provider catalog exposes chat/tool capability metadata from the SDK', async () => {
-  const server = await listen((req, res) => {
-    const url = requestPath(req);
-    res.setHeader('content-type', 'application/json');
-    if (url.pathname === '/provider') return res.end(JSON.stringify({ all: [{ id: 'lmstudio', models: { 'qwen/qwen3': { name: 'Qwen 3', tool_call: true, reasoning: true, attachment: false, limit: { context: 32768, output: 8192 }, modalities: { input: ['text'], output: ['text'] }, status: 'active' } } }], default: { lmstudio: 'qwen/qwen3' }, connected: ['lmstudio'] }));
-    if (url.pathname === '/config') return res.end(JSON.stringify({ model: 'lmstudio/qwen/qwen3' }));
-    res.statusCode = 404; res.end('{}');
-  });
-  try {
-    const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
-    assert.deepEqual(await client.availableModels('/tmp/repo'), [{
-      id: 'lmstudio/qwen/qwen3', providerID: 'lmstudio', modelID: 'qwen/qwen3', name: 'Qwen 3', connected: true,
-      default: true, providerDefault: true,
-      toolCall: true, reasoning: true, attachment: false, contextWindow: 32768, outputLimit: 8192,
-      modalities: { input: ['text'], output: ['text'] }, status: 'active',
-    }]);
-  } finally {
-    await close(server);
-  }
-});
-
-test('OpenCode model discovery binds only the configured global default across providers', async () => {
-  const server = await listen((req, res) => {
-    const url = requestPath(req);
-    res.setHeader('content-type', 'application/json');
-    if (url.pathname === '/provider') return res.end(JSON.stringify({
-      all: [
-        { id: 'alpha', models: { first: { name: 'First' } } },
-        { id: 'beta', models: { second: { name: 'Second' } } },
-      ],
-      default: { alpha: 'first', beta: 'second' },
-      connected: ['alpha', 'beta'],
-    }));
-    if (url.pathname === '/config') return res.end(JSON.stringify({ model: 'beta/second' }));
-    res.statusCode = 404; return res.end('{}');
-  });
-  try {
-    const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
-    const models = await client.availableModels('/tmp/repo');
-    assert.deepEqual(models.filter((model) => model.default).map((model) => model.id), ['beta/second']);
-    assert.deepEqual(models.filter((model) => model.providerDefault).map((model) => model.id), ['alpha/first', 'beta/second']);
-  } finally {
-    await close(server);
-  }
-});
-
-test('OpenCode capabilities include agents, tools, MCP/LSP/formatter status and event support', async () => {
-  const server = await listen((req, res) => {
-    const url = requestPath(req);
-    res.setHeader('content-type', 'application/json');
-    if (url.pathname === '/agent') return res.end(JSON.stringify([{ name: 'build' }, { name: 'reviewer' }]));
-    if (url.pathname === '/provider') return res.end(JSON.stringify({ all: [{ id: 'p', models: { m: { name: 'M', tool_call: true, reasoning: false, attachment: false, limit: { context: 1000, output: 100 } } } }], connected: ['p'] }));
-    if (url.pathname === '/mcp') return res.end(JSON.stringify({ github: { status: 'connected' } }));
-    if (url.pathname === '/lsp') return res.end(JSON.stringify([{ id: 'typescript', status: 'connected' }]));
-    if (url.pathname === '/formatter') return res.end(JSON.stringify([{ id: 'prettier', status: 'connected' }]));
-    if (url.pathname === '/experimental/tool/ids') return res.end(JSON.stringify(['read', 'write', 'bash']));
-    res.statusCode = 404; res.end('{}');
-  });
-  try {
-    const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
-    const capabilities = await client.capabilities('/tmp/repo');
-    assert.equal(capabilities.transport, '@opencode-ai/sdk');
-    assert.equal(capabilities.events, true);
-    assert.equal(capabilities.synchronousPrompt, true);
-    assert.equal(capabilities.permissionResponses, true);
-    assert.deepEqual(capabilities.chat.toolCallingModels, ['p/m']);
-    assert.deepEqual(capabilities.tools, ['read', 'write', 'bash']);
-    assert.deepEqual(capabilities.mcp, [{ name: 'github', status: 'connected' }]);
-    assert.equal(capabilities.agents.some((agent) => agent.id === 'reviewer'), true);
-  } finally {
-    await close(server);
-  }
-});
-
-test('OpenCode SDK chat path supports tool maps, tool schema discovery and permission responses', async () => {
-  const seen = { prompt: null, permission: null, toolQuery: null };
-  const server = await listen(async (req, res) => {
-    const url = requestPath(req);
-    res.setHeader('content-type', 'application/json');
-    if (url.pathname === '/agent') return res.end(JSON.stringify([{ name: 'general' }]));
-    if (url.pathname === '/experimental/tool') {
-      seen.toolQuery = Object.fromEntries(url.searchParams);
-      return res.end(JSON.stringify([{ id: 'read', description: 'Read files' }]));
-    }
-    if (url.pathname === '/session/chat-1/message' && req.method === 'POST') {
-      const chunks = [];
-      for await (const chunk of req) chunks.push(chunk);
-      seen.prompt = JSON.parse(Buffer.concat(chunks));
-      return res.end(JSON.stringify({ info: { role: 'assistant' }, parts: [{ type: 'text', text: 'done' }] }));
-    }
-    if (url.pathname === '/session/chat-1/permissions/perm-1' && req.method === 'POST') {
-      const chunks = [];
-      for await (const chunk of req) chunks.push(chunk);
-      seen.permission = JSON.parse(Buffer.concat(chunks));
-      return res.end(JSON.stringify(true));
-    }
-    res.statusCode = 404; res.end('{}');
-  });
-  try {
-    const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
-    const tools = await client.toolsForModel('/tmp/repo', 'lmstudio/qwen3');
-    const reply = await client.prompt({
-      directory: '/tmp/repo', sessionId: 'chat-1', prompt: 'Inspect the repo', agent: 'general', model: 'lmstudio/qwen3',
-      system: 'You are a read-only project assistant.', tools: { read: true, write: false, bash: false },
-    });
-    await client.respondPermission({ directory: '/tmp/repo', sessionId: 'chat-1', permissionId: 'perm-1', response: 'once' });
-    assert.deepEqual(tools, [{ id: 'read', description: 'Read files' }]);
-    assert.deepEqual(seen.toolQuery, { directory: '/tmp/repo', provider: 'lmstudio', model: 'qwen3' });
-    assert.deepEqual(seen.prompt.tools, { read: true, write: false, bash: false });
-    assert.equal(seen.prompt.system, 'You are a read-only project assistant.');
-    assert.equal(reply.parts[0].text, 'done');
-    assert.deepEqual(seen.permission, { response: 'once' });
-  } finally {
-    await close(server);
+test('planner and supervisor permissions are read-only at the OpenCode harness layer', () => {
+  for (const role of ['planner', 'supervisor']) {
+    const rules = openCodeSessionPermissions(role);
+    assert.equal(rules.some((rule) => rule.action === 'edit' && rule.resource === '*' && rule.effect === 'deny'), true);
   }
 });
