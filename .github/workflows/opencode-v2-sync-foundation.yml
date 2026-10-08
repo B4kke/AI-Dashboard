@@ -41,19 +41,16 @@ jobs:
           if [ "$merge_status" -ne 0 ]; then
             git diff --name-only --diff-filter=U | sort > /tmp/actual-conflicts
             cat > /tmp/expected-conflicts <<'EOF'
-          README.md
-          docs/06-sdk-integrations.md
           package-lock.json
           package.json
           EOF
             sort -o /tmp/expected-conflicts /tmp/expected-conflicts
             diff -u /tmp/expected-conflicts /tmp/actual-conflicts
 
-            git checkout --ours README.md docs/06-sdk-integrations.md package.json package-lock.json
+            git checkout --ours package.json package-lock.json
 
             node --input-type=module <<'NODE'
           import { readFile, writeFile } from 'node:fs/promises';
-
           const pkg = JSON.parse(await readFile('package.json', 'utf8'));
           pkg.dependencies['@modelcontextprotocol/client'] = '2.3.1';
           pkg.dependencies['@modelcontextprotocol/node'] = '2.1.1';
@@ -61,21 +58,10 @@ jobs:
           if (pkg.dependencies['@opencode/client'] !== '2.0.24') throw new Error('OpenCode V2 dependency drifted during merge');
           if (pkg.dependencies['@opencode-ai/sdk']) throw new Error('V1 OpenCode SDK reappeared during merge');
           await writeFile('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
-
-          for (const path of ['README.md', 'docs/06-sdk-integrations.md']) {
-            let text = await readFile(path, 'utf8');
-            text = text.replaceAll('@modelcontextprotocol/server  2.0.0', '@modelcontextprotocol/server  2.3.1');
-            text = text.replaceAll('@modelcontextprotocol/client  2.0.0', '@modelcontextprotocol/client  2.3.1');
-            text = text.replaceAll('@modelcontextprotocol/node    2.0.0', '@modelcontextprotocol/node    2.1.1');
-            text = text.replaceAll('`@modelcontextprotocol/server@2.0.0`', '`@modelcontextprotocol/server@2.3.1`');
-            text = text.replaceAll('`@modelcontextprotocol/client@2.0.0`', '`@modelcontextprotocol/client@2.3.1`');
-            text = text.replaceAll('`@modelcontextprotocol/node@2.0.0`', '`@modelcontextprotocol/node@2.1.1`');
-            await writeFile(path, text);
-          }
           NODE
 
             npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-            git add README.md docs/06-sdk-integrations.md package.json package-lock.json
+            git add package.json package-lock.json
           fi
 
           test -z "$(git diff --name-only --diff-filter=U)"
@@ -83,6 +69,9 @@ jobs:
           test "$(node -p "require('./package.json').dependencies['@modelcontextprotocol/server']")" = '2.3.1'
           test "$(node -p "require('./package.json').dependencies['@modelcontextprotocol/client']")" = '2.3.1'
           test "$(node -p "require('./package.json').dependencies['@modelcontextprotocol/node']")" = '2.1.1'
+          grep -F '@modelcontextprotocol/server  2.3.1' README.md
+          grep -F '`@modelcontextprotocol/server@2.3.1`' docs/06-sdk-integrations.md
+          grep -F '`@modelcontextprotocol/server@2.3.1`' docs/07-mcp-agent-architecture.md
           git diff --cached --check
           git commit -m 'merge: sync current foundation into OpenCode V2 migration'
           git push origin HEAD:feat/opencode-v2-migration
