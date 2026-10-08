@@ -400,9 +400,14 @@ test('base planner orchestration persists workScopes when generated Tasks are fi
       risks: [],
     };
     const opencode = {
-      async sessionStatus() { return { 'planner-session': { type: 'idle' } }; },
-      async messages() {
-        return [{ info: { role: 'assistant' }, parts: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] }];
+      async sessionEvidence({ sessionId }) {
+        return {
+          active: {}, session: { id: sessionId }, missing: false,
+          messages: [
+            { id: 'msg_planner_result', type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] },
+            { id: 'idle_planner_result', type: 'idle', outcome: 'succeeded' },
+          ],
+        };
       },
     };
     const orchestrator = createOrchestrator({ store, opencode, github: {} });

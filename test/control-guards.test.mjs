@@ -178,8 +178,8 @@ async function uncertainDispatchFixture() {
     async startWorker() {
       let run = await store.createRun({ taskId: task.id, projectId: project.id, kind: 'worker', worktreePath: join(dir, 'worktree'), branch: 'ai/dispatch' });
       run = await store.updateRun(run.id, {
-        sessionId: 'session-1', status: 'failed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
-        error: 'OpenCode POST prompt_async timed out after the server may have accepted it',
+        sessionId: 'session-1', promptMessageId: 'msg-dispatch', status: 'failed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+        error: 'OpenCode V2 session.prompt acknowledgement was lost after the server may have accepted it',
       });
       await store.updateTask(task.id, { state: 'backlog' });
       throw new Error('socket closed before 204 acknowledgement');
@@ -200,9 +200,11 @@ test('lost OpenCode prompt acknowledgement keeps the existing session active ins
   try {
     const opencode = {
       async overview() { return { connected: true, healthy: true }; },
-      async availableModels() { return [{ id: 'provider/model', connected: true }]; },
-      async sessionStatus() { return { 'session-1': { type: 'busy' } }; },
-      async messages() { return []; },
+      async availableModels() { return [{ id: 'provider/model', available: true }]; },
+      async promptAdmission({ messageId }) { return { source: 'inbox', value: { id: messageId } }; },
+      async sessionEvidence({ sessionId }) {
+        return { active: { [sessionId]: { type: 'running' } }, session: { id: sessionId }, messages: [], missing: false };
+      },
     };
     const guarded = decorateControlPlane({ orchestrator: fixture.orchestrator, store: fixture.store, locks, opencode });
     const run = await guarded.startWorker(fixture.task.id);
@@ -241,17 +243,20 @@ test('uncertain reconciliation cannot resurrect a Run while a confirmed abort wa
     const firstStarted = new Promise((resolve) => { firstStatusStarted = resolve; });
     let statusCalls = 0;
     const opencode = {
-      async abort() {},
-      async sessionStatus() {
+      async promptAdmission() { return null; },
+      async interrupt() {},
+      async sessionEvidence({ sessionId }) {
         statusCalls += 1;
         if (statusCalls === 1) {
           firstStatusStarted();
-          return new Promise((resolve) => { releaseFirstStatus = () => resolve({ 'session-race': { type: 'busy' } }); });
+          return new Promise((resolve) => { releaseFirstStatus = () => resolve({
+            active: { [sessionId]: { type: 'running' } }, session: { id: sessionId }, messages: [], missing: false,
+          }); });
         }
-        return { 'session-race': { type: 'idle' } };
-      },
-      async messages() {
-        return [{ info: { role: 'assistant' }, parts: [{ type: 'text', text: 'AI_DASHBOARD_RESULT\n{"schemaVersion":1,"kind":"worker","status":"success","summary":"stale","evidence":{"tests":[],"notes":[]},"risks":[],"needsInput":null}' }] }];
+        return {
+          active: {}, session: { id: sessionId }, missing: false,
+          messages: [{ id: 'idle-race', type: 'idle', outcome: 'interrupted' }],
+        };
       },
     };
     const base = createOrchestrator({ store, opencode, github: {}, locks: sharedLocks });
@@ -264,7 +269,7 @@ test('uncertain reconciliation cannot resurrect a Run while a confirmed abort wa
     const reconciled = await reconciling;
     const aborted = await aborting;
 
-    assert.equal(reconciled.status, 'running');
+    assert.equal(reconciled.status, 'dispatch_unknown');
     assert.equal(aborted.status, 'aborted');
     assert.equal(store.getRun(run.id).status, 'aborted');
     assert.equal(store.getRun(run.id).dispatchUncertain, false);
@@ -297,12 +302,15 @@ test('planner quarantine wins atomically over an in-flight worker result applica
     };
     const sharedLocks = new QueuedLocks();
     const opencode = {
-      async sessionStatus() {
+      async sessionEvidence({ sessionId }) {
         statusStarted();
-        return new Promise((resolve) => { releaseStatus = () => resolve({ 'old-session': { type: 'idle' } }); });
-      },
-      async messages() {
-        return [{ info: { role: 'assistant' }, parts: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] }];
+        return new Promise((resolve) => { releaseStatus = () => resolve({
+          active: {}, session: { id: sessionId }, missing: false,
+          messages: [
+            { id: 'msg-old-result', type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] },
+            { id: 'idle-old-result', type: 'idle', outcome: 'succeeded' },
+          ],
+        }); });
       },
     };
     const base = createOrchestrator({ store, opencode, github: {}, locks: sharedLocks });
@@ -355,9 +363,14 @@ test('planner result remains active when candidate locking is busy and materiali
       },
     };
     const opencode = {
-      async sessionStatus() { return {}; },
-      async messages() {
-        return [{ info: { role: 'assistant' }, parts: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] }];
+      async sessionEvidence({ sessionId }) {
+        return {
+          active: {}, session: { id: sessionId }, missing: false,
+          messages: [
+            { id: 'msg-planner-lock', type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] },
+            { id: 'idle-planner-lock', type: 'idle', outcome: 'succeeded' },
+          ],
+        };
       },
     };
     const orchestrator = createOrchestrator({ store, opencode, github: {}, locks: failOnceLocks });
@@ -374,24 +387,27 @@ test('planner result remains active when candidate locking is busy and materiali
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test('unconfirmed idle OpenCode dispatch blocks for input instead of auto-retrying', async () => {
+test('unconfirmed inactive OpenCode V2 dispatch retains ownership instead of auto-retrying', async () => {
   const fixture = await uncertainDispatchFixture();
   try {
     const opencode = {
       async overview() { return { connected: true, healthy: true }; },
-      async availableModels() { return [{ id: 'provider/model', connected: true }]; },
-      async sessionStatus() { return { 'session-1': { type: 'idle' } }; },
-      async messages() { return []; },
+      async availableModels() { return [{ id: 'provider/model', available: true }]; },
+      async promptAdmission() { return null; },
+      async sessionEvidence({ sessionId }) {
+        return { active: {}, session: { id: sessionId }, messages: [], missing: false };
+      },
     };
     const guarded = decorateControlPlane({ orchestrator: fixture.orchestrator, store: fixture.store, locks, opencode });
     const run = await guarded.startWorker(fixture.task.id);
     await fixture.store.updateRun(run.id, { startedAt: new Date(Date.now() - 60_000).toISOString() });
 
     const reconciled = await guarded.reconcileRun(run.id);
-    assert.equal(reconciled.status, 'dispatch_unconfirmed');
+    assert.equal(reconciled.status, 'dispatch_unknown');
     assert.equal(fixture.innerReconcileCalls(), 0);
-    assert.equal(fixture.store.getRun(run.id).status, 'failed');
-    assert.equal(fixture.store.getTask(fixture.task.id).state, 'needs_input');
+    assert.equal(fixture.store.getRun(run.id).status, 'dispatch_unknown');
+    assert.equal(fixture.store.getRun(run.id).dispatchUncertain, true);
+    assert.equal(fixture.store.getTask(fixture.task.id).state, 'in_progress');
     assert.equal(fixture.store.snapshot().runs.length, 1);
   } finally { await rm(fixture.dir, { recursive: true, force: true }); }
 });
@@ -401,16 +417,16 @@ test('malformed runner status cannot resolve an uncertain dispatch', async () =>
   try {
     const opencode = {
       async overview() { return { connected: true, healthy: true }; },
-      async availableModels() { return [{ id: 'provider/model', connected: true }]; },
-      async sessionStatus() { return null; },
-      async messages() { return []; },
+      async availableModels() { return [{ id: 'provider/model', available: true }]; },
+      async promptAdmission() { return null; },
+      async sessionEvidence() { return null; },
     };
     const guarded = decorateControlPlane({ orchestrator: fixture.orchestrator, store: fixture.store, locks, opencode });
     const run = await guarded.startWorker(fixture.task.id);
 
     const reconciled = await guarded.reconcileRun(run.id);
 
-    assert.equal(reconciled.status, 'runner_status_invalid');
+    assert.equal(reconciled.status, 'runner_evidence_invalid');
     assert.equal(fixture.innerReconcileCalls(), 0);
     assert.equal(fixture.store.getRun(run.id).status, 'dispatch_unknown');
     assert.equal(fixture.store.getRun(run.id).dispatchUncertain, true);
@@ -420,22 +436,22 @@ test('malformed runner status cannot resolve an uncertain dispatch', async () =>
 
 test('malformed runner messages cannot release an uncertain dispatch', async () => {
   const fixture = await uncertainDispatchFixture();
-  let messageResponse = null;
+  let evidenceResponse = null;
   try {
     const opencode = {
       async overview() { return { connected: true, healthy: true }; },
-      async availableModels() { return [{ id: 'provider/model', connected: true }]; },
-      async sessionStatus() { return {}; },
-      async messages() { return messageResponse; },
+      async availableModels() { return [{ id: 'provider/model', available: true }]; },
+      async promptAdmission() { return null; },
+      async sessionEvidence() { return evidenceResponse; },
     };
     const guarded = decorateControlPlane({ orchestrator: fixture.orchestrator, store: fixture.store, locks, opencode });
     const run = await guarded.startWorker(fixture.task.id);
     await fixture.store.updateRun(run.id, { startedAt: new Date(Date.now() - 60_000).toISOString() });
 
-    for (const malformed of [null, {}, [{ info: { role: 'assistant' } }]]) {
-      messageResponse = malformed;
+    for (const malformed of [null, {}, { active: {}, session: { id: 'session-1' }, messages: [{ id: 'bad', type: 'assistant' }], missing: false }]) {
+      evidenceResponse = malformed;
       const reconciled = await guarded.reconcileRun(run.id);
-      assert.equal(reconciled.status, 'runner_messages_invalid');
+      assert.equal(reconciled.status, 'runner_evidence_invalid');
       assert.equal(fixture.store.getRun(run.id).status, 'dispatch_unknown');
       assert.equal(fixture.store.getRun(run.id).dispatchUncertain, true);
     }
@@ -457,13 +473,16 @@ test('planner-quarantined worker output is never applied before external session
       sessionId: 'unsafe-session', dispatchUncertain: false,
       quarantineReason: 'Planner recovery quarantined partial work',
     });
-    let phase = 'busy'; let innerCalls = 0; let abortCalls = 0;
+    let phase = 'running'; let innerCalls = 0; let interruptCalls = 0;
     const guarded = decorateControlPlane({
       orchestrator: { async reconcileRun() { innerCalls += 1; throw new Error('quarantined output must not be applied'); } },
       store, locks,
       opencode: {
-        async abort() { abortCalls += 1; },
-        async sessionStatus() { return { 'unsafe-session': { type: phase } }; },
+        async interrupt() { interruptCalls += 1; },
+        async sessionEvidence({ sessionId }) {
+          if (phase === 'running') return { active: { [sessionId]: { type: 'running' } }, session: { id: sessionId }, messages: [], missing: false };
+          return { active: {}, session: { id: sessionId }, messages: [{ id: 'idle-quarantine', type: 'idle', outcome: 'interrupted' }], missing: false };
+        },
       },
     });
 
@@ -474,13 +493,13 @@ test('planner-quarantined worker output is never applied before external session
     assert.equal(activeScopeConflicts(store, project.id, ['server'], 'different-task').length, 1);
     assert.equal(innerCalls, 0);
 
-    phase = 'idle';
+    phase = 'terminal';
     const stopped = await guarded.reconcileRun(run.id);
     assert.equal(stopped.status, 'quarantine_stopped');
     assert.equal(store.getRun(run.id).status, 'failed');
     assert.equal(store.getRun(run.id).dispatchUncertain, false);
     assert.equal(activeScopeConflicts(store, project.id, ['server'], 'different-task').length, 0);
-    assert.equal(abortCalls, 2);
+    assert.equal(interruptCalls, 2);
     assert.equal(innerCalls, 0);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
@@ -496,7 +515,7 @@ test('malformed runner status cannot release a quarantined Run', async () => {
     let innerCalls = 0;
     const guarded = decorateControlPlane({
       orchestrator: { async reconcileRun() { innerCalls += 1; } }, store, locks,
-      opencode: { async abort() {}, async sessionStatus() { return { 'unsafe-session': null }; } },
+      opencode: { async interrupt() {}, async sessionEvidence() { return null; } },
     });
 
     const result = await guarded.reconcileRun(run.id);

@@ -179,7 +179,7 @@ test('OpenCode V2 permission API refuses persistent always approval without expl
   try {
     const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
     await client.respondPermission({ sessionId: 'ses1', permissionId: 'perm1', response: 'once' });
-    await assert.rejects(() => client.respondPermission({ sessionId: 'ses1', permissionId: 'perm1', response: 'always' }), /explicit operator-authorized/);
+    assert.throws(() => client.respondPermission({ sessionId: 'ses1', permissionId: 'perm1', response: 'always' }), /explicit operator-authorized/);
     await client.respondPermission({ sessionId: 'ses1', permissionId: 'perm1', response: 'always', allowPersistent: true });
     assert.deepEqual(seen, [{ decision: 'once' }, { decision: 'always' }]);
   } finally { await close(server); }

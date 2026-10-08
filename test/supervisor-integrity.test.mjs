@@ -10,17 +10,24 @@ import { createOrchestrator } from '../server/orchestrator.mjs';
 
 const exec = promisify(execFile);
 
-function messages(result) {
-  return [{ info: { role: 'assistant' }, parts: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] }];
+function messages(sessionId, result) {
+  return [
+    { id: `msg_result_${sessionId}`, type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n${JSON.stringify(result)}` }] },
+    { id: `idle_result_${sessionId}`, type: 'idle', outcome: 'succeeded' },
+  ];
 }
 
 class FakeOpenCode {
   constructor() { this.next = 1; this.results = new Map(); }
   async createSession() { return { id: `session-${this.next++}` }; }
-  async promptAsync() {}
-  async sessionStatus() { return Object.fromEntries([...this.results.keys()].map((id) => [id, { type: 'idle' }])); }
-  async messages({ sessionId }) { return this.results.get(sessionId) || []; }
-  set(sessionId, result) { this.results.set(sessionId, messages(result)); }
+  async dispatchPrompt() {}
+  async sessionEvidence({ sessionId }) {
+    const result = this.results.get(sessionId);
+    return result
+      ? { active: {}, session: { id: sessionId }, messages: result, missing: false }
+      : { active: { [sessionId]: { type: 'running' } }, session: { id: sessionId }, messages: [], missing: false };
+  }
+  set(sessionId, result) { this.results.set(sessionId, messages(sessionId, result)); }
 }
 
 async function fixture() {
