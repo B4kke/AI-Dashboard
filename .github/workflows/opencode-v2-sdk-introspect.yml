@@ -21,15 +21,12 @@ jobs:
           node-version: 22
           package-manager-cache: false
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Inspect published @opencode/client@2.0.24 durable session log types
+      - name: Inspect published @opencode/client@2.0.24 inbox/execution log shapes
         run: |
           TYPES=node_modules/@opencode/client/dist/promise/generated/types.d.ts
-          echo '--- SessionLogItem union ---'
-          sed -n '3310,3380p' "$TYPES"
-          echo '--- lifecycle type declarations ---'
-          grep -n -E '^export type (SessionInput|SessionExecution|EventSessionInput|EventSessionExecution|SessionEventDurable|EventLogSynced)' "$TYPES" | head -80
-          echo '--- lifecycle declaration bodies ---'
-          for NAME in EventSessionInputAdmitted EventSessionExecutionStarted EventSessionExecutionSucceeded EventSessionExecutionFailed EventSessionExecutionInterrupted SessionEventDurable EventLogSynced; do
+          for NAME in SessionInboxUser SessionInboxEnqueued SessionInboxDelivered SessionInboxCancelled SessionInboxDeliveryChanged SessionExecutionStarted SessionExecutionSucceeded SessionExecutionFailed SessionExecutionInterrupted SessionRetryScheduled EventLogSynced; do
             LINE=$(grep -n "^export type $NAME" "$TYPES" | head -1 | cut -d: -f1 || true)
-            if [ -n "$LINE" ]; then START=$LINE; END=$((LINE+28)); echo "### $NAME @ $LINE"; sed -n "${START},${END}p" "$TYPES"; fi
+            if [ -n "$LINE" ]; then START=$LINE; END=$((LINE+35)); echo "### $NAME @ $LINE"; sed -n "${START},${END}p" "$TYPES"; fi
           done
+          echo '--- related inbox aliases ---'
+          grep -n -E '^export type SessionInbox' "$TYPES" | head -80
