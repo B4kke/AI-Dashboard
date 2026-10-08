@@ -1,4 +1,4 @@
-name: OpenCode V2 durable session-log migration
+name: OpenCode V2 durable-log fixture audit
 
 on:
   push:
@@ -8,33 +8,32 @@ on:
       - .github/workflows/opencode-v2-sdk-introspect.yml
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  migrate:
+  audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: feat/opencode-v2-migration
-          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           package-manager-cache: false
-      - name: Apply runtime migration
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Inventory stale terminal-evidence fixtures
         shell: bash
         run: |
-          set -euo pipefail
-          node scripts/apply-v2-session-log-evidence.mjs
-          rm scripts/apply-v2-session-log-evidence.mjs
+          echo '--- idle/outcome fixtures ---'
+          grep -R --line-number -E "type: ['\"]idle['\"]|outcome: ['\"](succeeded|failed|interrupted)['\"]|idle\.outcome" test README.md AGENTS.md docs server || true
+          echo '--- sessionEvidence fixtures without durable log markers ---'
+          grep -R --line-number 'sessionEvidence' test | head -200 || true
+      - name: Syntax
+        shell: bash
+        run: |
           node --check server/integrations/opencode.mjs
           node --check server/core/runner-session-status.mjs
           node --check server/core/control-guards.mjs
           node --check server/orchestrator.mjs
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add server scripts/apply-v2-session-log-evidence.mjs
-          git commit -m 'fix(opencode): use durable V2 session log for termination evidence'
-          git push origin HEAD:feat/opencode-v2-migration
+      - name: Full tests
+        run: npm test
