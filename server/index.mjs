@@ -13,6 +13,9 @@ import { createRecoverableOpenCode, decorateOpenCodeDispatchRecovery } from './c
 import { decorateOpenCodeOutcome } from './core/opencode-outcome-guard.mjs';
 import { decoratePlannerScopes } from './core/planner-scope-guard.mjs';
 import { decorateRunAdmission } from './core/run-admission-guard.mjs';
+import { installRunStateMachine } from './core/run-state-machine.mjs';
+import { createReliabilityControl } from './core/reliability-control.mjs';
+import { installReliabilityRoutes } from './core/reliability-http.mjs';
 import { OpenCodeClient } from './integrations/opencode.mjs';
 import { GitHubClient } from './integrations/github.mjs';
 import { createResearchService } from './research/service.mjs';
@@ -58,6 +61,7 @@ const rawOpenCode = new OpenCodeClient();
 const github = new GitHubClient();
 
 await store.load();
+installRunStateMachine({ store, ledger: sqlite });
 const opencode = createRecoverableOpenCode({ client: rawOpenCode, store });
 const research = createResearchService({ store, opencode, locks: sqlite });
 await research.initialize();
@@ -70,7 +74,9 @@ const admittedOrchestrator = decorateRunAdmission({ orchestrator: scopedPlannerO
 const diagnosticOrchestrator = decorateCiDiagnostics({ orchestrator: admittedOrchestrator, store, github });
 const integrityOrchestrator = decorateGitHubIntegrity({ orchestrator: diagnosticOrchestrator, store, github });
 const policyOrchestrator = decorateGitHubPolicy({ orchestrator: integrityOrchestrator, store, github });
-const orchestrator = decorateMergeRetry({ orchestrator: policyOrchestrator, store });
+const retryOrchestrator = decorateMergeRetry({ orchestrator: policyOrchestrator, store });
+const reliability = createReliabilityControl({ orchestrator: retryOrchestrator, store, ledger: sqlite, events });
+const orchestrator = reliability.orchestrator;
 const recovery = await orchestrator.recover();
 if (recovery.length) console.log(`AI Dashboard recovered ${recovery.length} state transition(s)`);
 
@@ -108,7 +114,9 @@ const server = createHttpServer({
   store, events, orchestrator, autonomy, research, github, mcp, mcpClients, discovery, setup, master,
   publicDir: PUBLIC, version: VERSION, privateMode,
 });
+installReliabilityRoutes(server, { reliability, privateMode });
 server.listen(port, host, () => {
+  reliability.start();
   autonomy.start();
   console.log(`AI Dashboard listening on http://${host}:${port}`);
   if (privateMode && setup.preferences().completed) {
@@ -124,6 +132,7 @@ function shutdown(signal) {
   shuttingDown = true;
   console.log(`AI Dashboard received ${signal}; stopping control loop`);
   autonomy.stop();
+  reliability.stop();
   Promise.allSettled([Promise.resolve(mcp?.close?.()), master.drainLearning()]).finally(() => {
     server.close(() => { sqlite.close(); process.exit(0); });
   });
