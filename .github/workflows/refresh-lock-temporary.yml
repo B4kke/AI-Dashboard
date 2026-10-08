@@ -22,13 +22,12 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          replacements = {
-              '@modelcontextprotocol/client 2.0.0': '@modelcontextprotocol/client 2.3.1',
-              '@modelcontextprotocol/server 2.0.0': '@modelcontextprotocol/server 2.3.1',
-              '@modelcontextprotocol/node 2.0.0': '@modelcontextprotocol/node 2.1.1',
-              '`@modelcontextprotocol/client`: `2.0.0`': '`@modelcontextprotocol/client`: `2.3.1`',
-              '`@modelcontextprotocol/server`: `2.0.0`': '`@modelcontextprotocol/server`: `2.3.1`',
-              '`@modelcontextprotocol/node`: `2.0.0`': '`@modelcontextprotocol/node`: `2.1.1`',
+          import re
+
+          pins = {
+              '@modelcontextprotocol/client': '2.3.1',
+              '@modelcontextprotocol/server': '2.3.1',
+              '@modelcontextprotocol/node': '2.1.1',
           }
           paths = [Path('README.md'), *Path('docs').glob('*.md')]
           changed = []
@@ -37,8 +36,8 @@ jobs:
                   continue
               original = path.read_text(encoding='utf-8')
               updated = original
-              for old, new in replacements.items():
-                  updated = updated.replace(old, new)
+              for package, version in pins.items():
+                  updated = re.sub(rf'({re.escape(package)}(?:@|\s+|`:\s*`))2\.0\.0', rf'\g<1>{version}', updated)
               if updated != original:
                   path.write_text(updated, encoding='utf-8')
                   changed.append(str(path))
