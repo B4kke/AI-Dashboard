@@ -13,19 +13,25 @@ import { pushTaskBranch } from '../server/git/worktrees.mjs';
 
 const exec = promisify(execFile);
 
-function assistantMessage(value) {
-  return [{ info: { role: 'assistant' }, parts: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\`` }] }];
+function sessionMessages(value) {
+  return [
+    { id: 'msg_assistant', type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\`` }] },
+    { id: 'msg_idle', type: 'idle', outcome: 'succeeded' },
+  ];
 }
 
 class FakeOpenCode {
   constructor() { this.next = 1; this.results = new Map(); }
-  async createSession() { return { id: `session-${this.next++}` }; }
-  async promptAsync() { return null; }
-  async sessionStatus() { return Object.fromEntries([...this.results.keys()].map((id) => [id, { type: 'idle' }])); }
-  async messages({ sessionId }) { return this.results.get(sessionId) || []; }
-  async abort() { return true; }
+  async createSession(input = {}) { return { id: input.id || `session-${this.next++}` }; }
+  async dispatchPrompt() { return null; }
+  async sessionEvidence({ sessionId }) {
+    const messages = this.results.get(sessionId) || [];
+    const terminal = messages.some((message) => message.type === 'idle');
+    return { active: terminal ? {} : { [sessionId]: { type: 'running' } }, session: { id: sessionId, ...(terminal ? { outcome: 'succeeded' } : {}) }, messages, missing: false };
+  }
+  async interrupt() { return { interrupted: true }; }
   async diff() { return []; }
-  set(sessionId, result) { this.results.set(sessionId, assistantMessage(result)); }
+  set(sessionId, result) { this.results.set(sessionId, sessionMessages(result)); }
 }
 
 async function git(cwd, args) { return (await exec('git', ['-C', cwd, ...args], { encoding: 'utf8' })).stdout.trim(); }
