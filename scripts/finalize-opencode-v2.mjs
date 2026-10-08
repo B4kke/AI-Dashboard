@@ -190,7 +190,7 @@ test('canonical OpenCode documentation contains no V1 SDK or completion semantic
   for (const path of canonicalDocs) {
     const text = await readFile(path, 'utf8');
     for (const token of forbiddenCanonicalV1Tokens) {
-      if (text.includes(token)) offenders.push(\`${path}: ${token}\`);
+      if (text.includes(token)) offenders.push(\`\${path}: \${token}\`);
     }
   }
   assert.deepEqual(offenders, []);
