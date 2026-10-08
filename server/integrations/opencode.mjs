@@ -1,6 +1,6 @@
-import { createOpencodeClient } from '@opencode-ai/sdk';
+import { OpenCode } from '@opencode/client';
 import { formatModelRef, normalizeModelRef } from './model-provider.mjs';
-import { assertSessionMessages, assertSessionStatusRecord } from '../core/runner-session-status.mjs';
+import { assertSessionMessages } from '../core/runner-session-status.mjs';
 
 function basicAuth(username, password) {
   if (!password) return null;
@@ -20,25 +20,50 @@ export function normalizeOpencodeAgent(agent) {
   return value || undefined;
 }
 
-function scope(directory) {
-  return directory ? { query: { directory } } : {};
+function v2Location(directory) {
+  return directory ? { location: { directory } } : {};
 }
 
-function responseData(value) {
-  if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'data')) return value.data;
-  return value;
+function v2ModelRef(value) {
+  const model = normalizeModelRef(value);
+  return model ? { providerID: model.providerID, id: model.modelID } : undefined;
+}
+
+function modelId(value) {
+  const providerID = String(value?.providerID || '').trim();
+  const id = String(value?.id || value?.modelID || '').trim();
+  return providerID && id ? `${providerID}/${id}` : null;
+}
+
+function statusCode(error) {
+  const values = [error?.status, error?.cause?.status, error?.response?.status, error?.detail];
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isInteger(parsed)) return parsed;
+  }
+  return null;
+}
+
+function isNotFound(error) {
+  return statusCode(error) === 404;
 }
 
 function safeSdkError(operation, error) {
-  const status = Number(error?.status || error?.response?.status);
-  const wrapped = new Error(`OpenCode SDK ${operation} failed${Number.isInteger(status) ? ` (HTTP ${status})` : ''}`);
-  wrapped.name = 'OpenCodeSdkError';
+  const status = statusCode(error);
+  const wrapped = new Error(`OpenCode V2 client ${operation} failed${Number.isInteger(status) ? ` (HTTP ${status})` : ''}`);
+  wrapped.name = 'OpenCodeClientError';
   if (Number.isInteger(status)) wrapped.status = status;
   return wrapped;
 }
 
+function arrayData(value) {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.data)) return value.data;
+  return [];
+}
+
 function normalizeAgent(agent) {
-  const id = String(agent?.name || agent?.id || '').trim();
+  const id = String(agent?.id || agent?.name || '').trim();
   if (!id) return null;
   return {
     id,
@@ -46,16 +71,38 @@ function normalizeAgent(agent) {
     description: typeof agent?.description === 'string' ? agent.description : null,
     mode: typeof agent?.mode === 'string' ? agent.mode : null,
     hidden: agent?.hidden === true,
-    native: agent?.native === true,
+    primary: ['primary', 'all'].includes(agent?.mode) && agent?.hidden !== true,
   };
 }
 
 function normalizeMcpStatuses(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
-  return Object.entries(value).map(([name, status]) => ({
-    name,
-    status: String(status?.status || status?.type || 'unknown'),
-  }));
+  return arrayData(value).map((server) => ({
+    name: String(server?.name || '').trim(),
+    status: String(server?.status?.status || 'unknown'),
+    integrationID: server?.integrationID || null,
+  })).filter((server) => server.name);
+}
+
+const GIT_MUTATION_DENIES = Object.freeze([
+  'git push *',
+  'git commit *',
+  'git reset *',
+  'git clean *',
+  'git merge *',
+  'git rebase *',
+  'git cherry-pick *',
+  'git tag *',
+]);
+
+export function openCodeSessionPermissions(kind = 'worker') {
+  const rules = [
+    { action: 'external_directory', resource: '*', effect: 'deny' },
+    ...GIT_MUTATION_DENIES.map((resource) => ({ action: 'shell', resource, effect: 'deny' })),
+  ];
+  if (kind === 'planner' || kind === 'supervisor') {
+    rules.push({ action: 'edit', resource: '*', effect: 'deny' });
+  }
+  return rules;
 }
 
 export class OpenCodeClient {
@@ -68,7 +115,7 @@ export class OpenCodeClient {
     this.baseUrl = normalizeOpenCodeUrl(baseUrl);
     this.timeoutMs = timeoutMs;
     const authorization = basicAuth(username, password);
-    this.client = createOpencodeClient({
+    this.client = OpenCode.make({
       baseUrl: this.baseUrl,
       headers: authorization ? { authorization } : undefined,
     });
@@ -76,238 +123,292 @@ export class OpenCodeClient {
 
   async call(operation, fn) {
     try {
-      const value = await fn();
-      if (value?.error) throw Object.assign(new Error('SDK request failed'), { response: value.response });
-      return responseData(value);
+      return await fn();
     } catch (error) {
       throw safeSdkError(operation, error);
     }
   }
 
-  options(directory, timeoutMs = this.timeoutMs) {
-    return { ...scope(directory), signal: AbortSignal.timeout(timeoutMs), throwOnError: true };
+  requestOptions(timeoutMs = this.timeoutMs) {
+    return { signal: AbortSignal.timeout(timeoutMs) };
   }
 
-  sessions(directory) {
-    return this.call('session.list', () => this.client.session.list(this.options(directory)));
+  serverInfo() {
+    return this.call('server.info', () => this.client.server.info(this.requestOptions(10_000)));
   }
 
-  async sessionStatus(directory) {
-    return assertSessionStatusRecord(await this.call('session.status', () => this.client.session.status(this.options(directory))));
+  async sessions(directory, limit = 100) {
+    const value = await this.call('session.list', () => this.client.session.list(
+      { ...(directory ? { directory } : {}), limit, order: 'desc' },
+      this.requestOptions(10_000),
+    ));
+    return arrayData(value);
   }
 
-  providers(directory) {
-    return this.call('provider.list', () => this.client.provider.list(this.options(directory, 10_000)));
+  activeSessions() {
+    return this.call('session.active', () => this.client.session.active(this.requestOptions(10_000)));
   }
 
-  configuration(directory) {
-    return this.call('config.get', () => this.client.config.get(this.options(directory, 10_000)));
+  getSession({ sessionId }) {
+    return this.call('session.get', () => this.client.session.get(
+      { sessionID: sessionId },
+      this.requestOptions(10_000),
+    ));
   }
 
   async availableAgents(directory) {
-    const value = await this.call('app.agents', () => this.client.app.agents(this.options(directory, 10_000)));
-    return (Array.isArray(value) ? value : []).map(normalizeAgent).filter(Boolean);
+    const value = await this.call('agent.list', () => this.client.agent.list(
+      v2Location(directory),
+      this.requestOptions(10_000),
+    ));
+    return arrayData(value).map(normalizeAgent).filter(Boolean);
   }
 
   async resolveAgent(directory, requested) {
     const wanted = String(requested || '').trim();
     if (!wanted) return undefined;
     const agents = await this.availableAgents(directory);
-    return agents.some((agent) => agent.id === wanted || agent.name === wanted) ? wanted : undefined;
+    const match = agents.find((agent) => agent.id === wanted || agent.name === wanted);
+    return match?.primary ? match.id : undefined;
   }
 
-  async createSession({ directory, title, parentID }) {
-    const body = { title };
-    if (parentID) body.parentID = parentID;
-    return this.call('session.create', () => this.client.session.create({ ...this.options(directory), body }));
-  }
-
-  async findSessionByTitle({ directory, title }) {
-    const value = await this.sessions(directory);
-    const sessions = Array.isArray(value) ? value : [];
-    const matches = sessions.filter((session) => session?.title === title && session?.id);
-    if (matches.length > 1) throw new Error(`OpenCode session identity is ambiguous for title ${title}`);
-    return matches[0] || null;
-  }
-
-  async messages({ directory, sessionId, limit = 50 }) {
-    return assertSessionMessages(await this.call('session.messages', () => this.client.session.messages({
-      ...this.options(directory), path: { id: sessionId }, query: { ...(directory ? { directory } : {}), limit },
-    })));
-  }
-
-  async prompt({ directory, sessionId, prompt, agent, model, tools, system }) {
-    const body = { parts: [{ type: 'text', text: prompt }] };
+  async createSession({ directory, title, parentID, id, agent, model, kind = 'worker', metadata } = {}) {
     const resolvedAgent = await this.resolveAgent(directory, agent);
-    if (resolvedAgent) body.agent = resolvedAgent;
-    if (model) body.model = normalizeModelRef(model);
-    if (tools && typeof tools === 'object') body.tools = tools;
-    if (typeof system === 'string' && system.trim()) body.system = system;
-    return this.call('session.prompt', () => this.client.session.prompt({
-      ...this.options(directory, 120_000), path: { id: sessionId }, body,
-    }));
+    const input = {
+      ...(id ? { id } : {}),
+      ...(parentID ? { parentID } : {}),
+      ...(title ? { title } : {}),
+      ...(resolvedAgent ? { agent: resolvedAgent } : {}),
+      ...(model ? { model: v2ModelRef(model) } : {}),
+      ...(directory ? { location: { directory } } : {}),
+      metadata: { ...(metadata || {}), aiDashboard: true, runKind: kind },
+      permissions: openCodeSessionPermissions(kind),
+    };
+    return this.call('session.create', () => this.client.session.create(input, this.requestOptions(10_000)));
   }
 
-  async promptAsync({ directory, sessionId, prompt, agent, model, tools }) {
-    const body = { parts: [{ type: 'text', text: prompt }] };
-    const resolvedAgent = await this.resolveAgent(directory, agent);
-    if (resolvedAgent) body.agent = resolvedAgent;
-    if (model) body.model = normalizeModelRef(model);
-    if (tools && typeof tools === 'object') body.tools = tools;
-    return this.call('session.promptAsync', () => this.client.session.promptAsync({
-      ...this.options(directory, 10_000), path: { id: sessionId }, body,
-    }));
+  async messages({ sessionId, limit = 100 }) {
+    const value = await this.call('message.list', () => this.client.message.list(
+      { sessionID: sessionId, limit, order: 'asc' },
+      this.requestOptions(10_000),
+    ));
+    return assertSessionMessages(arrayData(value));
   }
 
-  abort({ directory, sessionId }) {
-    return this.call('session.abort', () => this.client.session.abort({ ...this.options(directory), path: { id: sessionId } }));
+  async sessionEvidence({ sessionId, limit = 100 } = {}) {
+    if (!sessionId) throw new Error('OpenCode session evidence requires a session id');
+    const active = await this.activeSessions();
+    let session = null;
+    try {
+      session = await this.getSession({ sessionId });
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+      return { active, session: null, messages: [], missing: true };
+    }
+    const messages = await this.messages({ sessionId, limit });
+    return { active, session, messages, missing: false };
   }
 
-  diff({ directory, sessionId }) {
-    return this.call('session.diff', () => this.client.session.diff({ ...this.options(directory), path: { id: sessionId } }));
+  async promptAdmission({ sessionId, messageId }) {
+    if (!sessionId || !messageId) return null;
+    try {
+      const message = await this.call('session.message.get', () => this.client.session.message.get(
+        { sessionID: sessionId, messageID: messageId },
+        this.requestOptions(10_000),
+      ));
+      if (message?.id === messageId) return { source: 'message', value: message };
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
+    try {
+      const value = await this.call('session.inbox.list', () => this.client.session.inbox.list(
+        { sessionID: sessionId },
+        this.requestOptions(10_000),
+      ));
+      const match = arrayData(value).find((item) => item?.id === messageId);
+      return match ? { source: 'inbox', value: match } : null;
+    } catch (error) {
+      if (isNotFound(error)) return null;
+      throw error;
+    }
   }
 
-  deleteSession({ directory, sessionId }) {
-    return this.call('session.delete', () => this.client.session.delete({ ...this.options(directory), path: { id: sessionId } }));
+  dispatchPrompt({ sessionId, prompt, messageId, delivery = 'queue' }) {
+    if (!messageId) throw new Error('OpenCode V2 prompt dispatch requires a deterministic message id');
+    return this.call('session.prompt', () => this.client.session.prompt(
+      { sessionID: sessionId, id: messageId, text: prompt, delivery },
+      this.requestOptions(120_000),
+    ));
+  }
+
+  interrupt({ sessionId, resume = false }) {
+    return this.call('session.interrupt', () => this.client.session.interrupt(
+      { sessionID: sessionId, resume },
+      this.requestOptions(10_000),
+    ));
+  }
+
+  diff({ sessionId }) {
+    return this.call('session.diff', () => this.client.session.diff(
+      { sessionID: sessionId },
+      this.requestOptions(10_000),
+    ));
+  }
+
+  deleteSession({ sessionId }) {
+    return this.call('session.remove', () => this.client.session.remove(
+      { sessionID: sessionId },
+      this.requestOptions(10_000),
+    ));
   }
 
   async availableModels(directory) {
-    const [value, configuration] = await Promise.all([
-      this.providers(directory),
-      this.configuration(directory).catch(() => null),
+    const [catalog, defaultValue] = await Promise.all([
+      this.call('model.list', () => this.client.model.list(v2Location(directory), this.requestOptions(10_000))),
+      this.call('model.default', () => this.client.model.default(v2Location(directory), this.requestOptions(10_000))).catch(() => null),
     ]);
-    const providers = Array.isArray(value?.all) ? value.all : [];
-    const connected = new Set(Array.isArray(value?.connected) ? value.connected : []);
-    const defaults = value?.default && typeof value.default === 'object' ? value.default : {};
-    let configuredDefault = null;
-    try { configuredDefault = formatModelRef(configuration?.model || null); } catch { /* invalid/missing global default fails closed */ }
-    const models = [];
-    for (const provider of providers) {
-      const providerID = provider?.id || provider?.providerID;
-      if (!providerID) continue;
-      const entries = provider?.models && typeof provider.models === 'object' ? Object.entries(provider.models) : [];
-      for (const [modelID, info] of entries) {
-        models.push({
-          id: `${providerID}/${modelID}`,
-          providerID,
-          modelID,
-          name: info?.name || modelID,
-          connected: connected.has(providerID),
-          default: configuredDefault === `${providerID}/${modelID}`,
-          providerDefault: defaults[providerID] === modelID,
-          toolCall: info?.tool_call === true,
-          reasoning: info?.reasoning === true,
-          attachment: info?.attachment === true,
-          contextWindow: Number.isFinite(info?.limit?.context) ? info.limit.context : null,
-          outputLimit: Number.isFinite(info?.limit?.output) ? info.limit.output : null,
-          modalities: info?.modalities || null,
-          status: info?.status || null,
-        });
-      }
-    }
-    return models.sort((a, b) => a.id.localeCompare(b.id));
+    const defaultModel = defaultValue?.data || null;
+    const defaultId = modelId(defaultModel);
+    return arrayData(catalog).map((info) => {
+      const providerID = String(info?.providerID || '').trim();
+      const id = String(info?.id || '').trim();
+      if (!providerID || !id) return null;
+      return {
+        id: `${providerID}/${id}`,
+        providerID,
+        modelID: id,
+        upstreamModelID: info?.modelID || id,
+        name: info?.name || id,
+        available: info?.enabled === true,
+        default: defaultId === `${providerID}/${id}`,
+        supportsTools: info?.capabilities?.tools === true,
+        inputModalities: Array.isArray(info?.capabilities?.input) ? info.capabilities.input : [],
+        outputModalities: Array.isArray(info?.capabilities?.output) ? info.capabilities.output : [],
+        contextWindow: Number.isFinite(info?.limit?.context) ? info.limit.context : null,
+        inputLimit: Number.isFinite(info?.limit?.input) ? info.limit.input : null,
+        outputLimit: Number.isFinite(info?.limit?.output) ? info.limit.output : null,
+        variants: Array.isArray(info?.variants) ? info.variants.map((variant) => variant?.id).filter(Boolean) : [],
+        status: info?.status || null,
+      };
+    }).filter(Boolean).sort((a, b) => a.id.localeCompare(b.id));
   }
 
-  mcpStatus(directory) {
-    return this.call('mcp.status', () => this.client.mcp.status(this.options(directory, 10_000)));
+  mcpServers(directory) {
+    return this.call('mcp.list', () => this.client.mcp.list(v2Location(directory), this.requestOptions(10_000)));
+  }
+
+  async mcpStatus(directory) {
+    return normalizeMcpStatuses(await this.mcpServers(directory));
+  }
+
+  mcpResources(directory) {
+    return this.call('mcp.resource.catalog', () => this.client.mcp.resource.catalog(
+      v2Location(directory),
+      this.requestOptions(10_000),
+    ));
   }
 
   async ensureMcpServer({ name, url, directory } = {}) {
     const serverName = String(name || '').trim();
     if (!/^[A-Za-z0-9._-]{1,120}$/.test(serverName)) throw new Error('OpenCode MCP server name is invalid');
     const remoteUrl = normalizeOpenCodeUrl(url);
-    const current = await this.mcpStatus(directory).catch(() => ({}));
-    if (current?.[serverName]?.status === 'connected') return { name: serverName, status: 'connected', changed: false };
-    const value = await this.call('mcp.add', () => this.client.mcp.add({
-      ...this.options(directory, 10_000),
-      body: { name: serverName, config: { type: 'remote', url: remoteUrl, enabled: true } },
-    }));
-    const status = value?.[serverName]?.status || (await this.mcpStatus(directory).catch(() => ({})))?.[serverName]?.status || 'unknown';
+    const current = await this.mcpStatus(directory).catch(() => []);
+    const existing = current.find((server) => server.name === serverName);
+    if (existing?.status === 'connected') return { ...existing, changed: false };
+    if (!existing) {
+      await this.call('mcp.add', () => this.client.mcp.add(
+        {
+          server: serverName,
+          ...(directory ? { location: { directory } } : {}),
+          config: { type: 'remote', url: remoteUrl, disabled: false, protocol: '2026-07-28' },
+        },
+        this.requestOptions(10_000),
+      ));
+    }
+    await this.call('mcp.connect', () => this.client.mcp.connect(
+      { server: serverName, ...(directory ? { location: { directory } } : {}) },
+      this.requestOptions(10_000),
+    )).catch(() => null);
+    const status = (await this.mcpStatus(directory).catch(() => [])).find((server) => server.name === serverName)?.status || 'unknown';
     return { name: serverName, status, changed: true };
   }
 
-  lspStatus(directory) {
-    return this.call('lsp.status', () => this.client.lsp.status(this.options(directory, 10_000)));
+  v1MigrationStatus() {
+    return this.call('migration.v1.status', () => this.client.migration.v1.status(this.requestOptions(10_000)));
   }
 
-  formatterStatus(directory) {
-    return this.call('formatter.status', () => this.client.formatter.status(this.options(directory, 10_000)));
-  }
-
-  toolIds(directory) {
-    return this.call('tool.ids', () => this.client.tool.ids(this.options(directory, 10_000)));
-  }
-
-  async toolsForModel(directory, model) {
-    const resolved = normalizeModelRef(model);
-    if (!resolved) throw new Error('OpenCode tool discovery requires provider/model');
-    return this.call('tool.list', () => this.client.tool.list({
-      ...this.options(directory, 10_000),
-      query: { ...(directory ? { directory } : {}), provider: resolved.providerID, model: resolved.modelID },
-    }));
-  }
-
-  respondPermission({ directory, sessionId, permissionId, response }) {
+  respondPermission({ sessionId, permissionId, response, allowPersistent = false, message } = {}) {
     if (!['once', 'always', 'reject'].includes(response)) throw new Error('OpenCode permission response must be once, always, or reject');
-    return this.call('session.permission', () => this.client.postSessionIdPermissionsPermissionId({
-      ...this.options(directory),
-      path: { id: sessionId, permissionID: permissionId },
-      body: { response },
-    }));
+    if (response === 'always' && allowPersistent !== true) {
+      throw new Error('Persistent OpenCode permission approval requires an explicit operator-authorized path');
+    }
+    return this.call('permission.reply', () => this.client.permission.reply(
+      { sessionID: sessionId, requestID: permissionId, decision: response, ...(message ? { message } : {}) },
+      this.requestOptions(10_000),
+    ));
   }
 
-  subscribeEvents(directory) {
+  subscribeEvents({ signal } = {}) {
     try {
-      return this.client.event.subscribe({ ...scope(directory), throwOnError: true });
+      return this.client.event.subscribe(signal ? { signal } : undefined);
     } catch (error) {
       throw safeSdkError('event.subscribe', error);
     }
   }
 
   async capabilities(directory) {
-    const [agents, models, mcp, lsp, formatters, tools] = await Promise.all([
+    const [agents, models, mcp, resources, migration] = await Promise.all([
       this.availableAgents(directory),
       this.availableModels(directory),
-      this.mcpStatus(directory).catch(() => ({})),
-      this.lspStatus(directory).catch(() => []),
-      this.formatterStatus(directory).catch(() => []),
-      this.toolIds(directory).catch(() => []),
+      this.mcpStatus(directory).catch(() => []),
+      this.mcpResources(directory).catch(() => null),
+      this.v1MigrationStatus().catch(() => null),
     ]);
     return {
-      transport: '@opencode-ai/sdk',
+      transport: '@opencode/client',
+      apiGeneration: 'v2',
       events: true,
-      synchronousPrompt: true,
+      durablePromptAdmission: true,
+      deterministicSessionIds: true,
+      deterministicMessageIds: true,
+      terminalOutcomes: ['succeeded', 'failed', 'interrupted'],
       permissionResponses: true,
       agents,
       models,
       chat: {
-        toolCallingModels: models.filter((model) => model.toolCall).map((model) => model.id),
-        reasoningModels: models.filter((model) => model.reasoning).map((model) => model.id),
+        toolCallingModels: models.filter((model) => model.supportsTools).map((model) => model.id),
       },
-      tools: Array.isArray(tools) ? tools.filter((item) => typeof item === 'string') : [],
-      mcp: normalizeMcpStatuses(mcp),
-      lsp: Array.isArray(lsp) ? lsp : [],
-      formatters: Array.isArray(formatters) ? formatters : [],
+      mcp,
+      mcpResources: resources ? {
+        resources: Array.isArray(resources?.resources) ? resources.resources.length : 0,
+        templates: Array.isArray(resources?.templates) ? resources.templates.length : 0,
+      } : null,
+      v1Migration: migration,
     };
   }
 
   async overview(directory) {
-    const [sessions, statuses, agents] = await Promise.all([
+    const [info, sessions, active, agents, migration] = await Promise.all([
+      this.serverInfo(),
       this.sessions(directory),
-      this.sessionStatus(directory),
+      this.activeSessions(),
       this.availableAgents(directory),
+      this.v1MigrationStatus().catch(() => null),
     ]);
-    const list = Array.isArray(sessions) ? sessions : [];
     return {
       connected: true,
-      healthy: true,
+      healthy: typeof info?.version === 'string' && info.version.length > 0,
       url: this.baseUrl,
-      version: list.find((session) => session?.version)?.version || null,
-      transport: '@opencode-ai/sdk',
+      version: info?.version || null,
+      pid: Number.isInteger(info?.pid) ? info.pid : null,
+      transport: '@opencode/client',
+      apiGeneration: 'v2',
       eventStream: true,
-      sessionCount: list.length,
-      activeSessionCount: Object.values(statuses || {}).filter((status) => status?.type === 'busy').length,
+      durablePromptAdmission: true,
+      sessionCount: sessions.length,
+      activeSessionCount: active && typeof active === 'object' && !Array.isArray(active) ? Object.keys(active).length : 0,
       agentCount: agents.length,
+      v1Migration: migration,
     };
   }
 }
