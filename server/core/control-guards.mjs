@@ -234,7 +234,7 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
 
     let evidence;
     try {
-      evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId);
+      evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId, run.promptMessageId);
     } catch (error) {
       await store.updateRun(run.id, { error: `OpenCode V2 session evidence unavailable while reconciling uncertain dispatch: ${error.message}` });
       return { status: 'runner_unavailable', error: error.message };
@@ -275,7 +275,7 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
     }
     await opencode.interrupt({ sessionId: run.sessionId }).catch(() => {});
     try {
-      const evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId);
+      const evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId, run.promptMessageId);
       if (!sessionTerminationConfirmed(evidence)) {
         await store.updateRun(run.id, {
           status: 'dispatch_unknown', dispatchUncertain: true,
@@ -307,7 +307,7 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
   async function reconcileTerminalTermination(run) {
     if (!opencode || !run?.sessionId) return { status: 'terminal_termination_pending', runId: run.id };
     try {
-      const evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId);
+      const evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId, run.promptMessageId);
       if (!sessionTerminationConfirmed(evidence)) return { status: 'terminal_termination_pending', runId: run.id };
       await store.updateRun(run.id, {
         dispatchUncertain: false, quarantineReason: null, legacyTerminationUnconfirmed: false,

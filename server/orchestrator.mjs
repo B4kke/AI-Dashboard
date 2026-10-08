@@ -747,7 +747,7 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const raw = await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 });
-        const evidence = inspectSessionEvidence(raw, run.sessionId);
+        const evidence = inspectSessionEvidence(raw, run.sessionId, run.promptMessageId);
         if (sessionTerminationConfirmed(evidence)) return true;
         if (evidence.valid !== true || evidence.state === 'inactive_unknown') return false;
       } catch { return false; }
@@ -791,7 +791,7 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       await store.updateRun(run.id, { error: `OpenCode V2 unavailable during reconciliation: ${error.message}` });
       return { status: 'runner_unavailable', error: error.message };
     }
-    const evidence = inspectSessionEvidence(raw, run.sessionId);
+    const evidence = inspectSessionEvidence(raw, run.sessionId, run.promptMessageId);
     if (!evidence.valid) {
       const message = 'OpenCode V2 returned malformed session evidence; retaining Run ownership.';
       await store.updateRun(run.id, { error: message });
@@ -953,7 +953,7 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     for (const run of state.runs.filter((item) => item.legacyTerminationUnconfirmed === true)) {
       let evidence = { valid: false, state: 'invalid' };
       if (run.sessionId) {
-        try { evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId); }
+        try { evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId, run.promptMessageId); }
         catch { evidence = { valid: false, state: 'invalid' }; }
       }
       if (sessionTerminationConfirmed(evidence)) {
@@ -990,7 +990,7 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
         continue;
       }
       let evidence = { valid: false, state: 'invalid' };
-      try { evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId); }
+      try { evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId, run.promptMessageId); }
       catch { evidence = { valid: false, state: 'invalid' }; }
       if (!evidence.valid) {
         await store.updateRun(run.id, { error: 'OpenCode V2 evidence is unavailable or malformed during restart recovery; retaining Run ownership.' });
