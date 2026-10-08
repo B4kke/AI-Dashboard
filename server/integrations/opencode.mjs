@@ -1,5 +1,5 @@
 import { OpenCode } from '@opencode/client';
-import { formatModelRef, normalizeModelRef } from './model-provider.mjs';
+import { normalizeModelRef } from './model-provider.mjs';
 import { assertSessionMessages } from '../core/runner-session-status.mjs';
 
 function basicAuth(username, password) {
