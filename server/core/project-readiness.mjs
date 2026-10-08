@@ -207,9 +207,9 @@ export async function inspectProjectReadiness({
     const requestedModel = modelSelection.id;
     try {
       const models = await opencode?.availableModels?.(project.repoPath);
-      const connected = (Array.isArray(models) ? models : []).filter((model) => model?.connected === true);
-      const selected = requestedModel ? connected.find((model) => model.id === requestedModel) : null;
-      const defaultModels = requestedModel ? [] : connected.filter((model) => model.default === true);
+      const availableModels = (Array.isArray(models) ? models : []).filter((model) => model?.available === true);
+      const selected = requestedModel ? availableModels.find((model) => model.id === requestedModel) : null;
+      const defaultModels = requestedModel ? [] : availableModels.filter((model) => model.default === true);
       const defaultModel = defaultModels.length === 1 ? defaultModels[0] : null;
       const available = requestedModel ? Boolean(selected) : Boolean(defaultModel);
       checks.push(check(
@@ -218,9 +218,9 @@ export async function inspectProjectReadiness({
         available
           ? (requestedModel ? `Selected model ${requestedModel} is available.` : `OpenCode default model ${defaultModel.id} is available.`)
           : (requestedModel
-            ? `Selected model ${requestedModel} is not available from a connected OpenCode provider.`
+            ? `Selected model ${requestedModel} is not available from a OpenCode V2 model catalog.`
             : (defaultModels.length > 1 ? 'OpenCode reported multiple global default models; execution identity is ambiguous.' : 'No connected OpenCode global default model could be identified.')),
-        { requested: requestedModel, resolvedDefault: defaultModel?.id || null, defaultCount: defaultModels.length, connectedCount: connected.length },
+        { requested: requestedModel, resolvedDefault: defaultModel?.id || null, defaultCount: defaultModels.length, availableCount: availableModels.length },
         { scope: modelSelection.scope },
       ));
     } catch {

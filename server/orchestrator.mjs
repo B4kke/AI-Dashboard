@@ -5,7 +5,7 @@ import { materializePlannerResult } from './core/planner-materialization.mjs';
 import { parseGitHubRemote, parseGitHubRepository } from './integrations/github.mjs';
 import { normalizeOpencodeAgent } from './integrations/opencode.mjs';
 import { projectAdmissionIdentity, taskAdmissionIdentity } from './core/admission-identity.mjs';
-import { inspectSessionMessages, inspectSessionStatusRecord } from './core/runner-session-status.mjs';
+import { inspectSessionEvidence, sessionTerminationConfirmed } from './core/runner-session-status.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -161,17 +161,30 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     });
     try {
       const title = `${kind === 'supervisor' ? '[REVIEW]' : `[${task.priority}]`} ${task.title}`;
-      const session = await opencode.createSession({ directory: worktreePath, title });
-      if (!session?.id) throw new Error('OpenCode did not return a session id');
-      run = await store.updateRun(run.id, { sessionId: session.id, status: 'running', startedAt: new Date().toISOString() });
-      await opencode.promptAsync({ directory: worktreePath, sessionId: session.id, prompt, agent: normalizeOpencodeAgent(task.agentRole), model: task.model || undefined });
+      const session = await opencode.createSession({
+        directory: worktreePath,
+        title,
+        agent: normalizeOpencodeAgent(task.agentRole),
+        model: task.model || undefined,
+        kind,
+        metadata: { aiDashboardRunId: run.id, aiDashboardTaskId: task.id },
+      });
+      if (!session?.id) throw new Error('OpenCode V2 did not return a session id');
+      run = await store.updateRun(run.id, {
+        sessionId: session.id,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        harnessApi: 'opencode-v2',
+      });
+      await opencode.dispatchPrompt({ sessionId: session.id, prompt });
       return store.getRun(run.id);
     } catch (error) {
       const current = store.getRun(run.id);
+      if (current?.dispatchUncertain === true || current?.status === 'dispatch_unknown') return current;
       if (current?.sessionId) {
         await store.updateRun(run.id, {
           status: 'dispatch_unknown', dispatchUncertain: true,
-          error: `Run dispatch failed after session creation and may have been accepted: ${error.message}`,
+          error: `Run dispatch failed after deterministic OpenCode V2 session creation and may have been admitted: ${error.message}`,
           finishedAt: null, terminationConfirmedAt: null,
         });
       } else {
@@ -729,13 +742,18 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
   }
 
   async function abortAndConfirmStopped(run) {
-    if (!run.sessionId || !run.worktreePath) return false;
-    await opencode.abort({ directory: run.worktreePath, sessionId: run.sessionId }).catch(() => {});
-    try {
-      const statuses = await opencode.sessionStatus(run.worktreePath);
-      const evidence = inspectSessionStatusRecord(statuses, run.sessionId);
-      return evidence.valid && (!evidence.present || evidence.status.type === 'idle');
-    } catch { return false; }
+    if (!run.sessionId) return false;
+    await opencode.interrupt({ sessionId: run.sessionId }).catch(() => {});
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const raw = await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 });
+        const evidence = inspectSessionEvidence(raw, run.sessionId);
+        if (sessionTerminationConfirmed(evidence)) return true;
+        if (evidence.valid !== true || evidence.state === 'inactive_unknown') return false;
+      } catch { return false; }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
   }
 
   async function markAbortedWorkNeedsInput(run, message) {
@@ -765,48 +783,72 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       await failRun(run, message);
       return { status: 'timed_out' };
     }
-    let statuses;
-    let messages;
+
+    let raw;
     try {
-      [statuses, messages] = await Promise.all([
-        opencode.sessionStatus(run.worktreePath),
-        opencode.messages({ directory: run.worktreePath, sessionId: run.sessionId, limit: 50 }),
-      ]);
+      raw = await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 });
     } catch (error) {
-      await store.updateRun(run.id, { error: `Runner unavailable during reconciliation: ${error.message}` });
+      await store.updateRun(run.id, { error: `OpenCode V2 unavailable during reconciliation: ${error.message}` });
       return { status: 'runner_unavailable', error: error.message };
     }
-    const statusEvidence = inspectSessionStatusRecord(statuses, run.sessionId);
-    if (!statusEvidence.valid) {
-      const message = 'Runner returned malformed session-status evidence; retaining Run ownership.';
+    const evidence = inspectSessionEvidence(raw, run.sessionId);
+    if (!evidence.valid) {
+      const message = 'OpenCode V2 returned malformed session evidence; retaining Run ownership.';
       await store.updateRun(run.id, { error: message });
-      return { status: 'runner_status_invalid', error: message };
+      return { status: 'runner_evidence_invalid', error: message };
     }
-    const messageEvidence = inspectSessionMessages(messages);
-    if (!messageEvidence.valid) {
-      const message = 'Runner returned malformed session-message evidence; retaining Run ownership.';
-      await store.updateRun(run.id, { error: message });
-      return { status: 'runner_messages_invalid', error: message };
+
+    const attempts = Math.max(Number(run.retryAttempts || 0), Number(evidence.retry?.attempt || 0));
+    if (attempts > project.autonomy.maxRetryAttempts) {
+      const message = `OpenCode V2 exceeded retry budget (${project.autonomy.maxRetryAttempts})`;
+      if (!await abortAndConfirmStopped(run)) return quarantineUnconfirmedTermination(run, message);
+      await failRun(run, message);
+      return { status: 'retry_budget_exhausted' };
     }
-    messages = messageEvidence.messages;
-    const status = statusEvidence.present ? statusEvidence.status : { type: 'idle' };
-    if (status.type === 'retry') {
-      const attempts = Math.max(Number(run.retryAttempts || 0), Number(status.attempt || 0));
-      if (attempts > project.autonomy.maxRetryAttempts) {
-        const message = `OpenCode exceeded retry budget (${project.autonomy.maxRetryAttempts})`;
-        if (!await abortAndConfirmStopped(run)) return quarantineUnconfirmedTermination(run, message);
-        await failRun(run, message);
-        return { status: 'retry_budget_exhausted' };
-      }
-      await store.updateRun(run.id, { status: 'retrying', retryAttempts: attempts, error: status.message || null });
+    if (attempts > Number(run.retryAttempts || 0)) {
+      await store.updateRun(run.id, { retryAttempts: attempts, error: evidence.retry?.message || null });
+    }
+
+    if (evidence.state === 'running') {
+      if (attempts > 0 && run.status !== 'retrying') await store.updateRun(run.id, { status: 'retrying' });
+      return { status: attempts > 0 ? 'retrying' : 'running', attempts };
+    }
+    if (evidence.state === 'retrying') {
+      await store.updateRun(run.id, { status: 'retrying', retryAttempts: attempts, error: evidence.retry?.message || null });
       return { status: 'retrying', attempts };
     }
-    if (status.type === 'busy') return { status: 'running' };
-    if (status.type !== 'idle') {
-      const message = `Runner returned unknown active-state evidence (${String(status.type || 'missing')}); retaining Run ownership until an explicit idle/missing status is observed.`;
+    if (evidence.state === 'inactive_unknown') {
+      const message = 'OpenCode V2 session is not foreground-active but has no durable terminal outcome; retaining Run ownership.';
+      await store.updateRun(run.id, { error: message });
+      return { status: 'runner_terminal_unknown', error: message };
+    }
+    if (evidence.state === 'missing') {
+      const message = 'OpenCode V2 session disappeared without durable successful result evidence.';
+      await failRun(run, message);
+      return { status: 'runner_session_missing', error: message };
+    }
+    if (evidence.state !== 'terminal') {
+      const message = `OpenCode V2 returned unknown evidence state ${evidence.state}; retaining Run ownership.`;
       await store.updateRun(run.id, { error: message });
       return { status: 'runner_status_unknown', error: message };
     }
+    if (evidence.terminal?.outcome === 'failed') {
+      const message = 'OpenCode V2 reported a durable failed session outcome.';
+      await failRun(run, message);
+      return { status: 'runner_failed', error: message };
+    }
+    if (evidence.terminal?.outcome === 'interrupted') {
+      const message = 'OpenCode V2 reported a durable interrupted session outcome.';
+      await failRun(run, message);
+      return { status: 'runner_interrupted', error: message };
+    }
+    if (evidence.terminal?.outcome !== 'succeeded') {
+      const message = 'OpenCode V2 terminal outcome is unrecognized; retaining Run ownership.';
+      await store.updateRun(run.id, { error: message });
+      return { status: 'runner_status_unknown', error: message };
+    }
+
+    const messages = raw.messages;
     const { text, result } = extractResult(messages);
     if (result) {
       const validation = validateResultContract(result, run.kind, { acceptanceCriteria: task.acceptanceCriteria || [] });
@@ -826,11 +868,12 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
         : { status: store.getRun(run.id)?.status || 'missing', contract: true, contractApplied: false };
     }
     const assistantText = latestAssistantText(messages);
-    if (assistantText && minutesSince(run.startedAt) > 0.25) {
-      await failRun(run, 'Agent became idle without a valid versioned AI_DASHBOARD_RESULT contract');
+    if (assistantText) {
+      await failRun(run, 'OpenCode V2 succeeded without a valid versioned AI_DASHBOARD_RESULT contract');
       return { status: 'invalid_result_contract' };
     }
-    return { status: 'waiting' };
+    await failRun(run, 'OpenCode V2 succeeded without an assistant result contract');
+    return { status: 'invalid_result_contract' };
   }
 
   async function mergeApprovedTaskUnlocked(taskId) {
@@ -908,12 +951,12 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     const state = store.snapshot();
     const actions = [];
     for (const run of state.runs.filter((item) => item.legacyTerminationUnconfirmed === true)) {
-      let statusEvidence = { valid: false, present: false, status: null };
-      if (run.sessionId && run.worktreePath) {
-        const statuses = await opencode.sessionStatus(run.worktreePath).catch(() => null);
-        statusEvidence = inspectSessionStatusRecord(statuses, run.sessionId);
+      let evidence = { valid: false, state: 'invalid' };
+      if (run.sessionId) {
+        try { evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId); }
+        catch { evidence = { valid: false, state: 'invalid' }; }
       }
-      if (statusEvidence.valid && (!statusEvidence.present || statusEvidence.status.type === 'idle')) {
+      if (sessionTerminationConfirmed(evidence)) {
         await store.updateRun(run.id, {
           dispatchUncertain: false, quarantineReason: null, legacyTerminationUnconfirmed: false,
           terminationConfirmedAt: new Date().toISOString(),
@@ -922,35 +965,45 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       } else {
         await store.updateRun(run.id, {
           dispatchUncertain: true,
-          error: statusEvidence.valid
-            ? 'Legacy terminal Run still has an active/unknown external session; ownership remains quarantined.'
-            : 'Legacy terminal Run termination cannot be confirmed because runner status evidence is unavailable or malformed.',
+          error: evidence.valid
+            ? 'Legacy terminal Run lacks durable OpenCode V2 termination evidence; ownership remains quarantined.'
+            : 'Legacy terminal Run termination cannot be confirmed because OpenCode V2 evidence is unavailable or malformed.',
         });
         actions.push({ type: 'run.legacy_termination_pending', runId: run.id });
       }
     }
+
     for (const run of state.runs.filter((item) => ['preparing', 'running', 'retrying'].includes(item.status))) {
       if (run.status === 'preparing' && !run.sessionId && !run.dispatchPhase) {
         await failRun(run, 'Recovered a Run before external session creation began; retry explicitly if needed.');
         actions.push({ type: 'run.pre_dispatch_interrupted', runId: run.id });
-      } else if (!run.sessionId || !run.worktreePath) {
+        continue;
+      }
+      if (!run.sessionId || !run.worktreePath) {
         await quarantineUnconfirmedTermination(run, 'Recovered active Run is missing runner session/worktree evidence.');
         actions.push({ type: 'run.recovery_quarantined', runId: run.id });
-      } else if (run.status === 'preparing') {
-        await store.updateRun(run.id, { status: 'running', error: 'Recovered after process restart; reconciling existing runner session.' });
+        continue;
+      }
+      if (run.status === 'preparing') {
+        await store.updateRun(run.id, { status: 'running', error: 'Recovered after process restart; reconciling deterministic OpenCode V2 session.' });
         actions.push({ type: 'run.recovered', runId: run.id });
-      } else {
-        const statuses = await opencode.sessionStatus(run.worktreePath).catch(() => null);
-        const statusEvidence = inspectSessionStatusRecord(statuses, run.sessionId);
-        if (statusEvidence.valid && !statusEvidence.present) {
-          await store.updateRun(run.id, { error: 'Recovered Run is absent from the active-status map; normal reconciliation must inspect its persisted session messages before deciding the outcome.' });
-          actions.push({ type: 'run.recovered_idle_status', runId: run.id });
-        } else if (!statusEvidence.valid) {
-          await store.updateRun(run.id, { error: 'Runner returned unavailable or malformed session-status evidence during restart recovery; retaining Run ownership.' });
-          actions.push({ type: 'run.recovery_status_unavailable', runId: run.id });
-        }
+        continue;
+      }
+      let evidence = { valid: false, state: 'invalid' };
+      try { evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId); }
+      catch { evidence = { valid: false, state: 'invalid' }; }
+      if (!evidence.valid) {
+        await store.updateRun(run.id, { error: 'OpenCode V2 evidence is unavailable or malformed during restart recovery; retaining Run ownership.' });
+        actions.push({ type: 'run.recovery_status_unavailable', runId: run.id });
+      } else if (evidence.state === 'inactive_unknown') {
+        await store.updateRun(run.id, { error: 'Recovered OpenCode V2 session is inactive without a durable terminal outcome; retaining Run ownership.' });
+        actions.push({ type: 'run.recovery_terminal_unknown', runId: run.id });
+      } else if (evidence.state === 'terminal' || evidence.state === 'missing') {
+        await store.updateRun(run.id, { error: 'Recovered Run has durable terminal/missing OpenCode V2 evidence; normal reconciliation must decide the domain outcome.' });
+        actions.push({ type: 'run.recovered_terminal_evidence', runId: run.id });
       }
     }
+
     const fresh = store.snapshot();
     for (const task of fresh.tasks) {
       const active = fresh.runs.some((run) => run.taskId === task.id && ['running', 'retrying', 'preparing'].includes(run.status));
@@ -1022,7 +1075,7 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     async runDiff(id) {
       const run = store.getRun(id);
       if (!run?.sessionId || !run?.worktreePath) throw new Error('Run does not have an OpenCode session');
-      return opencode.diff({ directory: run.worktreePath, sessionId: run.sessionId });
+      return opencode.diff({ sessionId: run.sessionId });
     },
   };
 }
