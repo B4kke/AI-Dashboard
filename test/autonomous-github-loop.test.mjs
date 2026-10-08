@@ -7,27 +7,33 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { StateStore } from '../server/core/state-store.mjs';
+import { createRecoverableOpenCode } from '../server/core/opencode-dispatch-safety.mjs';
 import { createOrchestrator } from '../server/orchestrator.mjs';
 import { GitHubClient } from '../server/integrations/github.mjs';
 import { pushTaskBranch } from '../server/git/worktrees.mjs';
+import { v2SessionEvidence } from './support/opencode-v2-evidence.mjs';
 
 const exec = promisify(execFile);
 
 function sessionMessages(value) {
   return [
     { id: 'msg_assistant', type: 'assistant', content: [{ type: 'text', text: `AI_DASHBOARD_RESULT\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\`` }] },
-    { id: 'msg_idle', type: 'idle', outcome: 'succeeded' },
   ];
 }
 
 class FakeOpenCode {
-  constructor() { this.next = 1; this.results = new Map(); }
+  constructor() { this.next = 1; this.results = new Map(); this.promptIds = new Map(); }
   async createSession(input = {}) { return { id: input.id || `session-${this.next++}` }; }
-  async dispatchPrompt() { return null; }
+  async dispatchPrompt({ sessionId, messageId }) { this.promptIds.set(sessionId, messageId); return null; }
   async sessionEvidence({ sessionId }) {
     const messages = this.results.get(sessionId) || [];
-    const terminal = messages.some((message) => message.type === 'idle');
-    return { active: terminal ? {} : { [sessionId]: { type: 'running' } }, session: { id: sessionId, ...(terminal ? { outcome: 'succeeded' } : {}) }, messages, missing: false };
+    const terminal = this.results.has(sessionId);
+    const promptMessageId = this.promptIds.get(sessionId);
+    return v2SessionEvidence(sessionId, promptMessageId, {
+      active: !terminal,
+      terminal: terminal ? 'succeeded' : null,
+      messages,
+    });
   }
   async interrupt() { return { interrupted: true }; }
   async diff() { return []; }
@@ -92,14 +98,15 @@ test('task -> worker -> PR -> CI fail -> repair -> supervisor -> merge', async (
         autonomy: { mode: 'autonomous', requireCi: true, maxTaskIterations: 3, cleanupAfterMerge: false, deleteRemoteBranch: true },
       });
       const task = await store.addTask({ projectId: project.id, title: 'Repair loop', description: 'Implement and then repair CI', acceptanceCriteria: ['feature is present'], priority: 'P1' });
-      const opencode = new FakeOpenCode();
+      const rawOpenCode = new FakeOpenCode();
+      const opencode = createRecoverableOpenCode({ client: rawOpenCode, store });
       const github = new GitHubClient({ baseUrl: `http://127.0.0.1:${address.port}`, token: 'test' });
       const pushBranch = (options) => pushTaskBranch({ ...options, remoteUrl: `file://${bare}` });
       const orchestrator = createOrchestrator({ store, opencode, github, pushBranch });
 
       const worker1 = await orchestrator.startWorker(task.id);
       await writeFile(join(worker1.worktreePath, 'feature.txt'), 'iteration one\n');
-      opencode.set(worker1.sessionId, { schemaVersion: 1, kind: 'worker', status: 'success', summary: 'Implemented first pass', evidence: { tests: ['node verify.mjs'], notes: [] }, risks: [], needsInput: null });
+      rawOpenCode.set(worker1.sessionId, { schemaVersion: 1, kind: 'worker', status: 'success', summary: 'Implemented first pass', evidence: { tests: ['node verify.mjs'], notes: [] }, risks: [], needsInput: null });
       await orchestrator.reconcileRun(worker1);
       assert.equal(store.getTask(task.id).state, 'awaiting_publish');
       await orchestrator.publishTask(task.id);
@@ -109,7 +116,7 @@ test('task -> worker -> PR -> CI fail -> repair -> supervisor -> merge', async (
 
       const worker2 = await orchestrator.startWorker(task.id);
       await writeFile(join(worker2.worktreePath, 'feature.txt'), 'iteration two fixed\n');
-      opencode.set(worker2.sessionId, { schemaVersion: 1, kind: 'worker', status: 'success', summary: 'Repaired CI issue', evidence: { tests: ['node verify.mjs'], notes: ['repair'] }, risks: [], needsInput: null });
+      rawOpenCode.set(worker2.sessionId, { schemaVersion: 1, kind: 'worker', status: 'success', summary: 'Repaired CI issue', evidence: { tests: ['node verify.mjs'], notes: ['repair'] }, risks: [], needsInput: null });
       await orchestrator.reconcileRun(worker2);
       await orchestrator.publishTask(task.id);
       ciState = 'success';
@@ -117,7 +124,7 @@ test('task -> worker -> PR -> CI fail -> repair -> supervisor -> merge', async (
       assert.equal(passedCi.state, 'success'); assert.equal(store.getTask(task.id).state, 'awaiting_review');
 
       const supervisor = await orchestrator.startSupervisor(task.id);
-      opencode.set(supervisor.sessionId, { schemaVersion: 1, kind: 'supervisor', verdict: 'approve', summary: 'Verified', acceptanceCriteria: [{ criterion: 'feature is present', status: 'passed', evidence: 'feature.txt and verification passed' }], requiredChanges: [], risks: [] });
+      rawOpenCode.set(supervisor.sessionId, { schemaVersion: 1, kind: 'supervisor', verdict: 'approve', summary: 'Verified', acceptanceCriteria: [{ criterion: 'feature is present', status: 'passed', evidence: 'feature.txt and verification passed' }], requiredChanges: [], risks: [] });
       await orchestrator.reconcileRun(supervisor);
       assert.equal(store.getTask(task.id).state, 'ready_to_merge');
 
