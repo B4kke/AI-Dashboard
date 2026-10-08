@@ -39,11 +39,12 @@ test('supervisor approval must cover every acceptance criterion', () => {
   assert.match(result.errors.join(' '), /B works/);
 });
 
-test('extracts the latest assistant contract from OpenCode messages', () => {
+test('extracts the latest assistant contract from OpenCode V2 messages', () => {
   const messages = [
-    { info: { role: 'assistant' }, parts: [{ type: 'text', text: 'old answer' }] },
-    { info: { role: 'user' }, parts: [{ type: 'text', text: 'continue' }] },
-    { info: { role: 'assistant' }, parts: [{ type: 'text', text: 'AI_DASHBOARD_RESULT\n```json\n{"schemaVersion":1,"kind":"supervisor","verdict":"approve","summary":"ok","acceptanceCriteria":[],"requiredChanges":[],"risks":[]}\n```' }] },
+    { id: 'msg_old', type: 'assistant', content: [{ type: 'text', text: 'old answer' }] },
+    { id: 'msg_user', type: 'user', text: 'continue' },
+    { id: 'msg_final', type: 'assistant', content: [{ type: 'text', text: 'AI_DASHBOARD_RESULT\n```json\n{"schemaVersion":1,"kind":"supervisor","verdict":"approve","summary":"ok","acceptanceCriteria":[],"requiredChanges":[],"risks":[]}\n```' }] },
+    { id: 'msg_idle', type: 'idle', outcome: 'succeeded' },
   ];
   assert.equal(extractResult(messages).result.verdict, 'approve');
 });
