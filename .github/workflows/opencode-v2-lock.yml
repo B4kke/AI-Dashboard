@@ -1,4 +1,4 @@
-name: OpenCode V2 lock refresh
+name: OpenCode V2 migration helper
 
 on:
   push:
@@ -6,13 +6,14 @@ on:
       - feat/opencode-v2-migration
     paths:
       - package.json
+      - scripts/migrate-opencode-v2-orchestrator.mjs
       - .github/workflows/opencode-v2-lock.yml
 
 permissions:
   contents: write
 
 jobs:
-  refresh-lock:
+  migrate-and-lock:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -24,23 +25,27 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
+      - name: Apply OpenCode V2 runtime transform
+        run: node scripts/migrate-opencode-v2-orchestrator.mjs
       - name: Regenerate exact lockfile
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-      - name: Verify V1 dependency is gone
+      - name: Verify migration invariants
         run: |
+          node --check server/orchestrator.mjs
+          node --check server/core/project-readiness.mjs
           node --input-type=module <<'NODE'
           import { readFile } from 'node:fs/promises';
           const lock = JSON.parse(await readFile('package-lock.json', 'utf8'));
           if (lock.packages?.['node_modules/@opencode-ai/sdk']) throw new Error('legacy @opencode-ai/sdk remains in lockfile');
           if (lock.packages?.['node_modules/@opencode/client']?.version !== '2.0.24') throw new Error('pinned @opencode/client@2.0.24 missing from lockfile');
           NODE
-      - name: Commit refreshed lockfile
+      - name: Commit generated migration output
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --quiet -- package-lock.json; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add package-lock.json
-          git commit -m 'build(opencode): refresh V2 lockfile'
+          git add package-lock.json server/orchestrator.mjs server/core/project-readiness.mjs
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'refactor(opencode): migrate orchestration to V2 evidence'
           git push origin HEAD:feat/opencode-v2-migration
