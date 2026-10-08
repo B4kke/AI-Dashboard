@@ -4,10 +4,6 @@ on:
   push:
     branches:
       - feat/opencode-v2-migration
-    paths:
-      - package.json
-      - scripts/migrate-control-guards-v2.mjs
-      - .github/workflows/opencode-v2-lock.yml
 
 permissions:
   contents: write
@@ -25,49 +21,17 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
-      - name: Apply V2 control-guard migration and cleanup
-        run: |
-          node scripts/migrate-control-guards-v2.mjs
-          node --input-type=module <<'NODE'
-          import { readFile, writeFile } from 'node:fs/promises';
-
-          {
-            const path = 'server/core/project-readiness.mjs';
-            let text = await readFile(path, 'utf8');
-            text = text.replace('not available from a OpenCode V2 model catalog', 'not available from the OpenCode V2 model catalog');
-            text = text.replace('No connected OpenCode global default model could be identified.', 'No available OpenCode V2 global default model could be identified.');
-            await writeFile(path, text);
-          }
-
-          {
-            const path = 'server/integrations/opencode.mjs';
-            let text = await readFile(path, 'utf8');
-            const before = `  mcpResources(directory) {\n    return this.call('mcp.resource.catalog', () => this.client.mcp.resource.catalog(\n      v2Location(directory),\n      this.requestOptions(10_000),\n    ));\n  }`;
-            const after = `  async mcpResources(directory) {\n    const value = await this.call('mcp.resource.catalog', () => this.client.mcp.resource.catalog(\n      v2Location(directory),\n      this.requestOptions(10_000),\n    ));\n    return value?.data || value || { resources: [], templates: [] };\n  }`;
-            if (text.includes(before)) text = text.replace(before, after);
-            await writeFile(path, text);
-          }
-
-          {
-            const path = 'test/project-readiness.test.mjs';
-            let text = await readFile(path, 'utf8');
-            text = text.replaceAll('@opencode-ai/sdk', '@opencode/client');
-            text = text.replace(/(id:\s*'[^']+',\s*)connected:\s*true/g, '$1available: true');
-            text = text.replace('connected default', 'available default');
-            await writeFile(path, text);
-          }
-          NODE
       - name: Regenerate exact lockfile
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-      - name: Commit generated V2 runtime cleanup before validation
+      - name: Commit lockfile drift before validation
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add package-lock.json server/core/control-guards.mjs server/core/project-readiness.mjs server/integrations/opencode.mjs test/project-readiness.test.mjs
+          git add package-lock.json
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m 'refactor(opencode): remove remaining V1 control guards'
+          git commit -m 'build(opencode): refresh V2 lockfile'
           git push origin HEAD:feat/opencode-v2-migration
       - name: Verify and test V2 branch
         run: |
