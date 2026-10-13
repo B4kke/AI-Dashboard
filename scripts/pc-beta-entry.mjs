@@ -11,7 +11,8 @@ import {
   parseBetaAutonomyInterval,
   renderBetaReport,
 } from './pc-beta.mjs';
-import { createOpenCodeMcpClient, verifyOpenCodeMcpInterop } from './pc-beta-mcp.mjs';
+import { OpenCodeClient } from '../server/integrations/opencode.mjs';
+import { verifyOpenCodeMcpInterop } from './pc-beta-mcp.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const DEFAULT_BETA_PORT = 7332;
@@ -81,7 +82,7 @@ async function runMcpGate(args, runtimeDir) {
     if (source.status) throw new Error('Dashboard worktree is dirty; refusing to label OpenCode MCP beta evidence with an incomplete commit identity');
     await harness.spawnDashboard();
     await harness.ensureOpenCode();
-    const openCode = createOpenCodeMcpClient({ baseUrl: openCodeUrl });
+    const openCode = new OpenCodeClient({ baseUrl: openCodeUrl });
     const evidence = await verifyOpenCodeMcpInterop({
       openCode,
       directory: repoPath,
