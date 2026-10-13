@@ -13,8 +13,8 @@ import { createTaskWorktree } from '../server/git/worktrees.mjs';
 const exec = promisify(execFile);
 const locks = { withLock: async (_key, operation) => operation() };
 const readyOpenCode = {
-  async overview() { return { connected: true, healthy: true, transport: '@opencode-ai/sdk' }; },
-  async availableModels() { return [{ id: 'provider/model', connected: true }]; },
+  async overview() { return { connected: true, healthy: true, transport: '@opencode/client' }; },
+  async availableModels() { return [{ id: 'provider/model', available: true }]; },
 };
 
 async function repositoryFixture(prefix = 'ai-dashboard-readiness-') {
@@ -110,7 +110,7 @@ test('Project preflight rejects verification commands that cannot enter the shel
   }
 });
 
-test('Project preflight accepts implicit model selection only when OpenCode identifies its connected default', async () => {
+test('Project preflight accepts implicit model selection only when OpenCode identifies its available default', async () => {
   const fixture = await repositoryFixture();
   try {
     const withoutExplicitModel = project(fixture.repo, {
@@ -121,7 +121,7 @@ test('Project preflight accepts implicit model selection only when OpenCode iden
       task: task({ model: null }),
       opencode: {
         async overview() { return { connected: true, healthy: true }; },
-        async availableModels() { return [{ id: 'provider/model', connected: true, default: false }]; },
+        async availableModels() { return [{ id: 'provider/model', available: true, default: false }]; },
       },
     });
     assert.equal(byId(withoutDefault, 'model').status, 'fail');
@@ -132,7 +132,7 @@ test('Project preflight accepts implicit model selection only when OpenCode iden
       task: task({ model: null }),
       opencode: {
         async overview() { return { connected: true, healthy: true }; },
-        async availableModels() { return [{ id: 'provider/model', connected: true, default: true }]; },
+        async availableModels() { return [{ id: 'provider/model', available: true, default: true }]; },
       },
     });
     assert.equal(withDefault.ok, true);
@@ -144,8 +144,8 @@ test('Project preflight accepts implicit model selection only when OpenCode iden
       opencode: {
         async overview() { return { connected: true, healthy: true }; },
         async availableModels() { return [
-          { id: 'provider/first', connected: true, default: true },
-          { id: 'other/second', connected: true, default: true },
+          { id: 'provider/first', available: true, default: true },
+          { id: 'other/second', available: true, default: true },
         ]; },
       },
     });
@@ -171,7 +171,7 @@ test('control-plane admission binds an implicit OpenCode default as an explicit 
       store, locks,
       opencode: {
         async overview() { return { connected: true, healthy: true }; },
-        async availableModels() { return [{ id: 'provider/default-a', connected: true, default: true }, { id: 'provider/default-b', connected: true }]; },
+        async availableModels() { return [{ id: 'provider/default-a', available: true, default: true }, { id: 'provider/default-b', available: true }]; },
       },
     });
 

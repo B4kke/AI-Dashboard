@@ -168,7 +168,7 @@ Worker, planner and supervisor entry points run the same Project preflight befor
 - active Project status (or an explicit `needs_sync` repair attempt),
 - valid clean local Git repository on the configured base branch,
 - safely parseable, non-empty control-plane verification commands,
-- healthy OpenCode harness and an available explicit model or exactly one connected global default,
+- healthy OpenCode V2 harness and an available explicit model or one V2-reported available global default,
 - for GitHub Projects, repository syntax, local-origin identity, authenticated write access and a fast-forward-only synchronization whose local and remote base heads are identical.
 
 The report separates Project-scoped from Task-scoped blockers. A Project blocker transitions `active -> needs_sync` and blocks new autonomous entry; successful repair transitions `needs_sync -> active`. A Task-specific blocker moves that Task to `needs_input` without pausing unrelated valid work. The structured report is persisted on the Project and returned through the preflight/control HTTP APIs.
@@ -251,23 +251,26 @@ Third-party MCP outputs and input requests are untrusted, prompt-injection-capab
 
 See `docs/07-mcp-agent-architecture.md` and `docs/08-mcp-input-required.md`.
 
-## OpenCode dispatch and restart safety
+## OpenCode V2 dispatch and restart safety
 
-The official OpenCode SDK owns protocol transport. Dashboard persists dispatch phases around external side effects:
+The official `@opencode/client` V2 package owns protocol transport. Dashboard persists deterministic identities and dispatch phases around every external side effect:
 
 ```text
-creating_session
-session_created
-prompting
-prompt_ack_unknown
+preparing
+session identity persisted
+session created/recovered
+prompt message identity persisted
+prompt admission unknown|confirmed
 dispatched/running
 ```
 
-Deterministic Run-scoped session identity supports read-recovery if session creation acknowledgement is lost. A possibly accepted async prompt is reconciled against the same session and is not silently replayed.
+Session and prompt-message IDs are derived deterministically from the Dashboard Run before the corresponding external side effect. Lost session-create acknowledgement is read-repaired only through that exact ID. Lost prompt acknowledgement is read-repaired only through the exact durable message/inbox admission ID; lack of proof becomes `dispatch_unknown` and never triggers automatic replay.
 
-OpenCode SDK also exposes agent/provider/model/tool capability discovery, event streaming, permissions and MCP/LSP/formatter state. These capabilities enrich the harness adapter without moving control-plane authority into OpenCode.
+V2 `session.active` is only foreground activity evidence. Absence is not completion. Reconciliation combines the active snapshot with durable session messages: only terminal `idle.outcome = succeeded|failed|interrupted` or an exact missing session can confirm external termination. Inactive-without-terminal, retrying, malformed or unavailable evidence retains Run/scope ownership.
 
-Dashboard preserves configured planner/worker/supervisor role names. The adapter discovers the live OpenCode agent catalog immediately before prompt dispatch and forwards a role only if that exact name exists; otherwise it omits the agent field and lets OpenCode select its default. Role semantics remain in the control-plane prompt, and no hardcoded alias rewrite changes the configured identity.
+A successful worker/planner/supervisor domain result additionally requires terminal `succeeded` plus a valid role-specific `AI_DASHBOARD_RESULT` contract. Missing sessions, failed/interrupted outcomes and transport success without a valid result fail closed.
+
+The V2 adapter also exposes model/default-model discovery, primary/subagent-aware agent discovery, MCP status/resource catalog, events, permission responses and V1 migration-status diagnostics. These enrich the harness boundary without moving control-plane authority into OpenCode. Planner/supervisor sessions remain read-only; persistent permission approval requires an explicit operator-authorized path.
 
 ## Planner materialization and recovery
 
@@ -282,7 +285,7 @@ The planner's structured result is persisted on its completed Run before any gen
 
 Replaying a completed materialization is idempotent. Final linkage, dependency rebuild and backlog release commit atomically, so a crash cannot expose a half-linked new plan as schedulable work.
 
-Unknown/ambiguous dependencies, mismatched candidates, unexpected state or execution history fail closed: the Idea, planning Task and candidates move to `needs_input` with a durable quarantine reason. An active/uncertain candidate Run becomes quarantined `dispatch_unknown` and retains scope ownership until abort/idle evidence confirms the external session stopped. An explicit replan creates a new canonical planning Task, supersedes every old candidate and never releases the old set as part of the replacement plan.
+Unknown/ambiguous dependencies, mismatched candidates, unexpected state or execution history fail closed: the Idea, planning Task and candidates move to `needs_input` with a durable quarantine reason. An active/uncertain candidate Run becomes quarantined `dispatch_unknown` and retains scope ownership until interrupt plus durable V2 terminal evidence, or exact-session absence, confirms the external session stopped. An explicit replan creates a new canonical planning Task, supersedes every old candidate and never releases the old set as part of the replacement plan.
 
 ## Direct-model Exploration and Research
 

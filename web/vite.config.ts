@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: resolve(import.meta.dirname, '..', 'public'),
-    emptyOutDir: false,
+    emptyOutDir: true,
     sourcemap: true,
     assetsDir: 'assets',
   },

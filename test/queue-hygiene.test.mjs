@@ -37,16 +37,18 @@ test('reconcile quarantines a broken-worktree Run until runner termination is co
     const runId = store.snapshot().runs[0].id;
     await store.updateRun(runId, { sessionId: 'ses_x', worktreePath: join(dir, 'wt-without-git') });
 
-    let abortCalls = 0;
+    let interruptCalls = 0;
     const opencode = {
-      async abort() { abortCalls += 1; },
-      async sessionStatus() { return { ses_x: { type: 'busy' } }; },
+      async interrupt() { interruptCalls += 1; },
+      async sessionEvidence({ sessionId }) {
+        return { active: { [sessionId]: { type: 'running' } }, session: { id: sessionId }, messages: [], missing: false };
+      },
     };
     const orchestrator = createOrchestrator({ store, opencode, github: {} });
     const result = await orchestrator.reconcileRun(runId);
 
     assert.equal(result.status, 'termination_unconfirmed');
-    assert.equal(abortCalls, 1);
+    assert.equal(interruptCalls, 1);
     const run = store.getRun(runId);
     assert.equal(run.status, 'dispatch_unknown');
     assert.equal(run.dispatchUncertain, true);

@@ -4,7 +4,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { StateStore } from '../server/core/state-store.mjs';
-import { createRecoverableOpenCode, decorateOpenCodeDispatchRecovery } from '../server/core/opencode-dispatch-safety.mjs';
+import {
+  createRecoverableOpenCode,
+  decorateOpenCodeDispatchRecovery,
+  openCodePromptMessageId,
+  openCodeSessionId,
+} from '../server/core/opencode-dispatch-safety.mjs';
 
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-opencode-dispatch-'));
@@ -15,54 +20,108 @@ async function fixture() {
   return { dir, store, project, task, run };
 }
 
-test('lost create-session acknowledgement read-recovers exactly the run-scoped OpenCode session', async () => {
+test('deterministic OpenCode V2 session and prompt identities are stable and protocol-valid', async () => {
   const f = await fixture();
-  const sessions = [];
+  try {
+    assert.match(openCodeSessionId(f.run.id), /^ses[0-9a-f]{48}$/);
+    assert.match(openCodePromptMessageId(f.run.id), /^msg_[0-9a-f]{48}$/);
+    assert.equal(openCodeSessionId(f.run.id), openCodeSessionId(f.run.id));
+    assert.equal(openCodePromptMessageId(f.run.id), openCodePromptMessageId(f.run.id));
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});
+
+test('lost create-session acknowledgement recovers only the exact deterministic V2 session', async () => {
+  const f = await fixture();
+  const sessions = new Map();
   try {
     const raw = {
-      async createSession({ title }) { sessions.push({ id: 'session-1', title }); throw new Error('fetch failed after server accepted session'); },
-      async findSessionByTitle({ title }) { return sessions.find((session) => session.title === title) || null; },
+      async createSession(input) {
+        sessions.set(input.id, { id: input.id });
+        throw new Error('socket reset after server accepted session');
+      },
+      async getSession({ sessionId }) { return sessions.get(sessionId) || null; },
     };
     const client = createRecoverableOpenCode({ client: raw, store: f.store });
-    const recovered = await client.createSession({ directory: '/tmp/worktree', title: '[P2] Do work' });
-    assert.equal(recovered.id, 'session-1');
-    assert.match(sessions[0].title, new RegExp(`AI-DASHBOARD:${f.run.id}`));
+    const recovered = await client.createSession({ directory: '/tmp/worktree', title: '[P2] Do work', kind: 'worker' });
+    const expected = openCodeSessionId(f.run.id);
+    assert.equal(recovered.id, expected);
     const run = f.store.getRun(f.run.id);
+    assert.equal(run.sessionId, expected);
+    assert.equal(run.promptMessageId, openCodePromptMessageId(f.run.id));
+    assert.equal(run.harnessApi, 'opencode-v2');
     assert.equal(run.dispatchPhase, 'session_created');
     assert.equal(run.sessionCreateRecovered, true);
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 
-test('lost prompt acknowledgement becomes dispatch_unknown without throwing into caller cleanup paths', async () => {
+test('lost prompt acknowledgement is recovered from exact durable V2 message admission without replay', async () => {
   const f = await fixture();
+  const admitted = new Map();
+  let dispatches = 0;
   try {
-    await f.store.updateRun(f.run.id, { sessionId: 'session-1', status: 'running', dispatchPhase: 'session_created' });
+    const sessionId = openCodeSessionId(f.run.id);
+    await f.store.updateRun(f.run.id, { sessionId, status: 'running', dispatchPhase: 'session_created' });
     const client = createRecoverableOpenCode({
       store: f.store,
-      client: { async promptAsync() { throw new Error('socket reset after possible 204'); } },
+      client: {
+        async dispatchPrompt(input) {
+          dispatches += 1;
+          admitted.set(input.messageId, { id: input.messageId, type: 'user', text: input.prompt });
+          throw new Error('socket reset after durable admission');
+        },
+        async promptAdmission({ messageId }) {
+          const value = admitted.get(messageId);
+          return value ? { source: 'message', value } : null;
+        },
+      },
     });
-    const value = await client.promptAsync({ directory: '/tmp/worktree', sessionId: 'session-1', prompt: 'work' });
+    const value = await client.dispatchPrompt({ sessionId, prompt: 'work' });
+    assert.equal(value.id, openCodePromptMessageId(f.run.id));
+    assert.equal(dispatches, 1);
+    const run = f.store.getRun(f.run.id);
+    assert.equal(run.status, 'running');
+    assert.equal(run.dispatchPhase, 'dispatched');
+    assert.equal(run.dispatchUncertain, false);
+    assert.equal(run.promptAckRecovered, true);
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});
+
+test('unprovable V2 prompt acknowledgement becomes dispatch_unknown without replay', async () => {
+  const f = await fixture();
+  try {
+    const sessionId = openCodeSessionId(f.run.id);
+    await f.store.updateRun(f.run.id, { sessionId, status: 'running', dispatchPhase: 'session_created' });
+    const client = createRecoverableOpenCode({
+      store: f.store,
+      client: {
+        async dispatchPrompt() { throw new Error('socket reset'); },
+        async promptAdmission() { return null; },
+      },
+    });
+    const value = await client.dispatchPrompt({ sessionId, prompt: 'work' });
     assert.equal(value, null);
     const run = f.store.getRun(f.run.id);
     assert.equal(run.status, 'dispatch_unknown');
     assert.equal(run.dispatchPhase, 'prompt_ack_unknown');
     assert.equal(run.dispatchUncertain, true);
     assert.equal(run.finishedAt, null);
+    assert.match(run.error, new RegExp(run.promptMessageId));
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 
-test('restart cleans a session proven to be pre-prompt and blocks worker replay', async () => {
+test('restart deletes only a persisted pre-prompt deterministic session and blocks replay', async () => {
   const f = await fixture();
   const deleted = [];
   try {
-    await f.store.updateRun(f.run.id, { sessionId: 'session-1', sessionTitle: '[AI-DASHBOARD:test] Work', status: 'running', dispatchPhase: 'session_created' });
+    const sessionId = openCodeSessionId(f.run.id);
+    await f.store.updateRun(f.run.id, { sessionId, status: 'running', dispatchPhase: 'session_created' });
     const guarded = decorateOpenCodeDispatchRecovery({
       store: f.store,
-      opencode: { async deleteSession(input) { deleted.push(input.sessionId); }, async findSessionByTitle() { return null; } },
+      opencode: { async deleteSession(input) { deleted.push(input.sessionId); } },
       orchestrator: { async recover() { return []; } },
     });
     const actions = await guarded.recover();
-    assert.deepEqual(deleted, ['session-1']);
+    assert.deepEqual(deleted, [sessionId]);
     assert.equal(f.store.getRun(f.run.id).status, 'failed');
     assert.equal(f.store.getRun(f.run.id).dispatchPhase, 'pre_prompt_interrupted');
     assert.equal(f.store.getTask(f.task.id).state, 'needs_input');
@@ -70,11 +129,15 @@ test('restart cleans a session proven to be pre-prompt and blocks worker replay'
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 
-test('restart preserves a possibly accepted prompt as uncertain instead of replaying or deleting it', async () => {
+test('restart preserves a possibly accepted V2 prompt as uncertain instead of replaying or deleting it', async () => {
   const f = await fixture();
   let deletes = 0;
   try {
-    await f.store.updateRun(f.run.id, { sessionId: 'session-1', status: 'running', dispatchPhase: 'prompting', dispatchUncertain: false, finishedAt: null });
+    await f.store.updateRun(f.run.id, {
+      sessionId: openCodeSessionId(f.run.id),
+      promptMessageId: openCodePromptMessageId(f.run.id),
+      status: 'running', dispatchPhase: 'prompting', dispatchUncertain: false, finishedAt: null,
+    });
     const guarded = decorateOpenCodeDispatchRecovery({
       store: f.store,
       opencode: { async deleteSession() { deletes += 1; } },
@@ -100,25 +163,19 @@ test('restart recovery never resurrects terminal Runs from stale dispatch phases
       { status: 'aborted', dispatchPhase: 'creating_session' },
     ];
     for (const [index, input] of inputs.entries()) {
-      const run = index === 0
-        ? f.run
-        : await f.store.createRun({
-          taskId: f.task.id,
-          projectId: f.project.id,
-          kind: 'worker',
-          runner: 'opencode',
-          worktreePath: `/tmp/worktree-${index}`,
-          branch: `ai/work-${index}`,
-        });
+      const run = index === 0 ? f.run : await f.store.createRun({
+        taskId: f.task.id, projectId: f.project.id, kind: 'worker', runner: 'opencode',
+        worktreePath: `/tmp/worktree-${index}`, branch: `ai/work-${index}`,
+      });
       terminalRuns.push(await f.store.updateRun(run.id, {
         ...input,
-        sessionId: `session-${index}`,
+        sessionId: openCodeSessionId(run.id),
+        promptMessageId: openCodePromptMessageId(run.id),
         dispatchUncertain: true,
         finishedAt: new Date().toISOString(),
         result: { preserved: input.status },
       }));
     }
-
     let deletes = 0;
     const guarded = decorateOpenCodeDispatchRecovery({
       store: f.store,
@@ -126,7 +183,6 @@ test('restart recovery never resurrects terminal Runs from stale dispatch phases
       orchestrator: { async recover() { return []; } },
     });
     const actions = await guarded.recover();
-
     assert.deepEqual(actions, []);
     assert.equal(deletes, 0);
     for (const before of terminalRuns) assert.deepEqual(f.store.getRun(before.id), before);
