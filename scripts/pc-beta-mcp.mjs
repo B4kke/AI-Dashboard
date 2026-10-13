@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { OpenCodeClient, openCodeSessionPermissions } from '../server/integrations/opencode.mjs';
+import { openCodeSessionPermissions } from '../server/integrations/opencode.mjs';
 import { normalizeModelRef } from '../server/integrations/model-provider.mjs';
 import { inspectSessionEvidence } from '../server/core/runner-session-status.mjs';
 
@@ -261,8 +261,4 @@ export async function verifyOpenCodeMcpInterop({
     throw error;
   }
   return result;
-}
-
-export function createOpenCodeMcpClient(options = {}) {
-  return new OpenCodeClient(options);
 }
