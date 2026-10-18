@@ -109,6 +109,10 @@ Dispatch identities are deterministic before the external side effect. If sessio
 
 An assistant result can be applied only when the same synced durable log proves `session.execution.succeeded`. `session.execution.failed` and `session.execution.interrupted` fail closed. An inactive session without a durable terminal execution event remains terminal-unknown. A missing exact session may release external-session ownership but cannot fabricate a successful result.
 
+The `log.synced` marker must identify the exact session; its optional sequence, when present with events, must equal the final durable event sequence. A marker alone is not execution proof. A positive sequence with no returned events is diagnosed as `durable_history_unavailable`, and an unproven/ambiguous expected prompt admission as `prompt_admission_unproven`. Diagnostics include only fixed codes and numeric event-count/sequence metadata; model text and remote payloads are not copied into diagnostic messages. The Run remains owned and no prompt is replayed.
+
+Verify durable-event persistence on the actual OpenCode server before another external campaign. A healthy server/model catalog and persisted messages do not prove session-log replay works. Local October 18 dogfood against server 2.0.32 returned a positive-sequence sync marker with no events, while the pinned client correctly preserved that stream. This is an external evidence blocker; do not recover completion from idle messages or weaken the durable-log gate.
+
 ### Agent roles and permissions
 
 Dashboard roles are not assumed to equal OpenCode agent IDs. The adapter queries the live V2 agent catalog and accepts only primary-capable entries as session entrypoints. A subagent-only agent is never promoted to worker/planner/supervisor entrypoint. Unsupported configured names are omitted while role semantics remain in the control-plane prompt.

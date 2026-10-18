@@ -5,7 +5,7 @@ import { materializePlannerResult } from './core/planner-materialization.mjs';
 import { parseGitHubRemote, parseGitHubRepository } from './integrations/github.mjs';
 import { normalizeOpencodeAgent } from './integrations/opencode.mjs';
 import { projectAdmissionIdentity, taskAdmissionIdentity } from './core/admission-identity.mjs';
-import { inspectSessionEvidence, sessionTerminationConfirmed } from './core/runner-session-status.mjs';
+import { inspectSessionEvidence, sessionTerminationConfirmed, sessionEvidenceProblem } from './core/runner-session-status.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -793,7 +793,7 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
     }
     const evidence = inspectSessionEvidence(raw, run.sessionId, run.promptMessageId);
     if (!evidence.valid) {
-      const message = 'OpenCode V2 returned malformed session evidence; retaining Run ownership.';
+      const message = `${sessionEvidenceProblem(evidence)}; retaining Run ownership.`;
       await store.updateRun(run.id, { error: message });
       return { status: 'runner_evidence_invalid', error: message };
     }
@@ -967,7 +967,9 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
           dispatchUncertain: true,
           error: evidence.valid
             ? 'Legacy terminal Run lacks durable OpenCode V2 termination evidence; ownership remains quarantined.'
-            : 'Legacy terminal Run termination cannot be confirmed because OpenCode V2 evidence is unavailable or malformed.',
+            : evidence.diagnostic
+              ? `Legacy terminal Run termination cannot be confirmed. ${sessionEvidenceProblem(evidence)}; retaining Run ownership.`
+              : 'Legacy terminal Run termination cannot be confirmed because OpenCode V2 evidence is unavailable or malformed.',
         });
         actions.push({ type: 'run.legacy_termination_pending', runId: run.id });
       }
@@ -993,7 +995,9 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       try { evidence = inspectSessionEvidence(await opencode.sessionEvidence({ sessionId: run.sessionId, limit: 100 }), run.sessionId, run.promptMessageId); }
       catch { evidence = { valid: false, state: 'invalid' }; }
       if (!evidence.valid) {
-        await store.updateRun(run.id, { error: 'OpenCode V2 evidence is unavailable or malformed during restart recovery; retaining Run ownership.' });
+        await store.updateRun(run.id, { error: evidence.diagnostic
+          ? `${sessionEvidenceProblem(evidence)} during restart recovery; retaining Run ownership.`
+          : 'OpenCode V2 evidence is unavailable or malformed during restart recovery; retaining Run ownership.' });
         actions.push({ type: 'run.recovery_status_unavailable', runId: run.id });
       } else if (evidence.state === 'inactive_unknown') {
         await store.updateRun(run.id, { error: 'Recovered OpenCode V2 session is inactive without a durable terminal outcome; retaining Run ownership.' });

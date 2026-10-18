@@ -59,9 +59,9 @@ function validDurableEnvelope(item) {
 function inspectLogItem(item, sessionId) {
   if (!isPlainRecord(item)) return { valid: false };
   if (item.type === 'log.synced') {
-    if (typeof item.aggregateID !== 'string' || item.aggregateID.length === 0) return { valid: false };
+    if (item.aggregateID !== sessionId) return { valid: false };
     if (item.seq !== undefined && (!Number.isInteger(item.seq) || item.seq < 0)) return { valid: false };
-    return { valid: true, synced: true, seq: null };
+    return { valid: true, synced: true, seq: item.seq };
   }
   if (!validDurableEnvelope(item)) return { valid: false };
   if (item.durable.aggregateID !== sessionId) return { valid: false };
@@ -90,6 +90,7 @@ export function inspectSessionLog(value, sessionId) {
     if (!inspected.valid) return { valid: false, items: null };
     if (inspected.synced) {
       if (index !== value.items.length - 1) return { valid: false, items: null };
+      if (previousSeq >= 0 && inspected.seq !== undefined && inspected.seq !== previousSeq) return { valid: false, items: null };
       sawSynced = true;
       continue;
     }
@@ -162,8 +163,15 @@ export function inspectSessionEvidence(value, sessionId, promptMessageId) {
 
   const logEvidence = inspectSessionLog(value.log, sessionId);
   if (!logEvidence.valid) return empty;
+  const eventCount = logEvidence.items.length - 1;
+  const syncedSeq = logEvidence.items.at(-1).seq ?? null;
+  if (eventCount === 0 && syncedSeq > 0) {
+    return { ...empty, diagnostic: { code: 'durable_history_unavailable', eventCount, syncedSeq } };
+  }
   const runLog = relevantRunLog(logEvidence.items, sessionId, promptMessageId);
-  if (!runLog.valid) return empty;
+  if (!runLog.valid) {
+    return { ...empty, diagnostic: { code: 'prompt_admission_unproven', eventCount, syncedSeq } };
+  }
 
   if (active) {
     return { valid: true, state: 'running', active: true, terminal: null, retry: runLog.retry, missing: false, messages: messageEvidence.messages, admittedSeq: runLog.admittedSeq, startedSeq: runLog.startedSeq };
@@ -179,4 +187,15 @@ export function inspectSessionEvidence(value, sessionId, promptMessageId) {
 
 export function sessionTerminationConfirmed(evidence) {
   return evidence?.valid === true && (evidence.state === 'terminal' || evidence.state === 'missing');
+}
+
+export function sessionEvidenceProblem(evidence) {
+  // Fixed local copy only: never persist runner payloads or model text as diagnostics.
+  if (evidence?.diagnostic?.code === 'durable_history_unavailable') {
+    return 'OpenCode V2 durable session history is unavailable: the synced log contains no events. Check OpenCode durable-event persistence; messages and idle telemetry cannot prove completion';
+  }
+  if (evidence?.diagnostic?.code === 'prompt_admission_unproven') {
+    return 'OpenCode V2 durable session history does not uniquely prove the expected prompt admission';
+  }
+  return 'OpenCode V2 returned malformed session evidence';
 }

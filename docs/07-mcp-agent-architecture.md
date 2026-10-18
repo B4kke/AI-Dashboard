@@ -256,7 +256,7 @@ For assigned Tasks the coding prompt receives specialist name, role, instruction
 
 Prompt discipline complements runtime admission and Git evidence; it does not replace them. The control plane persists a checkpoint intent and accepts only an exact one-parent commit/tree matching that intent, then checks the cumulative original-scope-base-to-checkpoint diff before verification/review.
 
-Harness prose/result data also does not release ownership. A result contract is applied only once the owned session is proven `idle` or missing; busy/retry/unknown status and unconfirmed timeout/abort continue to own their Run and mutation scopes.
+Harness prose/result data also does not release ownership. A result contract requires synced durable `session.execution.succeeded` evidence bound to the exact prompt admission. A missing exact session can prove termination but never success. The sync marker must match the session and its optional sequence must match the final event; sync-only history with a positive sequence is diagnosed as unavailable durable history. Foreground-active/retry/unknown status and unconfirmed timeout/abort continue to own their Run and mutation scopes.
 
 ## Dashboard as external MCP host/client
 

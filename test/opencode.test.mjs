@@ -132,6 +132,65 @@ test('OpenCode V2 prompt dispatch uses deterministic message id and durable admi
   } finally { await close(server); }
 });
 
+const logSessionId = 'ses_log';
+const durableLogItems = [
+  {
+    id: 'evt_admitted', created: 1, type: 'session.inbox.enqueued',
+    durable: { aggregateID: logSessionId, seq: 0, version: 1 },
+    data: { sessionID: logSessionId, inboxID: 'msg_log', item: { type: 'user', payload: { text: 'Test task' }, delivery: 'queue' } },
+  },
+  {
+    id: 'evt_started', created: 2, type: 'session.execution.started',
+    durable: { aggregateID: logSessionId, seq: 1, version: 1 },
+    data: { sessionID: logSessionId },
+  },
+  {
+    id: 'evt_succeeded', created: 3, type: 'session.execution.succeeded',
+    durable: { aggregateID: logSessionId, seq: 2, version: 1 },
+    data: { sessionID: logSessionId },
+  },
+];
+
+for (const scenario of [
+  {
+    name: 'reads durable events and their matching sync marker through the pinned SDK',
+    items: [...durableLogItems, { type: 'log.synced', aggregateID: logSessionId, seq: 2 }],
+    synced: true,
+  },
+  {
+    name: 'preserves a sync-only history without fabricating durable events',
+    items: [{ type: 'log.synced', aggregateID: logSessionId, seq: 115 }],
+    synced: true,
+  },
+  {
+    name: 'keeps an ended stream without a sync marker unconfirmed',
+    items: durableLogItems,
+    synced: false,
+  },
+  {
+    name: 'preserves a mismatched sync identity for control-plane validation',
+    items: [...durableLogItems, { type: 'log.synced', aggregateID: 'ses_other', seq: 2 }],
+    synced: true,
+  },
+]) {
+  test(`OpenCode V2 session log ${scenario.name}`, async () => {
+    const requests = [];
+    const server = await listen((req, res) => {
+      const url = requestUrl(req);
+      requests.push({ method: req.method, path: url.pathname, follow: url.searchParams.get('follow'), after: url.searchParams.get('after') });
+      res.setHeader('content-type', 'text/event-stream');
+      for (const item of scenario.items) res.write(`data: ${JSON.stringify(item)}\n\n`);
+      res.end();
+    });
+    try {
+      const client = new OpenCodeClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+      const log = await client.sessionLog({ sessionId: logSessionId });
+      assert.deepEqual(log, { items: scenario.items, synced: scenario.synced });
+      assert.deepEqual(requests, [{ method: 'GET', path: '/api/experimental/session/ses_log/log', follow: 'false', after: null }]);
+    } finally { await close(server); }
+  });
+}
+
 test('OpenCode V2 model, health, MCP and migration discovery expose supported capabilities only', async () => {
   const server = await listen((req, res) => {
     const url = requestUrl(req);

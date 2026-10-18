@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { StateStore } from '../server/core/state-store.mjs';
 import { activeScopeConflicts } from '../server/core/run-admission-guard.mjs';
 import { createOrchestrator } from '../server/orchestrator.mjs';
+import { decorateControlPlane } from '../server/core/control-guards.mjs';
 import { v2SessionEvidence } from './support/opencode-v2-evidence.mjs';
 
 const SESSION_ID = 'session-1';
@@ -50,7 +51,7 @@ async function fixture({ maxRunMinutes = 45, maxRetryAttempts = 5, rawEvidence =
     async sessionEvidence() { return currentEvidence; },
   };
   const orchestrator = createOrchestrator({ store, opencode, github: {} });
-  return { dir, store, project, task, run, orchestrator, setEvidence(value) { currentEvidence = value; } };
+  return { dir, store, project, task, run, orchestrator, opencode, setEvidence(value) { currentEvidence = value; } };
 }
 
 function assertOwnershipRetained(f) {
@@ -231,5 +232,41 @@ test('worker result is never applied when V2 session evidence is malformed', asy
     assert.equal(result.status, 'runner_evidence_invalid');
     assert.equal(f.store.getRun(f.run.id).status, 'running');
     assert.equal(f.store.getRun(f.run.id).result, null);
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});
+
+test('sync-only OpenCode history diagnoses missing persistence and retains ownership through reconciliation and abort', async () => {
+  const rawEvidence = evidence({ active: false, messages: workerResultMessages() });
+  rawEvidence.log = {
+    items: [{ type: 'log.synced', aggregateID: SESSION_ID, seq: 115 }],
+    synced: true,
+  };
+  const f = await fixture({ maxRunMinutes: 60, rawEvidence });
+  try {
+    const result = await f.orchestrator.reconcileRun(f.run.id);
+    assert.equal(result.status, 'runner_evidence_invalid');
+    assert.match(f.store.getRun(f.run.id).error, /durable session history is unavailable/);
+    assert.match(f.store.getRun(f.run.id).error, /durable-event persistence/);
+    assert.equal(f.store.getRun(f.run.id).status, 'running');
+    assert.equal(f.store.getRun(f.run.id).result, null);
+    assert.equal(f.store.getTask(f.task.id).state, 'in_progress');
+    assert.equal(activeScopeConflicts(f.store, f.project.id, ['server'], 'different-task').length, 1);
+
+    await f.orchestrator.recover();
+    assert.match(f.store.getRun(f.run.id).error, /durable session history is unavailable/);
+    assert.match(f.store.getRun(f.run.id).error, /restart recovery/);
+    assert.equal(f.store.getRun(f.run.id).status, 'running');
+    assert.equal(f.store.getRun(f.run.id).result, null);
+
+    await f.orchestrator.abortRun(f.run.id);
+    assertOwnershipRetained(f);
+    const guarded = decorateControlPlane({
+      orchestrator: f.orchestrator, store: f.store, opencode: f.opencode,
+      locks: { withLock: async (_key, operation) => operation() },
+    });
+    await guarded.reconcileRun(f.run.id);
+    assertOwnershipRetained(f);
+    assert.match(f.store.getRun(f.run.id).error, /durable session history is unavailable/);
+    assert.equal(f.store.snapshot().runs.length, 1);
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });

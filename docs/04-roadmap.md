@@ -4,6 +4,8 @@
 
 > Evidence boundary: implementation, deterministic tests, exact-head GitHub Actions and real external dogfood are separate levels. Published head `2464549fdb1c43d61e443da8035e06e7f5c67e2b` passed Actions run `33071272602` on Linux and Windows with the then-current rendered UI. Any later head, including a UI repair, must be reverified. Full current-stack OpenCode + disposable GitHub/Actions PC beta remains mandatory before calling the foundation ready.
 
+October 18 continuation: V2 migration head `7d29db5d261aa27d16e6ef4db6144b80b41f209c` passed Linux, Windows and rendered UI in Actions run `39128475914`. Two local smoke campaigns on that head failed; run-2 repeatedly received a synced OpenCode log with sequence 115 and no durable events before the Run timeout. The follow-up working-tree change adds bounded missing-history diagnostics and exact-session/final-sequence sync validation with regression coverage. It still requires fresh exact-head Actions after publication. Real OpenCode durable-event persistence/replay and a fresh full campaign remain open; existing message/idle telemetry cannot close that evidence gap.
+
 ## Project-first UX & repository discovery — IMPLEMENTED / BETA-CANDIDATE
 
 Implemented/tested:
@@ -91,7 +93,8 @@ Implemented/tested:
 - per-Run model selection with V2 default-model readiness,
 - deterministic Run-scoped OpenCode session **and prompt-message** identity,
 - lost create/prompt acknowledgement read-repair through exact V2 session/admission identity with no blind replay,
-- durable terminal `idle.outcome` gating; inactive-without-terminal never means success,
+- synced durable `session.execution.*` terminal gating; inactive-without-terminal never means success,
+- exact-session/final-sequence sync validation and actionable diagnostics for unavailable durable history,
 - V1 SDK/status/recovery paths removed with regression coverage against reintroduction,
 - persisted checkpoint intent and exact-one-parent Git ownership proof,
 - cumulative original-scope-base -> checkpoint evidence,
@@ -227,7 +230,7 @@ Still planned:
 
 Implemented/tested:
 
-- official split TypeScript MCP SDK v2 pinned to `2.0.0`, targeting `2026-07-28`,
+- official split TypeScript MCP SDK v2 pinned to server/client `2.3.1` and node `2.1.1`, targeting `2026-07-28`,
 - Dashboard as MCP server,
 - `/mcp/read`, `/mcp/worker`, `/mcp/supervisor`, `/mcp/master`,
 - read/worker/supervisor read-only,
@@ -325,7 +328,7 @@ Implemented and level-3 verified on P0 head `f959a7a` (push `33020151327` + PR `
 - new local Project creates folder, Git repo, `README`/`.gitignore` and initial commit,
 - normal Project usability (`server/core/project-usability.mjs`) is separate from strict autonomous readiness (`needs_sync` preflight),
 - default Coding/Planner/Supervisor/Research/Master models are recommended/inherited automatically when providers are available (`server/setup/service.mjs` `selectCodingModel`/`discoverDirectDefault`),
-- Dashboard reconciles `/mcp/master` into the stable OpenCode v1 SDK via `mcp.status`/`mcp.add` (`server/integrations/opencode.mjs` `ensureMcpServer` — idempotent, fail-closed without fabricating success),
+- Dashboard reconciles `/mcp/master` through the pinned OpenCode V2 client via `mcp.list`/`mcp.add`/`mcp.connect` (`server/integrations/opencode.mjs` `ensureMcpServer` — idempotent, fail-closed without fabricating success),
 - Master is real AI SDK model chat with Dashboard MCP tools and general personal-assistant role (`server/master/service.mjs`),
 - Master has local `SOUL.md` + bounded persistent memory with scope/kind/source/confidence (`server/master/memory.mjs`),
 - bounded post-turn reflection can learn explicit preferences/goals/working modes from operator message + own answer,

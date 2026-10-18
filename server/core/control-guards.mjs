@@ -2,7 +2,7 @@ import { deleteTaskBranch, listRepositoryWorktrees, removeTaskWorktree, syncBase
 import { inspectProjectReadiness } from './project-readiness.mjs';
 import { projectAdmissionIdentity, taskAdmissionIdentity } from './admission-identity.mjs';
 import { activeScopeConflicts } from './run-admission-guard.mjs';
-import { inspectSessionEvidence, sessionTerminationConfirmed } from './runner-session-status.mjs';
+import { inspectSessionEvidence, sessionTerminationConfirmed, sessionEvidenceProblem } from './runner-session-status.mjs';
 
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'merged', 'failed', 'aborted']);
 
@@ -240,7 +240,7 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
       return { status: 'runner_unavailable', error: error.message };
     }
     if (!evidence.valid) {
-      const message = 'OpenCode V2 returned malformed session evidence while reconciling uncertain dispatch; retaining ownership.';
+      const message = `${sessionEvidenceProblem(evidence)} while reconciling uncertain dispatch; retaining ownership.`;
       await store.updateRun(run.id, { error: message });
       return { status: 'runner_evidence_invalid', error: message };
     }
@@ -281,7 +281,7 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
           status: 'dispatch_unknown', dispatchUncertain: true,
           error: message + (evidence.valid
             ? ' Interrupt was requested, but durable OpenCode V2 termination is still unproven.'
-            : ' Interrupt was requested, but OpenCode V2 session evidence was malformed.'),
+            : ` Interrupt was requested, but termination remains unproven. ${sessionEvidenceProblem(evidence)}.`),
           finishedAt: null,
         });
         return { status: 'quarantine_abort_pending', runId: run.id };
