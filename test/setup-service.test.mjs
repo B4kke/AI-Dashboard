@@ -30,8 +30,8 @@ test('first-run setup selects safe defaults, persists locale/Master and register
   const opencode = {
     overview: async () => ({ connected: true, healthy: true, url: 'http://127.0.0.1:4096' }),
     availableModels: async () => [
-      { id: 'local/basic', connected: true, toolCall: false, default: false },
-      { id: 'local/coder', connected: true, toolCall: true, default: true },
+      { id: 'local/basic', available: true, supportsTools: false, default: false },
+      { id: 'local/coder', available: true, supportsTools: true, default: true },
     ],
     ensureMcpServer: async (input) => {
       mcpCalls.push(structuredClone(input));

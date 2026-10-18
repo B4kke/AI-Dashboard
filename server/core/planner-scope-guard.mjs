@@ -4,6 +4,14 @@ async function persistPlannerScopes(store, run) {
   return materializePlannerResult(store, run);
 }
 
+async function markPlannerDispatchUnconfirmed(store, runId, result) {
+  if (result?.status !== 'dispatch_unconfirmed' || !runId) return;
+  const run = store.getRun(runId);
+  if (run?.kind !== 'planner' || !run.taskId) return;
+  const task = store.getTask(run.taskId);
+  if (task?.sourceIdeaId) await store.updateIdea(task.sourceIdeaId, { state: 'needs_input' }).catch(() => {});
+}
+
 export function decoratePlannerScopes({ orchestrator, store }) {
   return {
     ...orchestrator,
@@ -11,6 +19,7 @@ export function decoratePlannerScopes({ orchestrator, store }) {
       const result = await orchestrator.reconcileRun(value);
       const id = plannerRunId(value);
       if (id) {
+        await markPlannerDispatchUnconfirmed(store, id, result);
         const run = store.getRun(id);
         try { await persistPlannerScopes(store, run); }
         finally {

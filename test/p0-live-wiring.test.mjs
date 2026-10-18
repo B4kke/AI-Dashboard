@@ -10,19 +10,28 @@ test('discovery proposal carries safe verification commands into one-click impor
   assert.deepEqual(proposal.verificationCommands, ['pnpm test', 'pnpm run lint', 'pnpm run typecheck']);
 });
 
-test('OpenCode v1 adapter registers Dashboard MCP through the SDK and is idempotent when connected', async () => {
+test('OpenCode V2 adapter registers Dashboard MCP through the SDK and is idempotent when connected', async () => {
   const client = new OpenCodeClient({ baseUrl: 'http://127.0.0.1:4096' });
   const calls = [];
-  let statuses = {};
+  let statuses = [];
   client.client = { mcp: {
-    status: async () => ({ data: statuses }),
-    add: async ({ body }) => { calls.push(body); statuses = { [body.name]: { status: 'connected' } }; return { data: statuses }; },
+    list: async () => ({ data: statuses }),
+    add: async (input) => {
+      calls.push(structuredClone(input));
+      statuses = [{ name: input.server, status: { status: 'connected' } }];
+      return { data: statuses[0] };
+    },
+    connect: async () => ({ data: true }),
   } };
   const first = await client.ensureMcpServer({ name: 'ai-dashboard-master', url: 'http://127.0.0.1:7331/mcp/master' });
   const second = await client.ensureMcpServer({ name: 'ai-dashboard-master', url: 'http://127.0.0.1:7331/mcp/master' });
   assert.equal(first.changed, true);
   assert.equal(second.changed, false);
   assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], {
+    server: 'ai-dashboard-master',
+    config: { type: 'remote', url: 'http://127.0.0.1:7331/mcp/master', disabled: false, protocol: '2026-07-28' },
+  });
 });
 
 

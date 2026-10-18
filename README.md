@@ -189,13 +189,13 @@ The checkpoint boundary is recoverable and Git-native: before committing, the co
 
 ### OpenCode
 
-Pinned `@opencode-ai/sdk@1.18.21` provides session/status/message/diff/abort/prompt transport, agent/provider/model/tool discovery, MCP/LSP/formatter status, event subscription and permission responses.
+Pinned `@opencode/client@2.0.24` is the OpenCode V2 transport boundary. The adapter uses V2 session create/get/list/delete, foreground-active snapshots, durable message/inbox prompt admission, prompt dispatch, diff, interrupt, model/default-model and primary-agent discovery, MCP status/resources, event subscription, permission responses and V1-migration diagnostics.
 
-Dashboard retains deterministic Run/session recovery, worktrees, prompts/role semantics, result validation, evidence and irreversible policy.
+Dashboard retains deterministic Run/session/message identity, crash recovery, worktrees, prompts/role semantics, result validation, evidence and irreversible policy. `session.active` is activity evidence only: absence from that snapshot is never treated as successful completion.
 
-The pinned SDK did not expose the documented structured-output `format` request shape when inspected. The versioned `AI_DASHBOARD_RESULT` marker contract remains authoritative until the published SDK exposes that capability and regression tests prove it.
+The versioned `AI_DASHBOARD_RESULT` contract remains authoritative for planner/worker/supervisor domain results even when the transport gains richer output features, because control-plane validation and machine evidence — not transport success — decide whether work may advance.
 
-Configured Dashboard role names are preserved. Before each prompt the adapter discovers the live OpenCode agent catalog and forwards the role only when that exact agent exists; unsupported names are omitted so OpenCode uses its own default. The control plane no longer rewrites roles to hardcoded `build`/`plan`/`general` aliases.
+Configured Dashboard role names are preserved. The V2 adapter discovers the live OpenCode agent catalog, accepts only primary-capable agents as session entrypoints and never promotes a subagent-only role to worker/planner/supervisor entrypoint. Unsupported names are omitted so OpenCode can use its own primary default. The control plane does not rewrite roles to hardcoded aliases.
 
 ### GitHub
 
@@ -217,9 +217,9 @@ SQLite/WAL is the default control-plane store; JSON is legacy import only. Persi
 
 Planner materialization is one StateStore mutation/commit: candidate validation, exact-suffix recovery, dependency rebuilding, Idea linkage and final backlog release cannot become separately visible. Replaying the same completed plan is idempotent.
 
-OpenCode dispatch has explicit crash windows and deterministic Run-scoped session identity. A possibly accepted prompt acknowledgement is reconciled rather than blindly replayed. Interrupted direct-model requests are also not silently replayed.
+OpenCode V2 dispatch has explicit crash windows plus deterministic Run-scoped session and prompt-message identities. A lost create/prompt acknowledgement is reconciled against the exact session and durable message/inbox admission record rather than blindly replayed. Interrupted direct-model requests are also not silently replayed.
 
-A worker result contract is applied only after the owned OpenCode session is proven `idle` or missing. `busy`, retrying or unknown status retains Run/scope ownership; timeout, retry exhaustion and manual abort likewise remain quarantined until the external session is explicitly confirmed stopped.
+A worker result contract is applied only after durable V2 terminal evidence reports `idle.outcome = succeeded`. `failed`/`interrupted` terminal outcomes fail closed. A missing exact session can prove ownership termination but never success by itself. Foreground-active, retrying, inactive-without-terminal and malformed/unavailable evidence retain Run/scope ownership; timeout, retry exhaustion and manual abort likewise remain quarantined until durable termination or exact-session absence is proven.
 
 Current leases are suitable for the single-control-plane beta target; they are not full distributed fencing tokens for multi-instance production autonomy.
 

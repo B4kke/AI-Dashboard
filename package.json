@@ -8,8 +8,8 @@
     "dev": "vite --config web/vite.config.ts",
     "start": "npm run build --silent && node --enable-source-maps server/index.mjs",
     "test": "node --test",
-    "beta": "node scripts/pc-beta.mjs",
-    "beta:pc": "node scripts/pc-beta.mjs",
+    "beta": "node scripts/pc-beta-entry.mjs",
+    "beta:pc": "node scripts/pc-beta-entry.mjs",
     "screenshots": "npm run build --silent && node scripts/seed-visual-state.mjs && node scripts/screenshot.mjs"
   },
   "engines": {
@@ -21,7 +21,7 @@
     "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/node": "2.1.1",
     "@modelcontextprotocol/server": "2.3.1",
-    "@opencode-ai/sdk": "1.18.21",
+    "@opencode/client": "2.0.24",
     "ai": "7.0.97",
     "i18next": "26.4.0",
     "octokit": "5.0.5",

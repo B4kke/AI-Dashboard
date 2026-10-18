@@ -2,11 +2,11 @@ const SETUP_META_KEY = 'setup.preferences.v1';
 const SUPPORTED_LOCALES = new Set(['nb', 'en']);
 
 function selectCodingModel(models = []) {
-  const connected = models.filter((model) => model?.connected === true && model?.id);
-  return connected.find((model) => model.default)?.id
-    || connected.find((model) => model.providerDefault && model.toolCall)?.id
-    || connected.find((model) => model.toolCall)?.id
-    || connected[0]?.id
+  const available = models.filter((model) => model?.available === true && model?.id);
+  return available.find((model) => model.default && model.supportsTools)?.id
+    || available.find((model) => model.default)?.id
+    || available.find((model) => model.supportsTools)?.id
+    || available[0]?.id
     || null;
 }
 
