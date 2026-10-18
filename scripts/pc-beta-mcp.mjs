@@ -99,7 +99,9 @@ async function waitForToolProbe(openCode, { sessionId, messageId, expectedTools,
     const raw = await openCode.sessionEvidence({ sessionId, limit: 200 });
     const evidence = inspectSessionEvidence(raw, sessionId, messageId);
     last = evidence;
-    if (!evidence.valid && evidence.diagnostic) {
+    // Don't fail fast on durable_history_unavailable - the session may still be
+    // working and will produce a completed assistant message. Keep polling.
+    if (!evidence.valid && evidence.diagnostic && evidence.diagnostic.code !== 'durable_history_unavailable') {
       const error = new Error(sessionEvidenceProblem(evidence));
       error.evidence = evidence;
       throw error;
