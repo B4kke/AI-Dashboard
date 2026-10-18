@@ -115,6 +115,8 @@ Compatibility mode (OpenCode without durable events): when the synced log contai
 
 Measured gap (2026-10-18, local OpenCode 2.0.32): observed sync-only `session.log()` without durable `session.inbox.enqueued` / `session.execution.*` events. The observed `event` table held `session.created.1`, `session.updated.1`, `message.updated.1` and `message.part.updated.1` while `event_sequence` advanced. `session.get()` returned `outcome: 'succeeded'` after idle, and messages included completed assistant and idle entries. Compatibility mode recognized terminal state in this environment, but this is **not** proof of a passed PC beta or a guarantee for all OpenCode installations. `HANDOFF.md` records the incomplete October 19 attempts; durable prompt-bound events remain preferable.
 
+OpenCode 2.0.32 MCP tool calls may appear as Code Mode `execute` message parts rather than direct MCP tool parts. The beta interoperability probe accepts those only when the completed `execute` part has an untruncated, single completed tool call in OpenCode's tool-call metadata naming the exact registered `server.dashboard_status` tool, and its output matches the expected Dashboard profile/protocol. Model-written code or output text alone cannot claim a call. This metadata supports the **interop probe**, not canonical checkpoint/CI/review/merge evidence.
+
 ### Agent roles and permissions
 
 Dashboard roles are not assumed to equal OpenCode agent IDs. The adapter queries the live V2 agent catalog and accepts only primary-capable entries as session entrypoints. A subagent-only agent is never promoted to worker/planner/supervisor entrypoint. Unsupported configured names are omitted while role semantics remain in the control-plane prompt.

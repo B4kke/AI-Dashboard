@@ -167,7 +167,7 @@ export async function verifyWorkerCheckpoint({ task, project, worktreePath, chec
     return { ok: false, reason: 'One or more control-plane verification commands failed.', evidence: { checkpoint, diff, scope, ownership, verification } };
   }
 
-  return { ok: true, reason: null, evidence: { checkpoint, diff, scope, ownership, verification } };
+  return { ok: true, reason: null, evidence: { checkpoint, diff, scope, ownership, verification, baseHead, scopeBaseHead } };
 }
 
 export async function verifyBeforeMerge({ task, project, worktreePath, expectedHead, expectedBranch = null, inspectRepository }) {

@@ -6,6 +6,8 @@ It is intentionally stricter than "the UI opened". The goal is to prove that the
 
 Current status (2026-08-29): the harness and its fail-closed resume/evidence contract are implemented and deterministically tested. The complete full campaign has **not** yet been rerun on the exact final hardening commit, and fresh Linux + Windows GitHub Actions for that same commit are also open. This checklist records the required proof; it is not a claim that the proof already exists.
 
+October 19 evidence update: smoke on Dashboard `f54346d` reached a merged disposable PR with worker checkpoint, CI and supervisor evidence, but the **beta report failed** its independent baseline check because successful control evidence did not include `baseHead`/`scopeBaseHead`. The combined entrypoint also failed MCP interoperability despite completed Code Mode-wrapped read/master tool calls, because the probe recognized only direct tool parts. These are being fixed without relaxing the baseline comparison or treating model text as tool execution. The failed report under `/tmp/opencode/beta-sol-f54346d/` is preserved and does not count as a passed smoke.
+
 ## Automated harness
 
 The preferred beta entrypoint is now the outer harness in `scripts/pc-beta.mjs`:

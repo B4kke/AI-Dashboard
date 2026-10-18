@@ -52,6 +52,18 @@ function completedTool(name, payload) {
   };
 }
 
+function codeModeTool(name, payload, { truncated = false } = {}) {
+  return {
+    type: 'tool', id: `execute-${name}`, name: 'execute',
+    state: {
+      status: 'completed',
+      input: { code: 'return await tools[...]' },
+      content: [{ type: 'text', text: JSON.stringify(payload) }],
+      metadata: { toolCalls: [{ tool: name, status: 'completed' }], truncated },
+    },
+  };
+}
+
 function fakeOpenCode({ omitMasterTool = false, evidenceSequence = null } = {}) {
   const state = {
     sessionId: null,
@@ -189,6 +201,31 @@ test('MCP probe waits for a sync-only OpenCode log before the assistant complete
   assert.equal(state.evidencePolls, 2);
   assert.deepEqual(evidence.toolProbe.tools, [readTool, masterTool]);
   assert.equal(state.deleted.length, 1);
+});
+
+test('PC beta recognizes exact completed MCP calls nested inside OpenCode Code Mode execute', async () => {
+  const { openCode, seed, names, readTool, masterTool } = fakeOpenCode();
+  openCode.sessionEvidence = async ({ sessionId }) => terminalEvidence(sessionId, openCode.state.messageId, [
+    codeModeTool(`${names.read}.dashboard_status`, { profile: 'read', protocolTarget: '2026-07-28', mutationsEnabled: false }),
+    codeModeTool(`${names.master}.dashboard_status`, { profile: 'master', protocolTarget: '2026-07-28', mutationsEnabled: true }),
+  ]);
+  const evidence = await verifyOpenCodeMcpInterop({
+    openCode, directory: '/tmp/disposable-beta', dashboardUrl: 'http://127.0.0.1:7333',
+    seed, discoveryTimeoutMs: 1_000, probeTimeoutMs: 1_000, sleepImpl: async () => {},
+  });
+  assert.deepEqual(evidence.toolProbe.tools, [readTool, masterTool]);
+});
+
+test('MCP probe rejects an execute result that claims a profile without exact untruncated tool metadata', async () => {
+  const { openCode, seed, names, masterTool } = fakeOpenCode();
+  openCode.sessionEvidence = async ({ sessionId }) => terminalEvidence(sessionId, openCode.state.messageId, [
+    codeModeTool(`${names.read}.dashboard_status`, { profile: 'read', protocolTarget: '2026-07-28' }, { truncated: true }),
+    codeModeTool(`${names.master}.not_dashboard_status`, { profile: 'master', protocolTarget: '2026-07-28', mutationsEnabled: true }),
+  ]);
+  await assert.rejects(verifyOpenCodeMcpInterop({
+    openCode, directory: '/tmp/disposable-beta', dashboardUrl: 'http://127.0.0.1:7333',
+    seed, discoveryTimeoutMs: 1_000, probeTimeoutMs: 1_000, sleepImpl: async () => {},
+  }), new RegExp(`required tool calls: .*${masterTool}`));
 });
 
 test('PC beta fails closed when OpenCode terminal success lacks one required MCP tool call', async () => {

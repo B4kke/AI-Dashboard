@@ -63,6 +63,8 @@ test('worker checkpoint requires control-plane verification and a real diff', as
     assert.equal(missing.ok, false); assert.match(missing.reason, /No control-plane verification/);
     const passed = await verifyWorkerCheckpoint({ task: { verificationCommands: ['node verify.mjs'] }, project: {}, worktreePath: f.worktreePath, checkpoint, baseHead: f.baseHead, scopeBaseHead: f.baseHead });
     assert.equal(passed.ok, true); assert.equal(passed.evidence.diff.fileCount, 1); assert.equal(passed.evidence.verification.passed, 1);
+    assert.equal(passed.evidence.baseHead, f.baseHead);
+    assert.equal(passed.evidence.scopeBaseHead, f.baseHead);
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 

@@ -41,14 +41,25 @@ function toolOutput(part) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-function completedToolParts(messages, expectedNames) {
+function completedToolParts(messages, expectedNames, codeModeNames) {
   const wanted = new Set(expectedNames);
   const out = new Map();
   for (const message of messages || []) {
     if (message?.type !== 'assistant' || !Array.isArray(message.content)) continue;
     for (const part of message.content) {
-      if (part?.type !== 'tool' || !wanted.has(part.name) || part?.state?.status !== 'completed') continue;
-      if (!out.has(part.name)) out.set(part.name, part);
+      if (part?.type !== 'tool' || part?.state?.status !== 'completed') continue;
+      if (wanted.has(part.name)) {
+        if (!out.has(part.name)) out.set(part.name, part);
+        continue;
+      }
+      // OpenCode Code Mode exposes MCP tools through execute. Its tool-call
+      // metadata, not the model-authored code or text, must identify the exact
+      // completed MCP call. Never infer execution solely from returned JSON.
+      if (part.name !== 'execute' || part.state.metadata?.truncated === true) continue;
+      const calls = part.state.metadata?.toolCalls;
+      if (!Array.isArray(calls) || calls.length !== 1 || calls[0]?.status !== 'completed') continue;
+      const expected = codeModeNames.get(calls[0].tool);
+      if (expected && !out.has(expected)) out.set(expected, part);
     }
   }
   return out;
@@ -92,7 +103,7 @@ async function waitForDiscovery(openCode, directory, names, { timeoutMs = DEFAUL
   throw error;
 }
 
-async function waitForToolProbe(openCode, { sessionId, messageId, expectedTools, timeoutMs = DEFAULT_PROBE_TIMEOUT_MS, sleepImpl = sleep } = {}) {
+async function waitForToolProbe(openCode, { sessionId, messageId, expectedTools, codeModeNames = new Map(), timeoutMs = DEFAULT_PROBE_TIMEOUT_MS, sleepImpl = sleep } = {}) {
   const deadline = Date.now() + timeoutMs;
   let last = null;
   while (Date.now() < deadline) {
@@ -112,7 +123,7 @@ async function waitForToolProbe(openCode, { sessionId, messageId, expectedTools,
         error.evidence = evidence;
         throw error;
       }
-      const tools = completedToolParts(evidence.messages, expectedTools);
+      const tools = completedToolParts(evidence.messages, expectedTools, codeModeNames);
       if (tools.size !== expectedTools.length) {
         const missing = expectedTools.filter((name) => !tools.has(name));
         const error = new Error(`OpenCode MCP tool probe completed without required tool calls: ${missing.join(', ')}`);
@@ -173,6 +184,10 @@ export async function verifyOpenCodeMcpInterop({
     const readTool = openCodeMcpToolName(names.read, 'dashboard_status');
     const masterTool = openCodeMcpToolName(names.master, 'dashboard_status');
     const expectedTools = [readTool, masterTool];
+    const codeModeNames = new Map([
+      [`${names.read}.dashboard_status`, readTool],
+      [`${names.master}.dashboard_status`, masterTool],
+    ]);
 
     probeSessionId = `ses_aibeta_mcp_${randomUUID().replaceAll('-', '')}`;
     const messageId = `msg_aibeta_mcp_${randomUUID().replaceAll('-', '')}`;
@@ -208,6 +223,7 @@ export async function verifyOpenCodeMcpInterop({
       sessionId: probeSessionId,
       messageId,
       expectedTools,
+      codeModeNames,
       timeoutMs: probeTimeoutMs,
       sleepImpl,
     });

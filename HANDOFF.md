@@ -16,6 +16,8 @@
 
 ## Ekstern beta — det vi faktisk vet
 
+- Nyere smoke på `f54346d` i `/tmp/opencode/beta-sol-f54346d/`: worker, checkpoint, PR #2, CI, supervisor-godkjenning og merge nådde kontrollplanet (Task `done`), men rapportens `happy_path` ble **failed** fordi `control.baseHead` og `control.scopeBaseHead` manglet i vellykket checkpoint-evidens. MCP-proben ble også **failed** fordi OpenCode 2.0.32 leverte påkrevde read/master-kall som Code Mode `execute` med eksakt `metadata.toolCalls[].tool`, ikke som direkte tool parts. Bevar rapporten. Reparasjoner i `server/core/evidence-gate.mjs` og `scripts/pc-beta-mcp.mjs` er ennå ikke verifisert i ny full smoke.
+
 - `/tmp/opencode/beta-final-run/` på `fb248ef`: `repository_fixture`, `opencode_health` og `exploration_project` bestod (Exploration **ble hoppet over**, ikke analysert); `happy_path` **feilet** med `fetch failed` etter at Dashboard-prosessen ble avsluttet manuelt. Lagret worker-Run står `running` med checkpoint-intent; arbeidet og rapporten er bevart. Les `session.json`, `control.sqlite`, `dashboard.log` og `reports/` før nye sideeffekter.
 - OpenCode-sesjonen for samme worker (`ses25f4dd48f9071be57e6f96b9d743ed2292837094d91cc33e`) har nå `outcome=succeeded`, er ikke aktiv, og gir `state=terminal`, `source=message_based`, `compatibilityMode=true` ved direkte evidensinspeksjon. **Dette beviser ikke at Task er publisert, CI er grønn, supervisor har godkjent eller PR er merget.** Worktree-HEAD har beveget seg forbi parent, men lagret Run mangler `checkpointHead`.
 - `/tmp/opencode/beta-fresh-1792360477/` på eldre head `563de0f`: worker-Run **ble completed** med checkpoint og en supervisor-Run ble startet. Dette motbeviser at alle `tick()`-kall var permanent låst. Rapporten er ikke en bestått smoke.
