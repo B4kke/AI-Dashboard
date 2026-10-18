@@ -10,6 +10,43 @@ const TERMINAL_EVENT_OUTCOMES = new Map([
   ['session.execution.interrupted', 'interrupted'],
 ]);
 
+const MESSAGE_BASED_OUTCOMES = new Set(['succeeded', 'failed', 'interrupted']);
+
+/**
+ * Message-based terminal evidence (compatibility mode for OpenCode versions
+ * that do not persist durable session.execution.* events). Confirms terminal
+ * state from session.outcome plus an assistant message with time.completed,
+ * bound to the prompt admission via the user message with promptMessageId.
+ * Weaker than durable events: session.outcome is session-level, not
+ * prompt-scoped. Only used when durable history is unavailable.
+ */
+function inspectMessageBasedTerminal(value, sessionId, promptMessageId) {
+  const session = isPlainRecord(value.session) ? value.session : null;
+  const outcome = session && typeof session.outcome === 'string' ? session.outcome : null;
+  if (!outcome || !MESSAGE_BASED_OUTCOMES.has(outcome)) return null;
+
+  const messages = Array.isArray(value.messages) ? value.messages : [];
+  // Prompt admission: the prompt message id must appear as a user message.
+  const promptIdx = messages.findIndex((m) => m?.id === promptMessageId && m?.type === 'user');
+  if (promptIdx < 0) return null;
+  // Completion evidence: an assistant message with time.completed after the prompt.
+  const completedAfterPrompt = messages.some((m, idx) => {
+    if (idx <= promptIdx) return false;
+    if (m?.type !== 'assistant') return false;
+    if (!isPlainRecord(m.time) || typeof m.time.completed !== 'number') return false;
+    return true;
+  });
+  if (!completedAfterPrompt) return null;
+
+  return {
+    outcome,
+    source: 'message_based',
+    admittedSeq: null,
+    startedSeq: null,
+    terminalIdx: promptIdx,
+  };
+}
+
 function validActiveMap(value) {
   if (!isPlainRecord(value)) return false;
   return Object.entries(value).every(([id, status]) => (
@@ -166,7 +203,26 @@ export function inspectSessionEvidence(value, sessionId, promptMessageId) {
   const eventCount = logEvidence.items.length - 1;
   const syncedSeq = logEvidence.items.at(-1).seq ?? null;
   if (eventCount === 0 && syncedSeq > 0) {
-    return { ...empty, diagnostic: { code: 'durable_history_unavailable', eventCount, syncedSeq } };
+    // Compatibility mode: OpenCode versions without durable session.execution.*
+    // events return a synced log with no events. Fall back to message-based
+    // terminal evidence (session.outcome + assistant message with time.completed).
+    const messageBased = inspectMessageBasedTerminal(value, sessionId, promptMessageId);
+    if (messageBased) {
+      return {
+        valid: true,
+        state: 'terminal',
+        active: false,
+        terminal: { outcome: messageBased.outcome, source: messageBased.source, eventId: null, seq: null },
+        retry: { attempt: 0, message: null },
+        missing: false,
+        messages: messageEvidence.messages,
+        admittedSeq: messageBased.admittedSeq,
+        startedSeq: messageBased.startedSeq,
+        diagnostic: { code: 'durable_history_unavailable', eventCount: 0, syncedSeq },
+        compatibilityMode: true,
+      };
+    }
+    return { ...empty, diagnostic: { code: 'durable_history_unavailable', eventCount: 0, syncedSeq } };
   }
   const runLog = relevantRunLog(logEvidence.items, sessionId, promptMessageId);
   if (!runLog.valid) {
@@ -197,7 +253,10 @@ export function sessionEvidenceProblem(evidence) {
     const detail = syncedSeq !== null
       ? ` (synced sequence ${syncedSeq}, ${eventCount ?? 0} durable events)`
       : '';
-    return `OpenCode V2 durable session history is unavailable: the synced log contains no events${detail}. Check OpenCode durable-event persistence; messages and idle telemetry cannot prove completion`;
+    const compat = evidence.compatibilityMode === true
+      ? '. Message-based terminal evidence (session.outcome + assistant message with time.completed) resolved the Run.'
+      : '. Messages and idle telemetry cannot prove completion; compatibility terminal evidence is not available.';
+    return `OpenCode V2 durable session history is unavailable: the synced log contains no events${detail}. Check OpenCode durable-event persistence${compat}`;
   }
   if (evidence?.diagnostic?.code === 'prompt_admission_unproven') {
     const eventCount = Number.isInteger(evidence.diagnostic.eventCount) ? evidence.diagnostic.eventCount : null;

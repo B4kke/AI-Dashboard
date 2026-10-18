@@ -128,3 +128,132 @@ test('diagnostic copy never includes arbitrary runner-supplied text', () => {
     assert.equal(message.includes(hostile), false);
   }
 });
+
+function messageWithCompleted(id, completed) {
+  return {
+    id,
+    sessionID: SESSION_ID,
+    type: 'assistant',
+    time: { created: completed - 1, completed },
+    content: [{ type: 'text', text: 'done' }],
+    finish: 'stop',
+  };
+}
+
+function userPromptMessage(id) {
+  return {
+    id,
+    sessionID: SESSION_ID,
+    type: 'user',
+    time: { created: 1 },
+    text: 'test prompt',
+  };
+}
+
+test('compatibility mode: synced log without events + session.outcome succeeded + completed assistant message proves terminal', () => {
+  const evidence = v2SessionEvidence(SESSION_ID, PROMPT_MESSAGE_ID, {
+    active: false,
+    messages: [userPromptMessage(PROMPT_MESSAGE_ID), messageWithCompleted('msg_assistant', 5)],
+  });
+  evidence.session = { id: SESSION_ID, outcome: 'succeeded' };
+  evidence.log = {
+    items: [{ type: 'log.synced', aggregateID: SESSION_ID, seq: 115 }],
+    synced: true,
+  };
+
+  const inspected = inspectSessionEvidence(evidence, SESSION_ID, PROMPT_MESSAGE_ID);
+
+  assert.equal(inspected.valid, true);
+  assert.equal(inspected.state, 'terminal');
+  assert.equal(inspected.compatibilityMode, true);
+  assert.equal(inspected.terminal.outcome, 'succeeded');
+  assert.equal(inspected.terminal.source, 'message_based');
+  assert.equal(sessionTerminationConfirmed(inspected), true);
+  assert.deepEqual(inspected.diagnostic, {
+    code: 'durable_history_unavailable', eventCount: 0, syncedSeq: 115,
+  });
+});
+
+test('compatibility mode: session.outcome failed proves terminal failure', () => {
+  const evidence = v2SessionEvidence(SESSION_ID, PROMPT_MESSAGE_ID, {
+    active: false,
+    messages: [userPromptMessage(PROMPT_MESSAGE_ID), messageWithCompleted('msg_assistant', 5)],
+  });
+  evidence.session = { id: SESSION_ID, outcome: 'failed' };
+  evidence.log = {
+    items: [{ type: 'log.synced', aggregateID: SESSION_ID, seq: 115 }],
+    synced: true,
+  };
+
+  const inspected = inspectSessionEvidence(evidence, SESSION_ID, PROMPT_MESSAGE_ID);
+
+  assert.equal(inspected.valid, true);
+  assert.equal(inspected.state, 'terminal');
+  assert.equal(inspected.terminal.outcome, 'failed');
+});
+
+test('compatibility mode: session.outcome missing cannot prove terminal', () => {
+  const evidence = v2SessionEvidence(SESSION_ID, PROMPT_MESSAGE_ID, {
+    active: false,
+    messages: [userPromptMessage(PROMPT_MESSAGE_ID), messageWithCompleted('msg_assistant', 5)],
+  });
+  evidence.session = { id: SESSION_ID };
+  evidence.log = {
+    items: [{ type: 'log.synced', aggregateID: SESSION_ID, seq: 115 }],
+    synced: true,
+  };
+
+  const inspected = inspectSessionEvidence(evidence, SESSION_ID, PROMPT_MESSAGE_ID);
+
+  assert.equal(inspected.valid, false);
+  assert.equal(inspected.state, 'invalid');
+  assert.equal(inspected.diagnostic.code, 'durable_history_unavailable');
+});
+
+test('compatibility mode: no completed assistant message after prompt cannot prove terminal', () => {
+  const evidence = v2SessionEvidence(SESSION_ID, PROMPT_MESSAGE_ID, {
+    active: false,
+    messages: [userPromptMessage(PROMPT_MESSAGE_ID)],
+  });
+  evidence.session = { id: SESSION_ID, outcome: 'succeeded' };
+  evidence.log = {
+    items: [{ type: 'log.synced', aggregateID: SESSION_ID, seq: 115 }],
+    synced: true,
+  };
+
+  const inspected = inspectSessionEvidence(evidence, SESSION_ID, PROMPT_MESSAGE_ID);
+
+  assert.equal(inspected.valid, false);
+  assert.equal(inspected.state, 'invalid');
+  assert.equal(inspected.diagnostic.code, 'durable_history_unavailable');
+});
+
+test('compatibility mode: prompt message id not found cannot prove terminal', () => {
+  const evidence = v2SessionEvidence(SESSION_ID, PROMPT_MESSAGE_ID, {
+    active: false,
+    messages: [messageWithCompleted('msg_assistant', 5)],
+  });
+  evidence.session = { id: SESSION_ID, outcome: 'succeeded' };
+  evidence.log = {
+    items: [{ type: 'log.synced', aggregateID: SESSION_ID, seq: 115 }],
+    synced: true,
+  };
+
+  const inspected = inspectSessionEvidence(evidence, SESSION_ID, PROMPT_MESSAGE_ID);
+
+  assert.equal(inspected.valid, false);
+  assert.equal(inspected.state, 'invalid');
+  assert.equal(inspected.diagnostic.code, 'durable_history_unavailable');
+});
+
+test('compatibility mode diagnostic notes message-based resolution when available', () => {
+  const evidence = {
+    valid: true,
+    state: 'terminal',
+    terminal: { outcome: 'succeeded', source: 'message_based' },
+    diagnostic: { code: 'durable_history_unavailable', eventCount: 0, syncedSeq: 115 },
+    compatibilityMode: true,
+  };
+  const message = sessionEvidenceProblem(evidence);
+  assert.equal(message.includes('resolved the Run'), true);
+});
