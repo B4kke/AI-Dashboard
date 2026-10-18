@@ -192,10 +192,20 @@ export function sessionTerminationConfirmed(evidence) {
 export function sessionEvidenceProblem(evidence) {
   // Fixed local copy only: never persist runner payloads or model text as diagnostics.
   if (evidence?.diagnostic?.code === 'durable_history_unavailable') {
-    return 'OpenCode V2 durable session history is unavailable: the synced log contains no events. Check OpenCode durable-event persistence; messages and idle telemetry cannot prove completion';
+    const eventCount = Number.isInteger(evidence.diagnostic.eventCount) ? evidence.diagnostic.eventCount : null;
+    const syncedSeq = Number.isInteger(evidence.diagnostic.syncedSeq) ? evidence.diagnostic.syncedSeq : null;
+    const detail = syncedSeq !== null
+      ? ` (synced sequence ${syncedSeq}, ${eventCount ?? 0} durable events)`
+      : '';
+    return `OpenCode V2 durable session history is unavailable: the synced log contains no events${detail}. Check OpenCode durable-event persistence; messages and idle telemetry cannot prove completion`;
   }
   if (evidence?.diagnostic?.code === 'prompt_admission_unproven') {
-    return 'OpenCode V2 durable session history does not uniquely prove the expected prompt admission';
+    const eventCount = Number.isInteger(evidence.diagnostic.eventCount) ? evidence.diagnostic.eventCount : null;
+    const syncedSeq = Number.isInteger(evidence.diagnostic.syncedSeq) ? evidence.diagnostic.syncedSeq : null;
+    const detail = syncedSeq !== null
+      ? ` (synced sequence ${syncedSeq}, ${eventCount ?? 0} durable events)`
+      : '';
+    return `OpenCode V2 durable session history does not uniquely prove the expected prompt admission${detail}`;
   }
   return 'OpenCode V2 returned malformed session evidence';
 }

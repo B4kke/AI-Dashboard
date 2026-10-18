@@ -449,6 +449,39 @@ test('malformed runner messages cannot release an uncertain dispatch', async () 
   } finally { await rm(fixture.dir, { recursive: true, force: true }); }
 });
 
+test('sync-only OpenCode durable history cannot release an uncertain dispatch and reports unavailable persistence', async () => {
+  const fixture = await uncertainDispatchFixture();
+  try {
+    const opencode = {
+      async overview() { return { connected: true, healthy: true }; },
+      async availableModels() { return [{ id: 'provider/model', available: true }]; },
+      async promptAdmission() { return null; },
+      async sessionEvidence() {
+        return {
+          active: {},
+          session: { id: 'session-1' },
+          messages: [],
+          missing: false,
+          log: { items: [{ type: 'log.synced', aggregateID: 'session-1', seq: 115 }], synced: true },
+        };
+      },
+    };
+    const guarded = decorateControlPlane({ orchestrator: fixture.orchestrator, store: fixture.store, locks, opencode });
+    const run = await guarded.startWorker(fixture.task.id);
+    await fixture.store.updateRun(run.id, { startedAt: new Date(Date.now() - 60_000).toISOString() });
+
+    const reconciled = await guarded.reconcileRun(run.id);
+    assert.equal(reconciled.status, 'runner_evidence_invalid');
+    assert.equal(fixture.innerReconcileCalls(), 0);
+    assert.match(fixture.store.getRun(run.id).error, /durable session history is unavailable/);
+    assert.match(fixture.store.getRun(run.id).error, /durable-event persistence/);
+    assert.equal(fixture.store.getRun(run.id).status, 'dispatch_unknown');
+    assert.equal(fixture.store.getRun(run.id).dispatchUncertain, true);
+    assert.equal(fixture.store.getTask(fixture.task.id).state, 'in_progress');
+    assert.equal(fixture.store.snapshot().runs.length, 1);
+  } finally { await rm(fixture.dir, { recursive: true, force: true }); }
+});
+
 test('planner-quarantined worker output is never applied before external session termination is confirmed', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-quarantine-stop-'));
   try {

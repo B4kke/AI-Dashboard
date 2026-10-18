@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { openCodeSessionPermissions } from '../server/integrations/opencode.mjs';
 import { normalizeModelRef } from '../server/integrations/model-provider.mjs';
-import { inspectSessionEvidence } from '../server/core/runner-session-status.mjs';
+import { inspectSessionEvidence, sessionEvidenceProblem } from '../server/core/runner-session-status.mjs';
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 30_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 120_000;
@@ -99,6 +99,11 @@ async function waitForToolProbe(openCode, { sessionId, messageId, expectedTools,
     const raw = await openCode.sessionEvidence({ sessionId, limit: 200 });
     const evidence = inspectSessionEvidence(raw, sessionId, messageId);
     last = evidence;
+    if (!evidence.valid && evidence.diagnostic) {
+      const error = new Error(sessionEvidenceProblem(evidence));
+      error.evidence = evidence;
+      throw error;
+    }
     if (evidence.valid && evidence.state === 'terminal') {
       if (evidence.terminal?.outcome !== 'succeeded') {
         const error = new Error(`OpenCode MCP tool probe terminated as ${evidence.terminal?.outcome || 'unknown'}`);
