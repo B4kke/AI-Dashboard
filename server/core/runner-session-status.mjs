@@ -21,6 +21,7 @@ const MESSAGE_BASED_OUTCOMES = new Set(['succeeded', 'failed', 'interrupted']);
  * prompt-scoped. Only used when durable history is unavailable.
  */
 export function inspectMessageBasedTerminal(value, sessionId, promptMessageId) {
+  if (Object.prototype.hasOwnProperty.call(value.active || {}, sessionId)) return null;
   const session = isPlainRecord(value.session) ? value.session : null;
   const outcome = session && typeof session.outcome === 'string' ? session.outcome : null;
   if (!outcome || !MESSAGE_BASED_OUTCOMES.has(outcome)) return null;
@@ -29,6 +30,9 @@ export function inspectMessageBasedTerminal(value, sessionId, promptMessageId) {
   // Prompt admission: the prompt message id must appear as a user message.
   const promptIdx = messages.findIndex((m) => m?.id === promptMessageId && m?.type === 'user');
   if (promptIdx < 0) return null;
+  // A session-level outcome cannot be attributed to one prompt if another
+  // user prompt has been admitted in the same session.
+  if (messages.some((m, idx) => m?.type === 'user' && idx !== promptIdx)) return null;
   // Completion evidence: an assistant message with time.completed after the prompt.
   const completedAfterPrompt = messages.some((m, idx) => {
     if (idx <= promptIdx) return false;
@@ -57,6 +61,7 @@ export function hasCompletedAssistantAfterPrompt(value, sessionId, promptMessage
   const messages = Array.isArray(value.messages) ? value.messages : [];
   const promptIdx = messages.findIndex((m) => m?.id === promptMessageId && m?.type === 'user');
   if (promptIdx < 0) return false;
+  if (messages.some((m, idx) => m?.type === 'user' && idx !== promptIdx)) return false;
   return messages.some((m, idx) => {
     if (idx <= promptIdx) return false;
     if (m?.type !== 'assistant') return false;

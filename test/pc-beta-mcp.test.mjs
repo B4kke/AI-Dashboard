@@ -52,13 +52,14 @@ function completedTool(name, payload) {
   };
 }
 
-function fakeOpenCode({ omitMasterTool = false } = {}) {
+function fakeOpenCode({ omitMasterTool = false, evidenceSequence = null } = {}) {
   const state = {
     sessionId: null,
     messageId: null,
     removed: [],
     deleted: [],
     servers: [],
+    evidencePolls: 0,
   };
   const seed = 'pcbeta-mcp-test';
   const names = mcpBetaServerNames(seed);
@@ -114,6 +115,8 @@ function fakeOpenCode({ omitMasterTool = false } = {}) {
     },
     async sessionEvidence({ sessionId }) {
       assert.equal(sessionId, state.sessionId);
+      state.evidencePolls += 1;
+      if (evidenceSequence) return evidenceSequence(sessionId, state.messageId, state.evidencePolls);
       const tools = [
         completedTool(readTool, { profile: 'read', protocolTarget: '2026-07-28', mutationsEnabled: false }),
         ...(omitMasterTool ? [] : [completedTool(masterTool, { profile: 'master', protocolTarget: '2026-07-28', mutationsEnabled: true })]),
@@ -155,6 +158,37 @@ test('PC beta proves OpenCode read/master MCP resources, prompts and real tool e
   assert.deepEqual(state.servers, [names.read, names.master]);
   assert.equal(state.deleted.length, 1, 'probe session must be removed after evidence is captured');
   assert.deepEqual(state.removed, [names.master, names.read], 'only exact beta-owned MCP registrations are cleaned up');
+});
+
+test('MCP probe waits for a sync-only OpenCode log before the assistant completes', async () => {
+  const seed = 'pcbeta-mcp-test';
+  const names = mcpBetaServerNames(seed);
+  const readTool = openCodeMcpToolName(names.read, 'dashboard_status');
+  const masterTool = openCodeMcpToolName(names.master, 'dashboard_status');
+  const { openCode, state } = fakeOpenCode({ evidenceSequence(sessionId, messageId, poll) {
+    const messages = [{ id: messageId, type: 'user', time: { created: 1 }, text: 'probe' }];
+    if (poll > 1) messages.push({
+      id: 'assistant-1', type: 'assistant', time: { created: 2, completed: 3 },
+      content: [
+        completedTool(readTool, { profile: 'read', protocolTarget: '2026-07-28', mutationsEnabled: false }),
+        completedTool(masterTool, { profile: 'master', protocolTarget: '2026-07-28', mutationsEnabled: true }),
+      ],
+    });
+    return {
+      active: poll === 1 ? { [sessionId]: { type: 'running' } } : {},
+      session: { id: sessionId, ...(poll > 1 ? { outcome: 'succeeded' } : {}) },
+      missing: false,
+      messages,
+      log: { synced: true, items: [{ type: 'log.synced', aggregateID: sessionId, seq: 4 }] },
+    };
+  } });
+  const evidence = await verifyOpenCodeMcpInterop({
+    openCode, directory: '/tmp/disposable-beta', dashboardUrl: 'http://127.0.0.1:7333',
+    seed, discoveryTimeoutMs: 1_000, probeTimeoutMs: 1_000, sleepImpl: async () => {},
+  });
+  assert.equal(state.evidencePolls, 2);
+  assert.deepEqual(evidence.toolProbe.tools, [readTool, masterTool]);
+  assert.equal(state.deleted.length, 1);
 });
 
 test('PC beta fails closed when OpenCode terminal success lacks one required MCP tool call', async () => {

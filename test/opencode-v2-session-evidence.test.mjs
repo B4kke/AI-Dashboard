@@ -192,6 +192,34 @@ test('compatibility mode: session.outcome failed proves terminal failure', () =>
   assert.equal(inspected.terminal.outcome, 'failed');
 });
 
+test('compatibility mode does not declare a foreground-active session terminal', () => {
+  const evidence = v2SessionEvidence(SESSION_ID, PROMPT_MESSAGE_ID, {
+    active: true,
+    messages: [userPromptMessage(PROMPT_MESSAGE_ID), messageWithCompleted('msg_assistant', 5)],
+  });
+  evidence.session = { id: SESSION_ID, outcome: 'succeeded' };
+  evidence.log = { items: [{ type: 'log.synced', aggregateID: SESSION_ID, seq: 6 }], synced: true };
+
+  const inspected = inspectSessionEvidence(evidence, SESSION_ID, PROMPT_MESSAGE_ID);
+  assert.equal(inspected.state, 'running');
+  assert.equal(inspected.terminal, null);
+  assert.equal(sessionTerminationConfirmed(inspected), false);
+});
+
+test('compatibility mode does not attribute a session-level outcome across multiple user prompts', () => {
+  const evidence = v2SessionEvidence(SESSION_ID, PROMPT_MESSAGE_ID, {
+    active: false,
+    messages: [userPromptMessage(PROMPT_MESSAGE_ID), messageWithCompleted('msg_assistant', 5), userPromptMessage('another-prompt')],
+  });
+  evidence.session = { id: SESSION_ID, outcome: 'succeeded' };
+  evidence.log = { items: [{ type: 'log.synced', aggregateID: SESSION_ID, seq: 6 }], synced: true };
+
+  const inspected = inspectSessionEvidence(evidence, SESSION_ID, PROMPT_MESSAGE_ID);
+  assert.equal(inspected.valid, false);
+  assert.equal(inspected.terminal, null);
+  assert.equal(sessionTerminationConfirmed(inspected), false);
+});
+
 test('compatibility mode: session.outcome missing cannot prove terminal yet but stays owned and pollable', () => {
   const evidence = v2SessionEvidence(SESSION_ID, PROMPT_MESSAGE_ID, {
     active: false,
