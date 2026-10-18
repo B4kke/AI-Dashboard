@@ -47,6 +47,24 @@ function inspectMessageBasedTerminal(value, sessionId, promptMessageId) {
   };
 }
 
+/**
+ * Compatibility-pending check: a completed assistant message exists after the
+ * prompt-admission user message, but session.outcome is not yet populated.
+ * OpenCode sets session.outcome shortly after the session goes idle, so the
+ * control plane should keep polling instead of failing fast.
+ */
+function hasCompletedAssistantAfterPrompt(value, sessionId, promptMessageId) {
+  const messages = Array.isArray(value.messages) ? value.messages : [];
+  const promptIdx = messages.findIndex((m) => m?.id === promptMessageId && m?.type === 'user');
+  if (promptIdx < 0) return false;
+  return messages.some((m, idx) => {
+    if (idx <= promptIdx) return false;
+    if (m?.type !== 'assistant') return false;
+    if (!isPlainRecord(m.time) || typeof m.time.completed !== 'number') return false;
+    return true;
+  });
+}
+
 function validActiveMap(value) {
   if (!isPlainRecord(value)) return false;
   return Object.entries(value).every(([id, status]) => (
@@ -222,6 +240,26 @@ export function inspectSessionEvidence(value, sessionId, promptMessageId) {
         compatibilityMode: true,
       };
     }
+    // If a completed assistant message exists after the prompt but session.outcome
+    // is not yet set, keep the Run owned and polling instead of failing fast.
+    // session.outcome is populated by OpenCode shortly after the session goes idle.
+    if (hasCompletedAssistantAfterPrompt(value, sessionId, promptMessageId)) {
+      const state = active ? 'running' : 'inactive_unknown';
+      return {
+        valid: true,
+        state,
+        active,
+        terminal: null,
+        retry: { attempt: 0, message: null },
+        missing: false,
+        messages: messageEvidence.messages,
+        admittedSeq: null,
+        startedSeq: null,
+        diagnostic: { code: 'durable_history_unavailable', eventCount: 0, syncedSeq },
+        compatibilityMode: false,
+        compatibilityPending: true,
+      };
+    }
     return { ...empty, diagnostic: { code: 'durable_history_unavailable', eventCount: 0, syncedSeq } };
   }
   const runLog = relevantRunLog(logEvidence.items, sessionId, promptMessageId);
@@ -253,10 +291,13 @@ export function sessionEvidenceProblem(evidence) {
     const detail = syncedSeq !== null
       ? ` (synced sequence ${syncedSeq}, ${eventCount ?? 0} durable events)`
       : '';
-    const compat = evidence.compatibilityMode === true
-      ? '. Message-based terminal evidence (session.outcome + assistant message with time.completed) resolved the Run.'
-      : '. Messages and idle telemetry cannot prove completion; compatibility terminal evidence is not available.';
-    return `OpenCode V2 durable session history is unavailable: the synced log contains no events${detail}. Check OpenCode durable-event persistence${compat}`;
+    if (evidence.compatibilityMode === true) {
+      return `OpenCode V2 durable session history is unavailable: the synced log contains no events${detail}. Check OpenCode durable-event persistence. Message-based terminal evidence (session.outcome + assistant message with time.completed) resolved the Run.`;
+    }
+    if (evidence.compatibilityPending === true) {
+      return `OpenCode V2 durable session history is unavailable: the synced log contains no events${detail}. A completed assistant message exists after the prompt; waiting for OpenCode to populate session.outcome before confirming terminal state.`;
+    }
+    return `OpenCode V2 durable session history is unavailable: the synced log contains no events${detail}. Check OpenCode durable-event persistence; messages and idle telemetry cannot prove completion.`;
   }
   if (evidence?.diagnostic?.code === 'prompt_admission_unproven') {
     const eventCount = Number.isInteger(evidence.diagnostic.eventCount) ? evidence.diagnostic.eventCount : null;

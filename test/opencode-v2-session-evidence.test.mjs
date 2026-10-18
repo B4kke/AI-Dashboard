@@ -192,7 +192,7 @@ test('compatibility mode: session.outcome failed proves terminal failure', () =>
   assert.equal(inspected.terminal.outcome, 'failed');
 });
 
-test('compatibility mode: session.outcome missing cannot prove terminal', () => {
+test('compatibility mode: session.outcome missing cannot prove terminal yet but stays owned and pollable', () => {
   const evidence = v2SessionEvidence(SESSION_ID, PROMPT_MESSAGE_ID, {
     active: false,
     messages: [userPromptMessage(PROMPT_MESSAGE_ID), messageWithCompleted('msg_assistant', 5)],
@@ -205,8 +205,10 @@ test('compatibility mode: session.outcome missing cannot prove terminal', () => 
 
   const inspected = inspectSessionEvidence(evidence, SESSION_ID, PROMPT_MESSAGE_ID);
 
-  assert.equal(inspected.valid, false);
-  assert.equal(inspected.state, 'invalid');
+  assert.equal(inspected.valid, true);
+  assert.equal(inspected.state, 'inactive_unknown');
+  assert.equal(inspected.terminal, null);
+  assert.equal(inspected.compatibilityPending, true);
   assert.equal(inspected.diagnostic.code, 'durable_history_unavailable');
 });
 
