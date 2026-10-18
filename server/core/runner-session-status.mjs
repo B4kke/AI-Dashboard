@@ -20,7 +20,7 @@ const MESSAGE_BASED_OUTCOMES = new Set(['succeeded', 'failed', 'interrupted']);
  * Weaker than durable events: session.outcome is session-level, not
  * prompt-scoped. Only used when durable history is unavailable.
  */
-function inspectMessageBasedTerminal(value, sessionId, promptMessageId) {
+export function inspectMessageBasedTerminal(value, sessionId, promptMessageId) {
   const session = isPlainRecord(value.session) ? value.session : null;
   const outcome = session && typeof session.outcome === 'string' ? session.outcome : null;
   if (!outcome || !MESSAGE_BASED_OUTCOMES.has(outcome)) return null;
@@ -53,7 +53,7 @@ function inspectMessageBasedTerminal(value, sessionId, promptMessageId) {
  * OpenCode sets session.outcome shortly after the session goes idle, so the
  * control plane should keep polling instead of failing fast.
  */
-function hasCompletedAssistantAfterPrompt(value, sessionId, promptMessageId) {
+export function hasCompletedAssistantAfterPrompt(value, sessionId, promptMessageId) {
   const messages = Array.isArray(value.messages) ? value.messages : [];
   const promptIdx = messages.findIndex((m) => m?.id === promptMessageId && m?.type === 'user');
   if (promptIdx < 0) return false;
