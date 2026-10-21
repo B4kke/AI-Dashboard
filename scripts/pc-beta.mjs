@@ -1092,12 +1092,14 @@ export class BetaHarness {
     }, { revalidatePassed: true });
 
     await this.scenario('supervisor_rejection', async ({ resumeExisting }) => {
+      await this.repairProjectSync();
       const evidence = await this.runAutonomousTask(specs.supervisorReject, 'supervisorRejection', { resumeExisting });
       if (evidence.workers.length < 2 || evidence.supervisors.length < 2) throw new Error('Supervisor rejection scenario did not prove reject -> repair -> re-review');
       return { summary: `${evidence.supervisors.length} supervisor runs and ${evidence.workers.length} worker iterations`, taskId: evidence.task.id, supervisorRuns: evidence.supervisors.map((run) => run.id) };
     }, { revalidatePassed: true });
 
     await this.scenario('dashboard_restart_in_flight', async () => {
+      await this.repairProjectSync();
       await this.patchProject({ mode: 'autonomous', autoMerge: false });
       const task = await this.createTask(specs.restart);
       const active = await this.waitFor('active worker before dashboard restart', async () => {
