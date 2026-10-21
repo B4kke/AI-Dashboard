@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { normalizeModelRef, normalizeProviderDefinition, OpenAICompatibleProvider } from '../server/integrations/model-provider.mjs';
+import { directModelTimeoutMs, normalizeModelRef, normalizeProviderDefinition, OpenAICompatibleProvider } from '../server/integrations/model-provider.mjs';
 
 test('model refs normalize to OpenCode provider/model objects', () => {
   assert.deepEqual(normalizeModelRef('lmstudio/qwen/qwen3-coder'), { providerID: 'lmstudio', modelID: 'qwen/qwen3-coder' });
@@ -49,6 +49,50 @@ test('OpenAI compatible provider discovers models and performs chat', async () =
     const result = await provider.chat({ model: 'local/test', messages: [{ role: 'user', content: 'go' }] });
     assert.equal(result.text, 'report');
     assert.equal(result.usage.prompt_tokens, 12);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('direct-model request timeout is bounded and operator-configurable', () => {
+  assert.equal(directModelTimeoutMs({}), 120_000);
+  assert.equal(directModelTimeoutMs({ AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS: '300000' }), 300_000);
+  assert.equal(directModelTimeoutMs({ AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS: ' 450000 ' }), 450_000);
+  for (const invalid of ['0', '9999', '900001', '120000.5', 'abc', '-1']) {
+    assert.throws(() => directModelTimeoutMs({ AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS: invalid }), /AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS/);
+  }
+});
+
+test('provider instances apply the configured direct-model timeout', () => {
+  const definition = { id: 'local', name: 'Local', baseUrl: 'http://127.0.0.1:1234/v1', local: true };
+  const previous = process.env.AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS;
+  try {
+    delete process.env.AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS;
+    assert.equal(new OpenAICompatibleProvider(definition).timeoutMs, 120_000);
+    process.env.AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS = '600000';
+    assert.equal(new OpenAICompatibleProvider(definition).timeoutMs, 600_000);
+    assert.equal(new OpenAICompatibleProvider(definition, { timeoutMs: 30_000 }).timeoutMs, 30_000);
+  } finally {
+    if (previous === undefined) delete process.env.AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS;
+    else process.env.AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS = previous;
+  }
+});
+
+test('a slow direct model fails closed with a timeout instead of a partial report', async () => {
+  const server = createServer((req, res) => {
+    setTimeout(() => {
+      if (res.writableEnded) return;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ model: 'local/slow', choices: [{ finish_reason: 'stop', message: { content: 'late report' } }] }));
+    }, 1_500).unref();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const provider = new OpenAICompatibleProvider(
+      { id: 'local', name: 'Local', baseUrl: `http://127.0.0.1:${server.address().port}/v1`, local: true },
+      { timeoutMs: 250 },
+    );
+    await assert.rejects(() => provider.chat({ model: 'local/slow', messages: [{ role: 'user', content: 'go' }] }), /timeout|aborted/i);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

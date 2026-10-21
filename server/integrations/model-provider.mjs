@@ -1,5 +1,21 @@
 function clean(value) { return String(value ?? '').trim(); }
 
+export const DIRECT_MODEL_TIMEOUT_MIN_MS = 10_000;
+export const DIRECT_MODEL_TIMEOUT_MAX_MS = 900_000;
+
+// Direct-model requests stay bounded, but the bound is operator-configurable:
+// slower but legitimate local/remote models otherwise fail with a generic
+// timeout before they can return a report.
+export function directModelTimeoutMs(env = process.env) {
+  const raw = clean(env.AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS);
+  if (!raw) return 120_000;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < DIRECT_MODEL_TIMEOUT_MIN_MS || parsed > DIRECT_MODEL_TIMEOUT_MAX_MS) {
+    throw new Error(`AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS must be an integer from ${DIRECT_MODEL_TIMEOUT_MIN_MS} to ${DIRECT_MODEL_TIMEOUT_MAX_MS}`);
+  }
+  return parsed;
+}
+
 export function normalizeModelRef(value) {
   if (!value) return null;
   if (typeof value === 'object' && value.providerID && value.modelID) {
@@ -52,9 +68,9 @@ export function builtinProviderDefinitions() {
 }
 
 export class OpenAICompatibleProvider {
-  constructor(definition, { timeoutMs = 120_000 } = {}) {
+  constructor(definition, { timeoutMs } = {}) {
     this.definition = normalizeProviderDefinition(definition);
-    this.timeoutMs = timeoutMs;
+    this.timeoutMs = timeoutMs ?? directModelTimeoutMs();
   }
 
   headers() {

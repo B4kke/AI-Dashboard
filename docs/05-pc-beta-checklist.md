@@ -79,7 +79,12 @@ AI_DASHBOARD_BETA_SUPERVISOR_MODEL=provider/model
 
 # Required for a FULL beta if Exploration analysis/promotion is to count as passed.
 # It must refer to a configured direct-model provider such as the built-in LM Studio/NVIDIA profiles.
+# The model id is provider-relative: NVIDIA catalog models use nvidia/<vendor>/<model>.
 AI_DASHBOARD_BETA_DIRECT_MODEL=provider/model
+
+# Optional. Raise it (max 900000) when a legitimate direct model needs longer than
+# the default 120000 ms to return a structured Exploration/Research report.
+AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS=120000
 
 # Optional. Defaults to 5000 ms to avoid spending GitHub API budget on a 1-second autonomy loop.
 AI_DASHBOARD_BETA_AUTONOMY_INTERVAL_MS=5000

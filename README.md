@@ -273,6 +273,7 @@ LMSTUDIO_URL=http://127.0.0.1:1234/v1
 LMSTUDIO_API_KEY=
 NVIDIA_API_URL=https://integrate.api.nvidia.com/v1
 NVIDIA_API_KEY=
+AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS=120000
 ```
 
 External MCP bearer config stores an environment-variable **name**, not the credential value.

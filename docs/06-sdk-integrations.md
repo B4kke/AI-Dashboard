@@ -139,6 +139,12 @@ Master uses the HomeAI-aligned pinned AI SDK family: `ai@7.0.97`, `@ai-sdk/opena
 
 The local `SOUL.md`, remembered context and model-generated reflection are untrusted context. They cannot establish machine evidence, Git/CI truth, supervisor approval or merge authority.
 
+## Direct OpenAI-compatible providers
+
+Exploration and Research use the pinned OpenAI-compatible transport with a **bounded** request timeout. The default is 120 000 ms; operators can raise it with `AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS` up to 900 000 ms, because legitimate local and hosted models frequently need several minutes for a structured report. An invalid value fails the request explicitly instead of silently falling back.
+
+The bound stays fail-closed: an aborted request produces a failed Exploration/Research run with a timeout error and no partial report. A timeout is never interpreted as an empty but successful analysis.
+
 ## GitHub / Octokit
 
 The GitHub adapter uses pinned `octokit@5.0.5` instead of maintaining a second handwritten GitHub REST transport.
