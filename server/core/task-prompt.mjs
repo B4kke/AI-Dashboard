@@ -38,6 +38,7 @@ export function buildTaskPrompt({ project, task, feedback = null, iteration = 1 
     '- Leave the worktree in a reviewable state and report concrete evidence.',
     '- Your reported tests are claims only. The control plane independently captures Git diff/checkpoint evidence and runs configured verification commands.',
     '- Use status no_change only when no repository change is actually needed. It never auto-completes a coding task.',
+    '- The "status" field MUST be exactly one of: "success", "blocked", "no_change". Any other value is rejected and the Task stops for operator input.',
     ...jsonContract({ schemaVersion: RESULT_SCHEMA_VERSION, kind: 'worker', status: 'success', summary: 'What changed and why', evidence: { tests: ['tests/checks you actually ran and their observed outcome'], notes: ['other concrete evidence or constraints'] }, risks: [], needsInput: null }));
   return lines.join('\n');
 }
@@ -51,6 +52,7 @@ export function buildPlannerPrompt({ project, idea }) {
     '- Give each implementation task concrete acceptance criteria.',
     '- Call out prerequisites, risks, and questions that genuinely require human input.',
     '- Do not implement the feature in this planning run.',
+    '- The "status" field MUST be exactly one of: "ready", "needs_input".',
     ...jsonContract({ schemaVersion: RESULT_SCHEMA_VERSION, kind: 'planner', status: 'ready', summary: 'Plan summary', tasks: [{ title: 'Concrete task title', description: 'Implementation scope', priority: 'P1', agentRole: 'builder', workScopes: ['server/feature'], acceptanceCriteria: ['verifiable criterion'], dependsOn: [] }], questions: [], risks: [] })].join('\n');
 }
 
@@ -69,6 +71,11 @@ export function buildSupervisorPrompt({ project, task, workerResult, iteration, 
     '- Do not approve if CI is failing/pending/error, configured verification failed, acceptance evidence is missing, the scope is unrelated, the reviewed SHA cannot be proven, or the change is unsafe.',
     '- Do not create commits, merge, or push. Review must be read-only.',
     '- The control plane will independently re-check repository integrity, evidence completeness, configured verification and exact head identity before merge.',
+    '- The "verdict" field MUST be exactly one of: "approve", "changes_requested", "blocked".',
+    '- Use "changes_requested" when the reviewed checkpoint must change before approval; "reject", "rejected", "changes-requested" and similar words are invalid verdicts and the review is rejected.',
+    '- Use "blocked" when the reviewed evidence cannot establish a verdict at all.',
+    '- "approve" requires every acceptance criterion status to be exactly "passed".',
+    '- Each acceptance criterion result uses status exactly "passed", "failed" or "unknown".',
     ...jsonContract({ schemaVersion: RESULT_SCHEMA_VERSION, kind: 'supervisor', verdict: 'approve', summary: 'Independent falsification and verification summary', acceptanceCriteria: (task.acceptanceCriteria || []).map((criterion) => ({ criterion, status: 'passed', evidence: 'What independently proves this criterion on the reviewed checkpoint' })), requiredChanges: [], risks: [] }));
   return lines.join('\n');
 }

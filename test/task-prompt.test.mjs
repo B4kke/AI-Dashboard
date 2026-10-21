@@ -20,3 +20,18 @@ test('promoted Exploration brief is context for every agent role but never imple
   for (const prompt of [worker, planner, supervisor]) { assert.match(prompt, /Build the smallest auditable autonomous control loop/); assert.match(prompt, /historical intent/i); assert.match(prompt, /not proof|not implementation evidence/i); }
   assert.match(worker, /Repository code\/tests\/instructions are canonical/);
 });
+
+test('role prompts state the exact result-contract enums the control plane accepts', () => {
+  const project = { name: 'Test project' };
+  const task = { title: 'Implement safely', priority: 'P1', acceptanceCriteria: ['change is verified'] };
+  const worker = buildTaskPrompt({ project, task, iteration: 1 });
+  const planner = buildPlannerPrompt({ project, idea: { title: 'Plan this', description: 'Details' } });
+  const supervisor = buildSupervisorPrompt({ project, task, workerResult: {}, iteration: 1 });
+
+  assert.match(worker, /"status" field MUST be exactly one of: "success", "blocked", "no_change"/);
+  assert.match(planner, /"status" field MUST be exactly one of: "ready", "needs_input"/);
+  assert.match(supervisor, /"verdict" field MUST be exactly one of: "approve", "changes_requested", "blocked"/);
+  assert.match(supervisor, /"reject", "rejected", "changes-requested" and similar words are invalid verdicts/);
+  assert.match(supervisor, /"approve" requires every acceptance criterion status to be exactly "passed"/);
+  assert.match(supervisor, /status exactly "passed", "failed" or "unknown"/);
+});
