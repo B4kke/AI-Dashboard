@@ -646,6 +646,25 @@ export class BetaHarness {
     return this.api(`/api/projects/${encodeURIComponent(this.session.projectId)}`, { method: 'PATCH', body: { autonomy } });
   }
 
+  // After a remote merge the Project may be paused as needs_sync while the
+  // local base branch catches up. Repair it (sync base, return to active)
+  // before the next scenario so workers can be admitted again.
+  async repairProjectSync() {
+    const state = await this.state();
+    const project = state.projects.find((item) => item.id === this.session.projectId);
+    if (!project) throw new Error(`Project ${this.session.projectId} not found for sync repair`);
+    if (project.status !== 'needs_sync') return;
+    await this.api(`/api/projects/${encodeURIComponent(this.session.projectId)}/preflight`, {
+      method: 'POST',
+      body: { taskId: null, kind: 'worker' },
+    });
+    const refreshed = await this.state();
+    const repaired = refreshed.projects.find((item) => item.id === this.session.projectId);
+    if (repaired?.status !== 'active') {
+      throw new Error(`Project sync repair did not restore active status (now ${repaired?.status})`);
+    }
+  }
+
   async createTask(spec) {
     const contract = this.autonomousTaskContract(spec);
     return this.api('/api/tasks', { method: 'POST', body: {
@@ -1060,6 +1079,11 @@ export class BetaHarness {
     }, { revalidatePassed: true });
 
     if (this.config.mode === 'smoke') return;
+
+    // A merged happy path advances the remote base branch. The control plane
+    // may pause the Project as needs_sync while the local base catches up.
+    // Repair it before the next scenario so workers can be admitted again.
+    await this.repairProjectSync();
 
     await this.scenario('ci_failure_repair', async ({ resumeExisting }) => {
       const evidence = await this.runAutonomousTask(specs.ciRepair, 'ciFailureRepair', { resumeExisting });
