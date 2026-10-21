@@ -2,9 +2,9 @@
 
 > Current focus: prove and harden the autonomous control plane against real OpenCode/GitHub/MCP use. Project-first discovery/UX is implemented as the operator layer over the same fail-closed control plane. Reliability and evidence still outrank feature breadth.
 
-> Evidence boundary: implementation, deterministic tests, exact-head GitHub Actions and real external dogfood are separate levels. Published head `e80175c3f34942b1633ecc96e67528a06005e0fa` passed Linux, Windows and rendered UI in Actions run `39177048004`. Any later head must be reverified. Full current-stack OpenCode + disposable GitHub/Actions PC beta remains mandatory before calling the foundation ready.
+> Evidence boundary: implementation, deterministic tests, exact-head GitHub Actions and real external dogfood are separate levels. Published head `8f8e62cb178beee9112f08c2ae0e8b24f54b62f3` passed Linux, Windows and rendered UI in Actions run `39631408668`. Any later head must be reverified. The full current-stack PC beta campaign (failure/repair, rejection, restart, moved base, outage, chaos) remains mandatory before calling the foundation ready.
 
-October 2026 continuation: OpenCode 2.0.32 on this installation did **not** persist `session.inbox.enqueued` / `session.execution.*` durable events; `session.get()` returned a terminal outcome after idle and assistant messages had `time.completed`. The guarded message-based compatibility path is weaker than prompt-bound durable events and is not a general production guarantee. October 19 smoke on `f54346d` completed a real worker checkpoint, PR/CI, independent supervisor approval and merge in the disposable beta branch, but its report failed strict control-evidence and MCP Code Mode checks. Commit `e80175c` repaired those two mismatches; [Actions run 39177048004](https://github.com/B4kke/AI-Dashboard/actions/runs/39177048004) passed Linux, Windows and rendered UI on that exact head. The `e80175c` beta smoke was stopped before merge/report completion, so no current-stack beta pass is claimed. The session bundle recorded in `HANDOFF.md` is unavailable in the present environment, and disposable Beta PR #3 remains open. Any subsequent source change requires fresh exact-head Actions; full smoke/full/chaos remain open.
+October 2026 continuation: OpenCode 2.0.32 on this installation did **not** persist `session.inbox.enqueued` / `session.execution.*` durable events; `session.get()` returned a terminal outcome after idle and assistant messages had `time.completed`. The guarded message-based compatibility path is weaker than prompt-bound durable events and is not a general production guarantee. October 19 smoke on `f54346d` completed a real worker checkpoint, PR/CI, independent supervisor approval and merge in the disposable beta branch, but its report failed strict control-evidence and MCP Code Mode checks. Commit `e80175c` repaired those two mismatches. **October 21 smoke on `8f8e62c` passed**: fresh evidence directory, real OpenCode 2.0.32 worker and supervisor, exact-one-parent checkpoint, PR #4 in the disposable beta repository, green Actions CI, independent supervisor approval, control-plane merge (`b90f0db`) and the OpenCode read/master MCP interoperability gate. The durable-event gap persisted, so the worker and supervisor Runs were terminated through the guarded compatibility path. The smoke campaign is therefore level-4 evidence for the happy path plus MCP interop only: Exploration analysis, deliberate CI failure/repair, supervisor rejection, restart in flight, moved base, abandoned worktree, GitHub outage and chaos remain open. Disposable Beta PR #3 stays open as an orphan of the interrupted October 19 run and is not merge evidence.
 
 ## Project-first UX & repository discovery — IMPLEMENTED / BETA-CANDIDATE
 
@@ -111,10 +111,9 @@ Implemented/tested:
 
 Still required to close M1:
 
-- repeat real PC/OpenCode dogfood after current SDK/MCP/UX changes,
-- process restart during a real OpenCode Run,
-- real OpenCode outage/reconnect,
-- abandoned real worktree recovery proof.
+- full current-stack PC campaign beyond the passed October 21 happy-path smoke: CI failure/repair, supervisor rejection/rework, restart during a real Run, moved base, abandoned worktree, OpenCode outage/reconnect,
+- Exploration analysis/promotion against a configured direct model (local LM Studio was unavailable; `AI_DASHBOARD_BETA_DIRECT_MODEL` was unset),
+- Runs terminated through the compatibility path stay weaker evidence than prompt-bound durable events and must not be presented as such.
 
 ## M2 — GitHub feedback loop — ACTIVE / BETA-CANDIDATE
 
@@ -144,7 +143,7 @@ Historical disposable GitHub/Actions happy-path dogfood predates the current MCP
 
 Still required:
 
-- full current-stack disposable GitHub/Actions run on one exact clean commit,
+- full current-stack disposable GitHub/Actions campaign on one exact clean commit (the October 21 smoke covered the happy path and MCP interop only),
 - deliberate CI failure and repair,
 - moved base handling,
 - supervisor rejection then correction,
@@ -358,7 +357,7 @@ On one clean exact final commit:
 11. deterministic beta harness/resume proves stable IDs/contracts/evidence/idempotence,
 12. full real OpenCode + disposable GitHub Actions campaign including failure/repair/rejection/correction/merge.
 
-Gates 1–4 were proven on Project-first implementation head `5af53ae` / Actions `#451` before the documentation truth-sync. They were re-verified on fleet head `36b94c2` / PR run `32988127729`, on Master head `a990d75` / PR run `32995605683`, on P0 head `f959a7a` / push `33020151327` + PR `33020241708`, and on `e80175c` / run `39177048004`. They must be green again on the final branch head after any subsequent commit.
+Gates 1–4 were proven on Project-first implementation head `5af53ae` / Actions `#451` before the documentation truth-sync. They were re-verified on fleet head `36b94c2` / PR run `32988127729`, on Master head `a990d75` / PR run `32995605683`, on P0 head `f959a7a` / push `33020151327` + PR `33020241708`, on `e80175c` / run `39177048004` and on `8f8e62c` / run `39631408668`. They must be green again on the final branch head after any subsequent commit.
 
 A failed external scenario is evidence to harden the control plane, never permission to weaken a gate.
 

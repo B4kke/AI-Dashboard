@@ -5,6 +5,8 @@ Self-hosted control center for AI-assisted and progressively autonomous project 
 AI Dashboard connects existing projects/repositories, direct Tasks, optional Ideas/Explorations, specialist agents, AI coding harnesses, model providers, MCP capabilities, read-only Research Runs, isolated Git worktrees and GitHub/CI evidence behind one fail-closed control plane.
 
 > Status: pre-alpha / PC-beta candidate. Exact-head Linux, Windows and rendered-UI Actions are required after every code change; a beta claim additionally requires current-stack OpenCode + disposable GitHub/Actions dogfood.
+>
+> Latest verified head `8f8e62c`: Actions run `39631408668` green (Linux, Windows, rendered UI) and a fresh current-stack **smoke** passed — real OpenCode worker, exact-one-parent checkpoint, disposable PR, green CI, independent supervisor, control-plane merge and the OpenCode read/master MCP interoperability gate. The full beta campaign (CI repair, supervisor rejection, restart, moved base, outage, chaos) is still open; see `docs/05-pc-beta-checklist.md`.
 
 ## Product model
 
@@ -355,7 +357,7 @@ Keep claims separate:
 
 Do not promote a level-2/3 MCP or rendered-UI test into a claim that every real external host/workflow has been verified.
 
-The exact final head must satisfy level 3 before beta-candidate evidence is current. Level 4 remains a separate mandatory gate even after deterministic/Actions success.
+The exact final head must satisfy level 3 before beta-candidate evidence is current. Level 4 remains a separate mandatory gate even after deterministic/Actions success. On `8f8e62c` level 4 is reached for the smoke happy path and the OpenCode read/master MCP interop gate only; the full-mode beta scenarios remain unverified.
 
 ## Canonical docs
 

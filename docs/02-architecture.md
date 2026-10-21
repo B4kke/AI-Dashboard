@@ -324,6 +324,8 @@ No force push, destructive reset or branch-protection bypass is part of recovery
 
 Octokit provides GitHub transport, while Dashboard interprets evidence. Collected state includes PR head/base/SHA, paginated check-runs, legacy status contexts, rulesets/classic branch protection, required-check integration identity, opaque/merge-queue conditions, merge SHA and post-merge identity.
 
+GitHub publishes a PR's `merge_commit_sha` before the merge is terminal, so a stored merge SHA is not by itself merge proof. Terminal merge evidence requires the publication state `merged` with `merged: true`, the merged commit SHA and post-merge tree verification against the proven worker tree.
+
 API failures are incomplete/error evidence, never an empty successful CI set. Pending/transient evidence uses durable bounded backoff. Merge retries only retry classified transient failures and remain budgeted.
 
 ## Persistence and transactions

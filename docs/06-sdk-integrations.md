@@ -115,6 +115,8 @@ Compatibility mode (OpenCode without durable events): when the synced log contai
 
 Measured gap (2026-10-18, local OpenCode 2.0.32): observed sync-only `session.log()` without durable `session.inbox.enqueued` / `session.execution.*` events. The observed `event` table held `session.created.1`, `session.updated.1`, `message.updated.1` and `message.part.updated.1` while `event_sequence` advanced. `session.get()` returned `outcome: 'succeeded'` after idle, and messages included completed assistant and idle entries. Compatibility mode recognized terminal state in this environment, but this is **not** proof of a passed PC beta or a guarantee for all OpenCode installations. `HANDOFF.md` records the incomplete October 19 attempts; durable prompt-bound events remain preferable.
 
+Confirmed again (2026-10-21, same installation): the durable-event gap persisted (`synced sequence 7, 0 durable events`) and the guarded compatibility path was the only thing that could terminate the worker and supervisor Runs of a real beta smoke. That smoke passed end to end, but it inherits the weaker evidence class: session-level outcome plus a completed assistant message, not prompt-bound durable execution events. Treat compatibility-terminated Runs as disposable-beta evidence only.
+
 OpenCode 2.0.32 MCP tool calls may appear as Code Mode `execute` message parts rather than direct MCP tool parts. The beta interoperability probe accepts those only when the completed `execute` part has an untruncated, single completed tool call in OpenCode's tool-call metadata naming the exact registered `server.dashboard_status` tool, and its output matches the expected Dashboard profile/protocol. Model-written code or output text alone cannot claim a call. This metadata supports the **interop probe**, not canonical checkpoint/CI/review/merge evidence.
 
 ### Agent roles and permissions
@@ -146,6 +148,8 @@ Octokit owns authentication/API routing, generated REST endpoint bindings, GitHu
 AI Dashboard owns configured repository versus local-origin identity, checkpoint SHA/tree identity, PR head/base identity, CI/check evidence completeness, required-check/integration identity semantics, branch/ruleset policy interpretation, base movement detection, durable reconciliation/backoff, supervisor gate, expected-head merge, post-merge proof and fail-closed treatment of unknown evidence.
 
 An external GitHub MCP may be useful to a conversational agent, but it must not replace Octokit for canonical autonomous merge evidence.
+
+GitHub fills a PR's `merge_commit_sha` before the merge is terminal. Dashboard therefore treats a stored merge SHA without terminal publication state (`state: 'merged'`, `merged: true`) and post-merge tree verification as non-terminal GitHub data, never as merge proof.
 
 ## ACP relationship
 
