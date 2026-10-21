@@ -229,7 +229,7 @@ export async function verifyOpenCodeMcpInterop({
     });
     const readPayload = toolOutput(probe.tools.get(readTool));
     const masterPayload = toolOutput(probe.tools.get(masterTool));
-    if (readPayload?.profile !== 'read' || readPayload?.protocolTarget !== '2026-07-28') {
+    if (readPayload?.profile !== 'read' || readPayload?.protocolTarget !== '2026-07-28' || readPayload?.mutationsEnabled !== false) {
       throw new Error('OpenCode read-profile MCP tool returned unexpected Dashboard status evidence');
     }
     if (masterPayload?.profile !== 'master' || masterPayload?.protocolTarget !== '2026-07-28' || masterPayload?.mutationsEnabled !== true) {

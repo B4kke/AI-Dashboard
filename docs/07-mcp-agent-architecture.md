@@ -143,7 +143,7 @@ Prompts are guidance, never authorization. Important invariants also exist in co
 
 ## Agent Registry
 
-State schema v8 retains the durable project-scoped specialists introduced in v7 and adds explicit coding-Run termination proof:
+State schema v10 retains the durable project-scoped specialists introduced in v7, explicit coding-Run termination proof and persistent Master conversation state:
 
 ```text
 id
@@ -256,7 +256,7 @@ For assigned Tasks the coding prompt receives specialist name, role, instruction
 
 Prompt discipline complements runtime admission and Git evidence; it does not replace them. The control plane persists a checkpoint intent and accepts only an exact one-parent commit/tree matching that intent, then checks the cumulative original-scope-base-to-checkpoint diff before verification/review.
 
-Harness prose/result data also does not release ownership. A result contract requires synced durable `session.execution.succeeded` evidence bound to the exact prompt admission. A missing exact session can prove termination but never success. The sync marker must match the session and its optional sequence must match the final event; sync-only history with a positive sequence is diagnosed as unavailable durable history. Foreground-active/retry/unknown status and unconfirmed timeout/abort continue to own their Run and mutation scopes.
+Harness prose/result data also does not release ownership. A result contract normally requires synced durable `session.execution.succeeded` evidence bound to the exact prompt admission. A missing exact session can prove termination but never success. The sync marker must match the session and its optional sequence must match the final event when events exist. On the observed OpenCode runtime with a positive sync sequence but no durable events, the weaker compatibility path requires an inactive session, a terminal session-level outcome, the Run's exact sole user prompt and a completed assistant message after it. It records `source: message_based` and is not a general production guarantee. Active, retrying, ambiguous or unconfirmed timeout/abort states continue to own their Run and mutation scopes.
 
 ## Dashboard as external MCP host/client
 
@@ -386,7 +386,7 @@ This implementation does not yet prove:
 - real OpenCode configured as an MCP host against Dashboard on the user's PC,
 - interoperability with every MCP client/server implementation,
 - authenticated remote MCP,
-- Master token streaming and richer attachments,
+- richer Master context attachments,
 - adaptive live-work fleet rebalancing above the bounded queue-drained Project planner,
 - persistent per-agent memory/SOUL-style identity,
 - ACP/Codex/Claude/local harness breadth,

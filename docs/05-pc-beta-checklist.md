@@ -4,13 +4,13 @@ This checklist is the first real end-to-end dogfood gate for AI Dashboard.
 
 It is intentionally stricter than "the UI opened". The goal is to prove that the real OpenCode + Git + GitHub/Actions control loop behaves like the deterministic tests claim.
 
-Current status (2026-08-29): the harness and its fail-closed resume/evidence contract are implemented and deterministically tested. The complete full campaign has **not** yet been rerun on the exact final hardening commit, and fresh Linux + Windows GitHub Actions for that same commit are also open. This checklist records the required proof; it is not a claim that the proof already exists.
+Current status (2026-10-21): the harness and its fail-closed resume/evidence contract are implemented and deterministically tested. Linux, Windows and rendered UI Actions passed on exact commit `e80175c` (run `39177048004`). The complete current-stack beta campaign has **not** passed; any newer source change needs its own exact-head Actions. This checklist records the required proof, not a claim that the beta proof exists.
 
-October 19 evidence update: smoke on Dashboard `f54346d` reached a merged disposable PR with worker checkpoint, CI and supervisor evidence, but the **beta report failed** its independent baseline check because successful control evidence did not include `baseHead`/`scopeBaseHead`. The combined entrypoint also failed MCP interoperability despite completed Code Mode-wrapped read/master tool calls, because the probe recognized only direct tool parts. These are being fixed without relaxing the baseline comparison or treating model text as tool execution. The failed report under `/tmp/opencode/beta-sol-f54346d/` is preserved and does not count as a passed smoke.
+October 19 evidence update: smoke on Dashboard `f54346d` reached a merged disposable PR with worker checkpoint, CI and supervisor evidence, but the **beta report failed** its independent baseline check because successful control evidence did not include `baseHead`/`scopeBaseHead`. The combined entrypoint also failed MCP interoperability despite completed Code Mode-wrapped read/master tool calls, because the probe recognized only direct tool parts. Commit `e80175c` repaired both checks without relaxing the baseline comparison or treating model text as tool execution. Its next beta smoke stopped before a passing report; disposable Beta PR #3 remains open. The historical `/tmp/opencode/beta-sol-*` session bundles named in `HANDOFF.md` are local artifacts, not part of this repository; verify their availability before attempting resume.
 
 ## Automated harness
 
-The preferred beta entrypoint is now the outer harness in `scripts/pc-beta.mjs`:
+The preferred beta entrypoint is `scripts/pc-beta-entry.mjs`, which runs the `scripts/pc-beta.mjs` campaign and the separate MCP interoperability probe:
 
 ```bash
 npm run beta:pc -- --smoke

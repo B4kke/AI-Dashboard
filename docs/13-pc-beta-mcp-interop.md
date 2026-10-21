@@ -15,8 +15,8 @@ Against an isolated loopback Dashboard it:
 3. polls OpenCode's V2 `mcp.resource.catalog` until both servers expose `dashboard://summary`;
 4. calls OpenCode's V2 `command.list` and requires all three Dashboard MCP prompts from both servers (`orchestrate-project`, `specialist-task`, `review-task`);
 5. creates one dedicated read-only OpenCode session with explicit permission only for the two expected MCP `dashboard_status` tools in addition to the normal supervisor mutation denies;
-6. dispatches one deterministic prompt-message and requires the synced durable OpenCode session log to prove terminal `session.execution.succeeded`;
-7. requires the assistant message evidence to contain completed calls to both exact OpenCode MCP tool names;
+6. dispatches one deterministic prompt-message and requires compatibility-aware terminal `succeeded` evidence for that exact session and prompt; synced durable execution events are preferred, while the guarded message-based fallback is marked as weaker evidence;
+7. requires the assistant message evidence to contain completed calls to both exact OpenCode MCP tool names, either as direct tool parts or as a single exact, completed and untruncated Code Mode `execute` tool call in metadata;
 8. validates the tool output proves the `read` profile, the `master` profile, MCP protocol target `2026-07-28`, and that mutations are enabled only on the private master endpoint;
 9. removes only the exact beta-owned OpenCode session and temporary MCP registrations after evidence has been captured.
 
@@ -26,6 +26,6 @@ OpenCode 2.0.24 does not expose a separate public tool-list operation in its gen
 
 The MCP probe uses a separate loopback Dashboard port (`AI_DASHBOARD_BETA_MCP_PORT`, default one above `AI_DASHBOARD_BETA_PORT`) and a separate SQLite file below the selected beta runtime directory. It never widens the Dashboard bind or stores OpenCode credentials in Dashboard state. OpenCode Basic Auth continues to come from `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` through the existing client.
 
-The probe is fail-closed. Missing resources, prompts, either required tool call, durable terminal success, profile evidence, or exact-owned cleanup is a failure. Agent text claiming success is not accepted as interoperability evidence.
+The probe is fail-closed. Missing resources, prompts, either required tool call, proven terminal success, profile evidence, or exact-owned cleanup is a failure. The read profile must explicitly report `mutationsEnabled: false`; only the private master profile may report `true`. Agent text claiming success is not accepted as interoperability evidence.
 
 The external gate is not closed merely because this code and deterministic tests are green. A release/beta claim still requires an actual run on the user's PC with real OpenCode, a disposable GitHub repository and Actions, including the existing CI-failure/repair, supervisor-rejection/rework, restart, moved-base, outage and exact-head merge scenarios.

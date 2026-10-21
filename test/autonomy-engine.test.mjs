@@ -43,6 +43,61 @@ test('autonomous loop prioritizes supervisor review and then ready worker tasks'
   assert.equal(result.actions.length, 2);
 });
 
+test('autonomous loop starts ready work by priority, preserving ties and excluding blocked dependencies', async () => {
+  const state = {
+    projects: [{ id: 'p1', status: 'active', autonomy: { mode: 'autonomous', autoAnalyzeIdeas: false, autoMerge: false, maxConcurrentRuns: 6 } }],
+    ideas: [],
+    tasks: [
+      { id: 'older-p2', projectId: 'p1', kind: 'work', state: 'backlog', priority: 'P2', blockedBy: [] },
+      { id: 'older-p3', projectId: 'p1', kind: 'work', state: 'backlog', priority: 'P3', blockedBy: [] },
+      { id: 'first-p0', projectId: 'p1', kind: 'work', state: 'backlog', priority: 'P0', blockedBy: [] },
+      { id: 'blocked-p0', projectId: 'p1', kind: 'work', state: 'backlog', priority: 'P0', blockedBy: ['unfinished'] },
+      { id: 'second-p0', projectId: 'p1', kind: 'work', state: 'backlog', priority: 'P0', blockedBy: [] },
+      { id: 'legacy-priority', projectId: 'p1', kind: 'work', state: 'backlog', priority: 'unexpected', blockedBy: [] },
+      { id: 'later-p2', projectId: 'p1', kind: 'work', state: 'backlog', priority: 'P2', blockedBy: [] },
+      { id: 'unfinished', projectId: 'p1', kind: 'work', state: 'needs_input', priority: 'P0', blockedBy: [] },
+    ],
+    runs: [],
+  };
+  const started = [];
+  const operations = baseOperations({
+    startWorker: async (taskId) => {
+      started.push(taskId);
+      state.runs.push({ id: `run-${taskId}`, projectId: 'p1', taskId, kind: 'worker', status: 'running' });
+    },
+  });
+  const engine = new AutonomyEngine({ store: { snapshot: () => structuredClone(state) }, operations, intervalMs: 999999 });
+  await engine.tick();
+  assert.deepEqual(started, ['first-p0', 'second-p0', 'older-p2', 'legacy-priority', 'later-p2', 'older-p3']);
+});
+
+test('autonomous loop gives its only free slot to the highest-priority ready Task', async () => {
+  const state = {
+    projects: [{ id: 'p1', status: 'active', autonomy: { mode: 'autonomous', maxConcurrentRuns: 1 } }],
+    ideas: [],
+    tasks: [
+      { id: 'older-p2', projectId: 'p1', kind: 'work', state: 'backlog', priority: 'P2', blockedBy: [] },
+      { id: 'newer-p0', projectId: 'p1', kind: 'work', state: 'backlog', priority: 'P0', blockedBy: [] },
+    ],
+    runs: [],
+  };
+  const started = [];
+  const engine = new AutonomyEngine({
+    store: { snapshot: () => structuredClone(state) },
+    operations: baseOperations({
+      startWorker: async (taskId) => {
+        started.push(taskId);
+        state.runs.push({ id: `run-${taskId}`, projectId: 'p1', taskId, kind: 'worker', status: 'running' });
+      },
+    }),
+    intervalMs: 999999,
+  });
+  await engine.tick();
+  assert.deepEqual(started, ['newer-p0']);
+  await engine.tick();
+  assert.deepEqual(started, ['newer-p0']);
+});
+
 test('autonomous projects can automatically send inbox ideas to planning', async () => {
   const state = {
     projects: [{ id: 'p1', status: 'active', autonomy: { mode: 'autonomous', autoAnalyzeIdeas: true, autoMerge: false, maxConcurrentRuns: 1 } }],

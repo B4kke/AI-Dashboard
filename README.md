@@ -151,6 +151,8 @@ Persistent Master chat is implemented as a **normal global and Project-scoped ch
 
 An optional **bounded automatic Master planner** is implemented per Project. It requires an explicit objective, at least one Project definition-of-done criterion and `autonomous` mode. Only when the Project has no open Tasks or active/uncertain Runs may it claim a durable planning cycle. That cycle can inspect canonical state and create exactly one atomic dependency-aware Task batch, mark the Project as needing operator input, or assess the completion contract as satisfied. The automatic turn receives only read tools plus `task_batch_create`; delegation, publish, review and merge tools are technically unavailable. A restart during planning fails closed to `needs_input` and requires explicit restart.
 
+For autonomous worker admission, dependency-ready backlog Tasks are considered in P0–P3 order. Equal priorities retain their stored order; unknown legacy priorities are treated as P2. Supervisor review keeps its existing precedence, and every worker still passes the normal capacity, ownership and preflight gates.
+
 ## Project readiness and admission identity
 
 Worker, planner and supervisor starts enter a fail-closed Project preflight before a harness session is created. The check covers active Project status, a valid clean local Git repository on the configured base branch, safely parseable control-plane verification commands, OpenCode health plus an available explicit or single unambiguous default model and, for GitHub Projects, configured repository/origin identity, write access and fast-forward synchronization to the remote base.
@@ -219,7 +221,7 @@ Planner materialization is one StateStore mutation/commit: candidate validation,
 
 OpenCode V2 dispatch has explicit crash windows plus deterministic Run-scoped session and prompt-message identities. A lost create/prompt acknowledgement is reconciled against the exact session and durable message/inbox admission record rather than blindly replayed. Interrupted direct-model requests are also not silently replayed.
 
-A worker result contract is applied only after the synced durable V2 session log proves `session.execution.succeeded` for the Run's exact prompt admission. Durable `failed`/`interrupted` outcomes fail closed; message/idle telemetry never proves completion. The sync marker must identify the exact session and, when supplied, its sequence must match the final event. A synced log with a positive sequence but no events is diagnosed as unavailable durable history, with guidance to check OpenCode event persistence. A missing exact session can prove ownership termination but never success by itself. Foreground-active, retrying, inactive-without-terminal and malformed/unavailable evidence retain Run/scope ownership; timeout, retry exhaustion and manual abort likewise remain quarantined until durable termination or exact-session absence is proven.
+A worker result contract is normally applied only after the synced durable V2 session log proves `session.execution.succeeded` for the Run's exact prompt admission. Durable `failed`/`interrupted` outcomes fail closed. On the observed OpenCode 2.0.32 installation, the log can report a positive sync sequence without returning durable events. In that case a weaker compatibility path accepts a terminal session-level outcome only when the session is inactive, its sole user prompt has the Run's exact message ID, and a later assistant message is completed. An active session, a second user prompt or an outcome still pending retains Run/scope ownership. This compatibility evidence is marked `message_based`; it is not equivalent to prompt-bound durable events or a general production guarantee. A missing exact session can prove ownership termination but never success by itself.
 
 Current leases are suitable for the single-control-plane beta target; they are not full distributed fencing tokens for multi-instance production autonomy.
 
@@ -323,7 +325,7 @@ MCP server endpoints:
 - native `input_required` operator round-trip,
 - optional external MCP elicitation bridge,
 - default-deny external tool policy,
-- durable specialist Agent Registry (v9) + persistent Master chat (no publish/merge bypass),
+- durable specialist Agent Registry (state schema v10) + persistent Master chat (no publish/merge bypass),
 - Project-scoped Agent fleet operator surface (Registry as canonical truth, fleet view with assigned Task/active Run and guarded create/edit/enable/disable),
 - global + Project-scoped Master conversations/messages (`POST/GET /api/master/*`, kind-tagged, toolCalls capped),
 - Task assignment/workScopes,

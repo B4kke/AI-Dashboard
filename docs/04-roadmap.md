@@ -2,9 +2,9 @@
 
 > Current focus: prove and harden the autonomous control plane against real OpenCode/GitHub/MCP use. Project-first discovery/UX is implemented as the operator layer over the same fail-closed control plane. Reliability and evidence still outrank feature breadth.
 
-> Evidence boundary: implementation, deterministic tests, exact-head GitHub Actions and real external dogfood are separate levels. Published head `2464549fdb1c43d61e443da8035e06e7f5c67e2b` passed Actions run `33071272602` on Linux and Windows with the then-current rendered UI. Any later head, including a UI repair, must be reverified. Full current-stack OpenCode + disposable GitHub/Actions PC beta remains mandatory before calling the foundation ready.
+> Evidence boundary: implementation, deterministic tests, exact-head GitHub Actions and real external dogfood are separate levels. Published head `e80175c3f34942b1633ecc96e67528a06005e0fa` passed Linux, Windows and rendered UI in Actions run `39177048004`. Any later head must be reverified. Full current-stack OpenCode + disposable GitHub/Actions PC beta remains mandatory before calling the foundation ready.
 
-October 18 continuation: V2 migration head `7d29db5d261aa27d16e6ef4db6144b80b41f209c` passed Linux, Windows and rendered UI in Actions run `391284725914` (typo fix: run `39128475914`). Follow-up changes added bounded missing-history diagnostics, exact-session/final-sequence sync validation, and compatibility-mode terminal evidence for OpenCode versions without durable events. Confirmed 2026-10-18: OpenCode 2.0.32 on this installation did **not** persist `session.inbox.enqueued` / `session.execution.*` durable events; `session.get()` returned `outcome: 'succeeded'` after idle and assistant messages had `time.completed`. Compatibility mode can recognize a terminal session but is weaker than prompt-bound durable events. October 19 smoke on `f54346d` completed a real worker checkpoint, PR/CI, independent supervisor approval and merge in the disposable beta branch. The **smoke report still failed**: the successful worker control evidence omitted `baseHead`/`scopeBaseHead` required by the strict report gate; the MCP probe saw actual Code Mode `execute`-wrapped read/master calls but accepted only direct tool parts. The report remains failed and must not be relabeled as passed. Both mismatches have targeted repairs under verification; see `HANDOFF.md` and preserved `/tmp/opencode/beta-*/` evidence. Full deterministic tests, Linux/Windows Actions and smoke/full/chaos on the eventual fixed head remain open.
+October 2026 continuation: OpenCode 2.0.32 on this installation did **not** persist `session.inbox.enqueued` / `session.execution.*` durable events; `session.get()` returned a terminal outcome after idle and assistant messages had `time.completed`. The guarded message-based compatibility path is weaker than prompt-bound durable events and is not a general production guarantee. October 19 smoke on `f54346d` completed a real worker checkpoint, PR/CI, independent supervisor approval and merge in the disposable beta branch, but its report failed strict control-evidence and MCP Code Mode checks. Commit `e80175c` repaired those two mismatches; [Actions run 39177048004](https://github.com/B4kke/AI-Dashboard/actions/runs/39177048004) passed Linux, Windows and rendered UI on that exact head. The `e80175c` beta smoke was stopped before merge/report completion, so no current-stack beta pass is claimed. The session bundle recorded in `HANDOFF.md` is unavailable in the present environment, and disposable Beta PR #3 remains open. Any subsequent source change requires fresh exact-head Actions; full smoke/full/chaos remain open.
 
 ## Project-first UX & repository discovery — IMPLEMENTED / BETA-CANDIDATE
 
@@ -91,9 +91,10 @@ Implemented/tested:
 - isolated worktrees,
 - official `@opencode/client@2.0.24` V2 session/message/inbox/active/interrupt/model/agent/MCP/event/permission integration,
 - per-Run model selection with V2 default-model readiness,
+- dependency-ready autonomous worker scheduling by P0–P3 with stable ties, while retaining capacity/ownership/admission gates,
 - deterministic Run-scoped OpenCode session **and prompt-message** identity,
 - lost create/prompt acknowledgement read-repair through exact V2 session/admission identity with no blind replay,
-- synced durable `session.execution.*` terminal gating; inactive-without-terminal never means success,
+- synced durable `session.execution.*` terminal gating with a guarded, weaker message-based fallback when the observed OpenCode runtime has no durable events; inactive status alone never means success,
 - exact-session/final-sequence sync validation and actionable diagnostics for unavailable durable history,
 - V1 SDK/status/recovery paths removed with regression coverage against reintroduction,
 - persisted checkpoint intent and exact-one-parent Git ownership proof,
@@ -357,7 +358,7 @@ On one clean exact final commit:
 11. deterministic beta harness/resume proves stable IDs/contracts/evidence/idempotence,
 12. full real OpenCode + disposable GitHub Actions campaign including failure/repair/rejection/correction/merge.
 
-Gates 1–4 were proven on Project-first implementation head `5af53ae` / Actions `#451` before the documentation truth-sync. They were re-verified on fleet head `36b94c2` / PR run `32988127729`, on Master head `a990d75` / PR run `32995605683` and on P0 head `f959a7a` / push `33020151327` + PR `33020241708`. They must be green again on the final branch head after any subsequent commit.
+Gates 1–4 were proven on Project-first implementation head `5af53ae` / Actions `#451` before the documentation truth-sync. They were re-verified on fleet head `36b94c2` / PR run `32988127729`, on Master head `a990d75` / PR run `32995605683`, on P0 head `f959a7a` / push `33020151327` + PR `33020241708`, and on `e80175c` / run `39177048004`. They must be green again on the final branch head after any subsequent commit.
 
 A failed external scenario is evidence to harden the control plane, never permission to weaken a gate.
 

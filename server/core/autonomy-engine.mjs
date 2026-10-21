@@ -1,5 +1,6 @@
 const ACTIVE_RUN_STATUSES = new Set(['preparing', 'dispatch_unknown', 'running', 'retrying']);
 const retainsRunOwnership = (run) => ACTIVE_RUN_STATUSES.has(run.status) || run.dispatchUncertain === true || Boolean(run.quarantineReason);
+const PRIORITY_ORDER = new Map([['P0', 0], ['P1', 1], ['P2', 2], ['P3', 3]]);
 
 export class AutonomyEngine {
   constructor({ store, operations, intervalMs = Number(process.env.AI_DASHBOARD_AUTONOMY_INTERVAL_MS || 3000) }) {
@@ -100,12 +101,13 @@ export class AutonomyEngine {
         if (capacity > 0) {
           const refreshed = this.store.snapshot();
           const refreshedTasks = refreshed.tasks.filter((item) => item.projectId === project.id);
+          const taskStateById = new Map(refreshedTasks.map((task) => [task.id, task.state]));
+          const activeRunTaskIds = new Set(refreshed.runs.filter(retainsRunOwnership).map((run) => run.taskId));
           const ready = refreshedTasks.filter((task) => {
             if (task.kind !== 'work' || task.state !== 'backlog') return false;
-            const active = refreshed.runs.some((run) => run.taskId === task.id && retainsRunOwnership(run));
-            if (active) return false;
-            return task.blockedBy.every((id) => refreshedTasks.find((candidate) => candidate.id === id)?.state === 'done');
-          });
+            if (activeRunTaskIds.has(task.id)) return false;
+            return task.blockedBy.every((id) => taskStateById.get(id) === 'done');
+          }).sort((left, right) => (PRIORITY_ORDER.get(left.priority) ?? 2) - (PRIORITY_ORDER.get(right.priority) ?? 2));
           for (const task of ready) {
             if (capacity <= 0) break;
             try {

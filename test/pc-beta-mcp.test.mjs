@@ -172,6 +172,25 @@ test('PC beta proves OpenCode read/master MCP resources, prompts and real tool e
   assert.deepEqual(state.removed, [names.master, names.read], 'only exact beta-owned MCP registrations are cleaned up');
 });
 
+test('MCP probe rejects a read profile without explicit mutationsEnabled false', async () => {
+  for (const readMutations of [undefined, true]) {
+    const { openCode, state, seed, readTool, masterTool, names } = fakeOpenCode();
+    const readPayload = { profile: 'read', protocolTarget: '2026-07-28' };
+    if (readMutations !== undefined) readPayload.mutationsEnabled = readMutations;
+    openCode.sessionEvidence = async ({ sessionId }) => terminalEvidence(sessionId, state.messageId, [
+      completedTool(readTool, readPayload),
+      completedTool(masterTool, { profile: 'master', protocolTarget: '2026-07-28', mutationsEnabled: true }),
+    ]);
+
+    await assert.rejects(verifyOpenCodeMcpInterop({
+      openCode, directory: '/tmp/disposable-beta', dashboardUrl: 'http://127.0.0.1:7333',
+      seed, discoveryTimeoutMs: 1_000, probeTimeoutMs: 1_000, sleepImpl: async () => {},
+    }), /read-profile MCP tool returned unexpected Dashboard status evidence/);
+    assert.equal(state.deleted.length, 1);
+    assert.deepEqual(state.removed, [names.master, names.read]);
+  }
+});
+
 test('MCP probe waits for a sync-only OpenCode log before the assistant completes', async () => {
   const seed = 'pcbeta-mcp-test';
   const names = mcpBetaServerNames(seed);
