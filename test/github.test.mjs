@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { GitHubClient, aggregateGitHubChecks, normalizeGitHubApiUrl, parseGitHubRemote, parseGitHubRepository } from '../server/integrations/github.mjs';
+import { githubCommitTreeSha } from '../server/integrations/github-commit-evidence.mjs';
+import { collectGitHubActionsFailureEvidence } from '../server/integrations/github-actions-evidence.mjs';
 
 function urlOf(req) { return new URL(req.url, 'http://127.0.0.1'); }
 async function start(handler) { const server = createServer(handler); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve)); return server; }
@@ -121,4 +123,52 @@ test('GitHub overview exposes Octokit transport and safe rate-limit budget', asy
     assert.equal(view.rateLimit.remaining, 4321);
     assert.equal(view.login, 'B4kke');
   } finally { await stop(server); }
+});
+
+test('the real GitHub client satisfies the read-only evidence seam used by the control plane', async () => {
+  const tree = '3'.repeat(40);
+  const server = await start((req, res) => {
+    const url = urlOf(req);
+    res.setHeader('content-type', 'application/json');
+    if (url.pathname === '/repos/B4kke/AI-Dashboard-Beta/git/commits/merge-17') {
+      return res.end(JSON.stringify({ sha: 'merge-17', tree: { sha: tree } }));
+    }
+    if (url.pathname === '/repos/B4kke/AI-Dashboard-Beta/actions/runs') {
+      return res.end(JSON.stringify({
+        total_count: 1,
+        workflow_runs: [{
+          id: 99, name: 'CI', conclusion: 'failure', event: 'pull_request', run_attempt: 1,
+          html_url: 'https://github.test/run/99',
+        }],
+      }));
+    }
+    if (url.pathname === '/repos/B4kke/AI-Dashboard-Beta/actions/runs/99/jobs') {
+      return res.end(JSON.stringify({
+        total_count: 1,
+        jobs: [{
+          id: 7, name: 'test', conclusion: 'failure', html_url: 'https://github.test/job/7',
+          steps: [{ number: 3, name: 'Tests', conclusion: 'failure' }],
+        }],
+      }));
+    }
+    res.statusCode = 404; res.end('{}');
+  });
+  try {
+    const client = new GitHubClient({ baseUrl: `http://127.0.0.1:${server.address().port}`, token: 'test', retries: 0 });
+    const treeSha = await githubCommitTreeSha({ github: client, repository: 'B4kke/AI-Dashboard-Beta', sha: 'merge-17' });
+    assert.equal(treeSha, tree);
+    const actions = await collectGitHubActionsFailureEvidence({ github: client, repository: 'B4kke/AI-Dashboard-Beta', sha: 'abc' });
+    assert.equal(actions.available, true);
+    assert.equal(actions.runs.length, 1);
+    assert.equal(actions.runs[0].workflow, 'CI');
+    assert.equal(actions.runs[0].jobs.length, 1);
+    assert.equal(actions.runs[0].jobs[0].failedSteps.length, 1);
+  } finally { await stop(server); }
+});
+
+test('the GitHub evidence seam refuses writes and unsafe paths', async () => {
+  const client = new GitHubClient({ baseUrl: 'http://127.0.0.1:1', token: 'test', retries: 0 });
+  await assert.rejects(() => client.request('/repos/owner/repo', { method: 'POST' }), /only supports GET/);
+  await assert.rejects(() => client.request('repos/owner/repo'), /absolute API path/);
+  await assert.rejects(() => client.request('/repos/owner/../repo'), /traversal/);
 });

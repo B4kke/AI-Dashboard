@@ -910,7 +910,38 @@ export class BetaHarness {
     const { state } = await this.waitTask(task.id, ['done']);
     const evidence = this.taskEvidence(state, task.id);
     this.assertMergedEvidence(evidence);
+    await this.assertStableMergedTask(task.id);
     return evidence;
+  }
+
+  // The control plane re-verifies merged repository evidence after the merge.
+  // A merged Task must survive that verification: if a later reconciliation
+  // moves it to needs_input or blocks the Project, the campaign has to fail
+  // instead of reporting a happy path that the control plane rejected.
+  async assertStableMergedTask(taskId) {
+    await this.tick().catch(() => {});
+    await sleep(POLL_MS);
+    const state = await this.state();
+    const task = (Array.isArray(state?.tasks) ? state.tasks : []).find((item) => item.id === taskId);
+    if (!task) throw new Error(`Merged beta Task ${taskId} disappeared from Dashboard state`);
+    const project = (Array.isArray(state?.projects) ? state.projects : []).find((item) => item.id === task.projectId) || null;
+    if (task.state !== 'done') {
+      const error = new Error(`Merged beta Task ${taskId} did not stay done after the post-merge verification: ${task.state}${task.supervisorFeedback ? ` (${task.supervisorFeedback})` : ''}`);
+      error.evidence = { task, project };
+      throw error;
+    }
+    if (!project) {
+      const error = new Error(`Dashboard state for merged beta Task ${taskId} did not expose its Project; the post-merge project status cannot be verified`);
+      error.evidence = { task };
+      throw error;
+    }
+    if (project.status !== 'active') {
+      const error = new Error(`Merged beta Task ${taskId} left Project ${project.id} in status ${project.status} after the post-merge verification`);
+      error.evidence = { task, project };
+      throw error;
+    }
+    this.assertMergedEvidence(this.taskEvidence(state, taskId));
+    return task;
   }
 
   async manualWorkerToPublish(spec) {

@@ -208,6 +208,18 @@ export class GitHubClient {
     }
   }
 
+  // Read-only REST seam for evidence readers that need a route Octokit's typed
+  // endpoints do not expose (commit trees, Actions workflow runs). Dashboard
+  // code owns which route is read; Octokit keeps routing, auth, retries and
+  // sanitized errors. Writes are deliberately not reachable through this seam.
+  async request(path, { method = 'GET' } = {}) {
+    const route = String(path || '').trim();
+    if (!route.startsWith('/')) throw new Error('GitHub request path must be an absolute API path');
+    if (route.includes('..')) throw new Error('GitHub request path must not contain traversal segments');
+    if (String(method).toUpperCase() !== 'GET') throw new Error('GitHub request seam only supports GET');
+    return this.call('request', () => this.octokit.request({ method: 'GET', url: route }));
+  }
+
   repository(repository) {
     const { owner, repo } = parseGitHubRepository(repository);
     return this.call('repos.get', () => this.octokit.rest.repos.get({ owner, repo }));
