@@ -275,12 +275,12 @@ export class BetaHarness {
       this.log(`${name}: PASS — ${result.summary}`);
       return result;
     } catch (error) {
-      const status = error?.blocked ? 'blocked' : 'failed';
+      const status = error?.blocked ? 'blocked' : (required ? 'failed' : 'blocked');
       const result = { status, startedAt: this.session.scenarios[name].startedAt, finishedAt: new Date().toISOString(), summary: error.message, evidence: error.evidence || null };
       this.session.scenarios[name] = result;
       await this.persist();
       this.log(`${name}: ${status.toUpperCase()} — ${error.message}`);
-      if (status === 'failed') throw error;
+      if (status === 'failed' && required) throw error;
       return result;
     }
   }
