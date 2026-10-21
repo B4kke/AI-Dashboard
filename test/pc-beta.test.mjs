@@ -441,6 +441,47 @@ test('PC beta resume detects legacy graft metadata that Git status does not repo
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('PC beta starts each campaign from the canonical base and drops stale scenario artifacts', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-beta-fixture-source-'));
+  const repo = join(dir, 'repo');
+  try {
+    await execGitTest('git', ['init', '-b', 'main', repo]);
+    await execGitTest('git', ['-C', repo, 'config', 'user.name', 'AI Dashboard Test']);
+    await execGitTest('git', ['-C', repo, 'config', 'user.email', 'test@example.invalid']);
+    await writeFile(join(repo, 'README.md'), 'disposable beta base\n');
+    await execGitTest('git', ['-C', repo, 'add', '.']);
+    await execGitTest('git', ['-C', repo, 'commit', '-m', 'base']);
+    const mainHead = (await execGitTest('git', ['-C', repo, 'rev-parse', 'HEAD'])).stdout.trim();
+
+    // A previous campaign left its base branch checked out with scenario artifacts.
+    await execGitTest('git', ['-C', repo, 'checkout', '-b', 'beta/pc-previous']);
+    await mkdir(join(repo, 'beta'), { recursive: true });
+    await writeFile(join(repo, 'beta', 'baseline.txt'), 'ready\n');
+    await writeFile(join(repo, 'beta', 'local-verify.mjs'), 'fixture\n');
+    await writeFile(join(repo, 'beta', 'ci-policy.mjs'), 'fixture\n');
+    await writeFile(join(repo, 'beta', 'happy-previous.txt'), 'beta-ready-previous\n');
+    await writeFile(join(repo, 'beta-ci.txt'), 'ci-green\n');
+    await writeFile(join(repo, 'beta-review.txt'), 'approved\n');
+    await execGitTest('git', ['-C', repo, 'add', '.']);
+    await execGitTest('git', ['-C', repo, 'commit', '-m', 'previous campaign fixture']);
+    await execGitTest('git', ['-C', repo, 'remote', 'add', 'origin', `https://github.com/${BETA_REPOSITORY}.git`]);
+    await execGitTest('git', ['-C', repo, 'update-ref', 'refs/remotes/origin/main', mainHead]);
+
+    const harness = new BetaHarness({ repoPath: repo, repository: BETA_REPOSITORY }, betaSession());
+    assert.equal(await harness.fixtureSourceRef(), 'origin/main');
+
+    const removed = await harness.removeStaleFixtureArtifacts();
+    assert.deepEqual(removed.sort(), ['beta-ci.txt', 'beta-review.txt', 'beta/happy-previous.txt']);
+    const remaining = (await execGitTest('git', ['-C', repo, 'ls-files'])).stdout.trim().split('\n');
+    assert.ok(remaining.includes('beta/baseline.txt'));
+    assert.ok(remaining.includes('beta/local-verify.mjs'));
+    assert.ok(remaining.includes('beta/ci-policy.mjs'));
+    assert.ok(!remaining.includes('beta-ci.txt'));
+    assert.ok(!remaining.includes('beta-review.txt'));
+    assert.ok(!remaining.includes('beta/happy-previous.txt'));
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('PC beta full passed-session resume rejects repository drift before Dashboard or Task mutations', async () => {
   const fixtureHead = 'f'.repeat(40);
   const currentHead = 'a'.repeat(40);

@@ -501,7 +501,17 @@ export class BetaHarness {
     let branchExists = true;
     try { await git(this.config.repoPath, ['rev-parse', '--verify', `refs/heads/${baseBranch}`]); } catch { branchExists = false; }
     if (branchExists) await git(this.config.repoPath, ['switch', baseBranch]);
-    else await git(this.config.repoPath, ['switch', '-c', baseBranch]);
+    else {
+      // Every campaign starts from the disposable repository's canonical base,
+      // never from whatever branch a previous campaign left checked out.
+      // Otherwise scenario artifacts (for example a repaired beta-ci.txt)
+      // survive into the next campaign and the cumulative checkpoint diff
+      // becomes empty.
+      const source = await this.fixtureSourceRef();
+      await git(this.config.repoPath, ['switch', '-c', baseBranch, source]);
+    }
+
+    const removed = await this.removeStaleFixtureArtifacts();
 
     const fixture = {
       'beta/baseline.txt': 'ready\n',
@@ -521,9 +531,36 @@ export class BetaHarness {
     if (staged) await git(this.config.repoPath, ['commit', '-m', `AI Dashboard PC beta fixture ${this.session.id}`]);
     await git(this.config.repoPath, ['push', '--set-upstream', 'origin', baseBranch]);
     const head = await git(this.config.repoPath, ['rev-parse', 'HEAD']);
-    this.session.evidence.fixture = { baseBranch, head, paths, remote, pushRemote };
+    this.session.evidence.fixture = { baseBranch, head, paths, remote, pushRemote, removedStaleArtifacts: removed };
     await this.persist();
     return this.session.evidence.fixture;
+  }
+
+  async fixtureSourceRef() {
+    for (const ref of ['origin/HEAD', 'origin/main', 'origin/master', 'main', 'master']) {
+      try {
+        await git(this.config.repoPath, ['rev-parse', '--verify', `${ref}^{commit}`]);
+        return ref;
+      } catch {
+        // Try the next canonical base candidate.
+      }
+    }
+    return 'HEAD';
+  }
+
+  // Scenario artifacts must never survive into a new campaign: a leftover
+  // beta-ci.txt would make the deliberate CI-failure repair a no-op and the
+  // cumulative checkpoint diff empty.
+  async removeStaleFixtureArtifacts() {
+    const tracked = await git(this.config.repoPath, ['ls-files', '--', 'beta-ci.txt', 'beta-review.txt', 'beta']);
+    const stale = tracked.split('\n').map(clean).filter(Boolean).filter((path) => {
+      if (path === 'beta-ci.txt' || path === 'beta-review.txt') return true;
+      if (!path.startsWith('beta/')) return false;
+      return /^(happy|restart|outage|base-task|github-outage)-[A-Za-z0-9]+\.txt$/.test(path.slice('beta/'.length));
+    });
+    if (!stale.length) return [];
+    await git(this.config.repoPath, ['rm', '--quiet', '--', ...stale]);
+    return stale;
   }
 
   projectInput() {
