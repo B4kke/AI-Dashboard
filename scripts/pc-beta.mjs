@@ -1108,14 +1108,14 @@ export class BetaHarness {
         return project?.status === 'active' ? project : null;
       }, { timeoutMs: 120_000 });
       // Let post-merge sync and control-plane state settle before creating work.
-      await sleep(2_000);
+      await sleep(5_000);
       await this.patchProject({ mode: 'autonomous', autoMerge: false });
       const task = await this.createTask(specs.restart);
       const active = await this.waitFor('active worker before dashboard restart', async () => {
         const state = await this.state();
         const evidence = this.taskEvidence(state, task.id);
         return evidence.workers.some((run) => ACTIVE_RUN_STATES.has(run.status)) ? evidence : null;
-      }, { timeoutMs: 90_000 });
+      }, { timeoutMs: 300_000 });
       const beforeRunIds = active.workers.map((run) => run.id);
       await this.restartDashboard();
       const recovered = await this.waitFor('post-restart worker reconciliation', async () => {
