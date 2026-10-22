@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
+import { attachBetaProcessLog } from './beta-process-log.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -240,6 +240,11 @@ export class BetaHarness {
     this.dashboard = null;
     this.openCode = null;
     this.openCodeOwned = false;
+    // V2 standalone servers are password-protected even without explicit
+    // configuration. Keep one credential in memory across owned restarts.
+    this.managedOpenCodePassword = config.manageOpenCode
+      ? (process.env.OPENCODE_SERVER_PASSWORD || process.env.OPENCODE_PASSWORD || randomBytes(32).toString('base64url'))
+      : null;
     this.dashboardLog = null;
     this.openCodeLog = null;
   }
@@ -345,11 +350,15 @@ export class BetaHarness {
   }
 
   attachLogs(child, file, prefix) {
-    const stream = createWriteStream(file, { flags: 'a' });
-    child.stdout?.on('data', (chunk) => stream.write(chunk));
-    child.stderr?.on('data', (chunk) => stream.write(chunk));
-    child.once('exit', (code, signal) => { stream.write(`\n[${prefix} exit code=${code} signal=${signal}]\n`); stream.end(); });
-    return stream;
+    return attachBetaProcessLog(child, file, prefix, { secrets: [this.managedOpenCodePassword] });
+  }
+
+  openCodeEnvironment() {
+    return this.managedOpenCodePassword ? {
+      OPENCODE_SERVER_USERNAME: 'opencode',
+      OPENCODE_SERVER_PASSWORD: this.managedOpenCodePassword,
+      OPENCODE_PASSWORD: this.managedOpenCodePassword,
+    } : {};
   }
 
   async spawnDashboard(overrides = {}) {
@@ -363,6 +372,7 @@ export class BetaHarness {
       AI_DASHBOARD_DATA: this.config.legacyFile,
       AI_DASHBOARD_AUTONOMY_INTERVAL_MS: String(this.config.autonomyIntervalMs),
       OPENCODE_URL: this.config.openCodeUrl,
+      ...this.openCodeEnvironment(),
       ...overrides,
     };
     for (const [key, value] of Object.entries(env)) if (value === undefined || value === null) delete env[key];
@@ -416,7 +426,7 @@ export class BetaHarness {
       throw error;
     }
     const { command, args } = this.openCodeCommand();
-    this.openCode = spawn(command, args, { cwd: this.config.repoPath, env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    this.openCode = spawn(command, args, { cwd: this.config.repoPath, env: { ...process.env, ...this.openCodeEnvironment() }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     this.openCodeOwned = true;
     this.openCodeLog = this.attachLogs(this.openCode, this.config.openCodeLog, 'opencode');
     await this.waitFor('managed OpenCode health', () => this.openCodeConnected(), { timeoutMs: 45_000 });

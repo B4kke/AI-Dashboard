@@ -115,6 +115,8 @@ AI_DASHBOARD_BETA_OPENCODE_COMMAND_JSON=["opencode","serve","--hostname","127.0.
 
 The harness stops only the child process it started for the dedicated chaos endpoint. Do not point the chaos endpoint at an OpenCode instance used by an active agent.
 
+OpenCode V2 standalone servers are password-protected. The harness supplies one in-memory credential to its owned process, isolated Dashboard and MCP client, using both V2 `OPENCODE_PASSWORD` and legacy `OPENCODE_SERVER_PASSWORD` environment names. The credential is reused for owned restarts, excluded from stored session/config/evidence and redacted from stdout/stderr logs even when split across chunks. The harness does not change the shared service's credentials. See the [V2 standalone server contract](https://opencode.ai/v2/docs/cli/web).
+
 ### Smoke versus full
 
 `--smoke` proves the shortest external path:

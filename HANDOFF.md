@@ -13,7 +13,9 @@ Ingen full beta er bestått. Ikke ommerk tidligere rapporter eller overfør dere
 3. **Dokumenterte npm-kommandoer lastet ikke `.env`.** `npm start`, `npm run beta` og `npm run beta:pc` bruker nå Nodes `--env-file-if-exists=.env`. Eksporterte variabler overstyrer filen. Isolert faktisk `npm start` bygget og startet med port/SQLite fra en midlertidig `.env`.
 4. **Frontend.** Manglende favicon ga browser-console 404. SVG-favicon er lagt til. Lange beskrivelser rant utenfor desktop-prosjektkort (målt 593 px innhold i 371 px kort); tekstsporet kan nå krympe og lange titler brytes innenfor kortet.
 
-Restart-gaten krever fortsatt faktisk aktiv, innmeldt worker før restart, persistert Task/Run/session/prompt-identitet, uendret identitet etter restart og bekreftet avslutning uten usikkerhet/karantene. Ingen restart eller ekstern kampanje er startet under denne lokale rettingen.
+Restart-gaten krever fortsatt faktisk aktiv, innmeldt worker før restart, persistert Task/Run/session/prompt-identitet, uendret identitet etter restart og bekreftet avslutning uten usikkerhet/karantene.
+
+Etter operatørens godkjenning ble kandidat `f3b541a` pushet i [PR #5](https://github.com/B4kke/AI-Dashboard/pull/5). Første full/chaos-forsøk i `/tmp/ai-dashboard-beta-f3b541a-20261022/` besto repository-fixture, men feilet ved oppstart fordi OpenCode 2.1.3 standalone genererer passord mens klienten manglet det. Rapporten forblir failed; ingen modell-Task ble kjørt. Den nye rettingen deler et in-memory-passord mellom eid OpenCode, isolert Dashboard og MCP-klient, støtter begge password-envnavn og redigerer bort credentials fra prosesslogger også ved delte chunks. Virkelig oppstart + Dashboard-restart mot eid OpenCode 2.1.3 er nå bestått uten duplisert prosess; passordet finnes ikke i logger/SQLite. Bevis: `/tmp/ai-dashboard-owned-auth-proof/`. Fullsuite etter auth-rettingen: 526/526 bestått; målrettet beta/MCP/auth: 147/147 bestått. Kildeendringene trenger en ny commit, CI og fresh full-kampanje; ikke gjenbruk evidensen fra `f3b541a`.
 
 ## Fersk lokal verifikasjon
 

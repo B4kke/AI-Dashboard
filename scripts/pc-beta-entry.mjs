@@ -82,7 +82,10 @@ async function runMcpGate(args, runtimeDir) {
     if (source.status) throw new Error('Dashboard worktree is dirty; refusing to label OpenCode MCP beta evidence with an incomplete commit identity');
     await harness.spawnDashboard();
     await harness.ensureOpenCode();
-    const openCode = new OpenCodeClient({ baseUrl: openCodeUrl });
+    const openCode = new OpenCodeClient({
+      baseUrl: openCodeUrl,
+      ...(harness.managedOpenCodePassword ? { username: 'opencode', password: harness.managedOpenCodePassword } : {}),
+    });
     const evidence = await verifyOpenCodeMcpInterop({
       openCode,
       directory: repoPath,

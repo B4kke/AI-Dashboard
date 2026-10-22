@@ -366,6 +366,8 @@ The exact final head must satisfy level 3 before beta-candidate evidence is curr
 
 The in-flight restart beta gate requires an actually admitted worker before restart and preserves its exact Run/session/prompt identity afterward. Missing or unavailable evidence cannot pass; restart histories are not silently replayed. October 22 full-campaign attempts remain failed/incomplete, not full-beta approval; see `docs/04-roadmap.md` and `HANDOFF.md`.
 
+Managed beta OpenCode instances share a per-process credential with their isolated Dashboard and MCP probe. It stays in memory/environment, is reused across owned restarts and never enters session/evidence state. Process logging redacts credentials, including split output chunks. This supports password-protected V2 standalone servers without changing or restarting the shared OpenCode service.
+
 ## Canonical docs
 
 - `AGENTS.md` — binding agent/Master/safety and definition-of-done rules
