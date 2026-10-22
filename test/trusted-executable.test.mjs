@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { realpathSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveTrustedExecutable, trustedExecutableSearchPath } from '../server/core/trusted-executable.mjs';
@@ -48,5 +48,6 @@ test('bare executable resolution excludes worktree PATH entries and retains sear
     await chmod(join(directory, name), 0o755);
   }
   const env = { PATH: [worktree, first, second].join(delimiter) };
-  assert.equal(await resolveTrustedExecutable(name, { cwd: worktree, env }), join(first, name));
+  // Windows Temp may use an 8.3 alias; executable identity is canonical.
+  assert.equal(await resolveTrustedExecutable(name, { cwd: worktree, env }), await realpath(join(first, name)));
 });
