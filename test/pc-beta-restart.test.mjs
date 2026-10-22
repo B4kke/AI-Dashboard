@@ -30,9 +30,6 @@ function fixture() {
   // Exercise the real predicates, without wall-clock waits or external calls.
   harness.waitFor = async (label, predicate) => {
     f.events.push(label);
-    if (label === 'active worker before dashboard restart') {
-      assert.equal(f.events.at(-2), 'tick', 'autonomy is explicitly advanced before the active-worker probe');
-    }
     const result = await predicate();
     if (!result) throw new Error(`Timed out waiting for ${label}`);
     return result;
@@ -45,6 +42,14 @@ function fixture() {
     f.restarted = true;
   };
   harness.tick = async () => { f.events.push('tick'); };
+  const waitFor = harness.waitFor.bind(harness);
+  harness.waitFor = async (label, predicate, options = {}) => {
+    if (label === 'active worker before dashboard restart') {
+      assert.equal(options.tick, true, 'autonomy tick is enabled during active-worker polling');
+      f.events.push('tick');
+    }
+    return waitFor(label, predicate, options);
+  };
   harness.waitTaskRunsIdle = async () => harness.taskEvidence(await harness.state(), 't1');
   return f;
 }
