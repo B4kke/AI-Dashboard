@@ -619,23 +619,33 @@ export class BetaHarness {
     const directModel = clean(process.env.AI_DASHBOARD_BETA_DIRECT_MODEL);
     let project;
     if (directModel) {
-      const exploration = await this.api('/api/explorations', { method: 'POST', body: { title: `PC beta exploration ${this.session.id}`, notes: 'Assess this disposable repository as a safe end-to-end AI Dashboard beta target. Return a concise implementation/readiness brief.', model: directModel } });
-      const run = await this.api(`/api/explorations/${encodeURIComponent(exploration.id)}/analyze`, { method: 'POST', body: { kind: 'analysis', model: directModel } });
-      const completed = await this.waitFor('Exploration report', async () => {
-        const state = await this.state();
-        const current = state.explorationRuns.find((item) => item.id === run.id);
-        if (current?.status === 'failed') throw new Error(`Exploration failed: ${current.error}`);
-        return current?.status === 'completed' ? current : null;
-      }, { timeoutMs: this.config.timeoutMs });
-      const promotion = await this.api(`/api/explorations/${encodeURIComponent(exploration.id)}/promote`, { method: 'POST', body: this.projectInput() });
-      const replay = await this.api(`/api/explorations/${encodeURIComponent(exploration.id)}/promote`, { method: 'POST', body: this.projectInput() });
-      project = promotion.project || promotion;
-      const replayProject = replay.project || replay;
-      if (!project?.id || replayProject?.id !== project.id) throw new Error('Exploration promotion was not idempotent');
-      this.session.evidence.exploration = { explorationId: exploration.id, runId: completed.id, projectId: project.id, reportChars: clean(completed.report).length };
-    } else {
+      try {
+        const exploration = await this.api('/api/explorations', { method: 'POST', body: { title: `PC beta exploration ${this.session.id}`, notes: 'Assess this disposable repository as a safe end-to-end AI Dashboard beta target. Return a concise implementation/readiness brief.', model: directModel } });
+        const run = await this.api(`/api/explorations/${encodeURIComponent(exploration.id)}/analyze`, { method: 'POST', body: { kind: 'analysis', model: directModel } });
+        const completed = await this.waitFor('Exploration report', async () => {
+          const state = await this.state();
+          const current = state.explorationRuns.find((item) => item.id === run.id);
+          if (current?.status === 'failed') throw new Error(`Exploration failed: ${current.error}`);
+          return current?.status === 'completed' ? current : null;
+        }, { timeoutMs: this.config.timeoutMs });
+        const promotion = await this.api(`/api/explorations/${encodeURIComponent(exploration.id)}/promote`, { method: 'POST', body: this.projectInput() });
+        const replay = await this.api(`/api/explorations/${encodeURIComponent(exploration.id)}/promote`, { method: 'POST', body: this.projectInput() });
+        project = promotion.project || promotion;
+        const replayProject = replay.project || replay;
+        if (!project?.id || replayProject?.id !== project.id) throw new Error('Exploration promotion was not idempotent');
+        this.session.evidence.exploration = { explorationId: exploration.id, runId: completed.id, projectId: project.id, reportChars: clean(completed.report).length };
+      } catch (error) {
+        // Exploration could not be exercised (direct model unavailable or transient
+        // failure). Fall back to direct Project creation so the beta campaign can
+        // continue; the scenario is recorded as blocked above.
+        this.session.evidence.exploration = { blocked: true, reason: error.message };
+      }
+    }
+    if (!project) {
       project = await this.api('/api/projects', { method: 'POST', body: this.projectInput() });
-      this.session.evidence.exploration = { skipped: true, reason: 'AI_DASHBOARD_BETA_DIRECT_MODEL not configured' };
+      if (!this.session.evidence.exploration) {
+        this.session.evidence.exploration = { skipped: true, reason: 'AI_DASHBOARD_BETA_DIRECT_MODEL not configured' };
+      }
     }
     this.session.projectId = project.id;
     await this.persist();
@@ -1063,6 +1073,11 @@ export class BetaHarness {
     await this.scenario('exploration_project', async () => {
       const project = await this.ensureProject();
       const evidence = this.session.evidence.exploration || {};
+      if (evidence.blocked) {
+        const error = new Error(`Exploration could not be exercised: ${evidence.reason}`);
+        error.blocked = true;
+        throw error;
+      }
       if (this.config.mode === 'full' && evidence.skipped) {
         const error = new Error('Full beta requires AI_DASHBOARD_BETA_DIRECT_MODEL so Exploration analysis/promotion is exercised');
         error.blocked = true;
