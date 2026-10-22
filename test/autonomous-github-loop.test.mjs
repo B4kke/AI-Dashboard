@@ -46,7 +46,7 @@ async function readJson(req) { const chunks = []; for await (const chunk of req)
 test('task -> worker -> PR -> CI fail -> repair -> supervisor -> merge', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-loop-'));
   const bare = join(dir, 'remote.git'); const repo = join(dir, 'repo');
-  let pr = null; let ciState = 'failure';
+  let pr = null; let ciState = 'failure'; let staleHeadResponses = 0; let lastObservedPrHead = null;
   try {
     await exec('git', ['init', '--bare', bare]);
     await exec('git', ['init', '-b', 'main', repo]);
@@ -68,7 +68,14 @@ test('task -> worker -> PR -> CI fail -> repair -> supervisor -> merge', async (
         return res.end(JSON.stringify({ number: 1, html_url: 'http://github.test/pr/1', state: 'open', draft: false, head: { ref: pr.head }, base: { ref: pr.base } }));
       }
       if (req.method === 'GET' && url.pathname === '/repos/owner/repo/pulls/1') {
-        const sha = await remoteHead();
+        const currentHead = await remoteHead();
+        let sha = currentHead;
+        if (lastObservedPrHead && currentHead !== lastObservedPrHead && staleHeadResponses > 0) {
+          sha = lastObservedPrHead;
+          staleHeadResponses -= 1;
+        } else {
+          lastObservedPrHead = currentHead;
+        }
         const baseSha = await remoteBase();
         return res.end(JSON.stringify({ number: 1, html_url: 'http://github.test/pr/1', state: 'open', draft: false, merged: false, head: { sha, ref: pr.head }, base: { ref: pr.base, sha: baseSha } }));
       }
@@ -118,7 +125,9 @@ test('task -> worker -> PR -> CI fail -> repair -> supervisor -> merge', async (
       await writeFile(join(worker2.worktreePath, 'feature.txt'), 'iteration two fixed\n');
       rawOpenCode.set(worker2.sessionId, { schemaVersion: 1, kind: 'worker', status: 'success', summary: 'Repaired CI issue', evidence: { tests: ['node verify.mjs'], notes: ['repair'] }, risks: [], needsInput: null });
       await orchestrator.reconcileRun(worker2);
+      staleHeadResponses = 2;
       await orchestrator.publishTask(task.id);
+      assert.equal(staleHeadResponses, 0, 'publication should wait for GitHub to expose the pushed checkpoint on the existing PR');
       ciState = 'success';
       const passedCi = await orchestrator.reconcilePublishedTask(task.id);
       assert.equal(passedCi.state, 'success'); assert.equal(store.getTask(task.id).state, 'awaiting_review');

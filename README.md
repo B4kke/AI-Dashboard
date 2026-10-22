@@ -6,7 +6,7 @@ AI Dashboard connects existing projects/repositories, direct Tasks, optional Ide
 
 > Status: pre-alpha / PC-beta candidate. Exact-head Linux, Windows and rendered-UI Actions are required after every code change; a beta claim additionally requires current-stack OpenCode + disposable GitHub/Actions dogfood.
 >
-> Latest published CI-verified head `afea639`: [Actions run 39788343998](https://github.com/B4kke/AI-Dashboard/actions/runs/39788343998) passed Linux, Windows and rendered UI. The latest passing current-stack **smoke** remains `8f8e62c` — real worker/checkpoint, PR/CI, independent supervisor, control-plane merge and MCP interoperability. No full campaign has passed. October 22 campaign 18 failed before restart-worker admission; campaign 19 failed on the provider's usage limit. The current local repairs still need their own committed-head CI and external beta evidence; see `HANDOFF.md` and `docs/05-pc-beta-checklist.md`.
+> Latest published CI-verified head `29a15e7`: [Actions run 39840975559](https://github.com/B4kke/AI-Dashboard/actions/runs/39840975559) passed Linux, Windows and rendered UI. A fresh full campaign on that exact head passed Exploration, happy path (merged disposable PR #38) and MCP interoperability, then failed CI repair when an immediate GitHub PR read appeared to return the prior head after a successful worker push. PR #39 now shows the exact repair checkpoint and green checks, but the campaign report remains failed. A bounded exact-identity reread and regression test are now in the working tree; the complete local suite passes 560/560. These changes still need fresh exact-head Actions and full beta evidence. See `HANDOFF.md` and `docs/05-pc-beta-checklist.md`.
 
 ## Product model
 

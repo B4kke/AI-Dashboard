@@ -1,14 +1,24 @@
-# AI Dashboard — status 2026-10-22
+# AI Dashboard — status 2026-10-23
 
 ## Resultat og avgrensning
 
 Prosjektet ligger i `/home/b4kke/projects/AI-Dashboard`. `/home/b4kke/projects/AI-Dashboard-Beta` er kun det separate disposable testrepositoryet. Kandidatendringene nedenfor hører til AI-Dashboard. Operatøren har godkjent commit på egen gren, push/CI og en ny full beta med test-PR-er/merge kun i det separate testrepositoryet.
 
-Ingen full beta er bestått. Ikke ommerk tidligere rapporter eller overfør deres evidens til ny kode. Commit `05d3789e292ac4b2186ce6e58879a40afe3cea07` på `fix/beta-control-loop` i [PR #5](https://github.com/B4kke/AI-Dashboard/pull/5) besto Linux, Windows og rendered UI i [Actions 39830934838](https://github.com/B4kke/AI-Dashboard/actions/runs/39830934838), med 526 tester på hver plattform. Dette er evidens for den committen, ikke for de nye scenario-evidensendringene.
+Ingen full beta er bestått. Ikke ommerk tidligere rapporter eller overfør deres evidens til ny kode. Commit `29a15e7ac128024885301c0a7d50f2d157294e7a` på `fix/beta-control-loop` i [PR #5](https://github.com/B4kke/AI-Dashboard/pull/5) besto Linux, Windows og rendered UI i [Actions 39840975559](https://github.com/B4kke/AI-Dashboard/actions/runs/39840975559). Fersk lokal Node-suite på dette arbeidsstadiet etter publiseringsrettingen: 560/560 bestått; den kommende committen trenger egen Actions.
 
 Operatøren krever Nemotron Ultra/Super 3.5 via NVIDIA API. Den lokale `.env` bruker nå `nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b` for coding, supervisor og direkte analyse. Ikke bruk OpenCodes modellprovider eller andre modellfamilier. OpenCode er kun prosjektets integrerte worker-harness. Eksisterende GitHub-innlogging er tilgjengelig gjennom `gh`; isolert beta trenger token i prosessmiljøet, hentet uten utskrift eller lagring av credential.
 
 Kampanje `/tmp/ai-dashboard-beta-05d3789-super35-20261022/` (session `pcbeta-20261022184222-59d11163`) besto Exploration og hele happy-path-løpet med test-PR #37, checkpoint `aad030f33806e5e7a8ac7f01366bbdb6e871a6fd` og merge `d269d24c64e3bae1296ce1ad2b797310aaa121ad`. CI-reparasjon feilet på gjentatte provider-500-feil og en fastlåst modellforespørsel; den opprinnelige 20-minuttersgrensen avbrøt og bekreftet avslutningen. Nye opptak/merge ble satt manuelt før timeout for å bevare feiltilfellet. MCP-proben feilet fordi to faktisk fullførte kall ble returnert i ett Code Mode-resultat. Alle eide prosesser ble avsluttet; delt OpenCode ble beholdt. Kampanjen forblir failed. Ingen full-beta-evidens overføres til neste kilde-SHA.
+
+## 23. oktober — fersk fullkampanje og publiseringsretting
+
+Kampanje `/tmp/ai-dashboard-beta-29a15e7-20261023/` (`pcbeta-20261022232548-307bdcab`) kjørte mot eksakt Dashboard-SHA `29a15e7ac128024885301c0a7d50f2d157294e7a` med Nemotron Super 3.5 i coding, supervisor og direkte analyse. Exploration og happy path besto; disposable PR #38 ble merget med checkpoint/tree/base-evidens. OpenCode/MCP-interoperabilitet besto. CI repair feilet fail-closed ved publisering av iterasjon 2: worker-checkpointet `ce9e1fdf34b1a5d6369505ccbad8bc182f2cfabb` ble pushet 23:33:54.933Z, og PR-identitetskontroll feilet 1.3 sekund senere. PR #39 viser nå samme branch/head/base som checkpointet, og checks er grønne, men rapporten forblir `failed`; dette beviset oppgraderer ikke kampanjen.
+
+Root-cause-vurdering: den tidslinjen og den korrigerte GitHub-head-evidensen tyder på et kortvarig stale read fra GitHub umiddelbart etter push, men selve mismatch-responsen ble ikke persistert, så dette er ikke bevist som rå respons. Produksjonskontrollen har nå bounded retry på PR-evidens etter push og godtar publisering bare når head SHA, branch, base branch og base SHA alle matcher worker-checkpointet. En regresjon i `test/autonomous-github-loop.test.mjs` etterligner to gamle PR-head-svar etter worker-push og fullfører deretter CI-feil/reparasjon/review/merge. Full Node-suite etter endringen: 560/560; målrettet publiserings-/gjenopprettingssuite: 3/3. Ny commit, eksakt-head Actions og fersk fullkampanje gjenstår.
+
+Betainnstillingene `AI_DASHBOARD_BETA_CODING_MODEL`, `AI_DASHBOARD_BETA_SUPERVISOR_MODEL` og `AI_DASHBOARD_BETA_DIRECT_MODEL` er nå alle satt lokalt til `nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b`; modell-ID-ene for coding/supervisor var tidligere feilaktig `openai/gpt-6-luna`. Ingen credentials ble skrevet ut eller endret.
+
+Etter eksplisitt brukerønske ble 20 gamle PC-beta OpenCode-sesjoner slettet, og verifisert slettet igjen ble de fire persistente sesjonene kampanjen opprettet. MCP-proben slettet sin egen sesjon. Etter hver opprydding viste full sesjonsopplisting null beta-treff. PR #39 og evidensfilene ble bevart; ingen PR/worktree/branch ble manuelt endret eller slettet.
 
 ## Bekreftede problemer og rettinger
 
