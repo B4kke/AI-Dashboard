@@ -6,6 +6,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { attachBetaProcessLog } from './beta-process-log.mjs';
+import { GitHubClient } from '../server/integrations/github.mjs';
+import { assertCiRepairEvidence, assertSupervisorRejectionEvidence } from './beta-scenario-evidence.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -1177,15 +1179,15 @@ export class BetaHarness {
 
     await this.scenario('ci_failure_repair', async ({ resumeExisting }) => {
       const evidence = await this.runAutonomousTask(specs.ciRepair, 'ciFailureRepair', { resumeExisting });
-      if (evidence.workers.length < 2) throw new Error('CI repair scenario did not exercise a second worker iteration; deliberate CI failure was not proven');
-      return { summary: `CI failure repaired across ${evidence.workers.length} worker iterations`, taskId: evidence.task.id, prNumber: evidence.task.publication.prNumber, workerRuns: evidence.workers.map((run) => run.id) };
+      const repair = await assertCiRepairEvidence(evidence, { github: new GitHubClient(), repository: this.session.repository });
+      return { summary: `CI failure repaired across ${evidence.workers.length} worker iterations`, taskId: evidence.task.id, prNumber: evidence.task.publication.prNumber, workerRuns: evidence.workers.map((run) => run.id), repair };
     }, { revalidatePassed: true });
 
     await this.scenario('supervisor_rejection', async ({ resumeExisting }) => {
       await this.repairProjectSync();
       const evidence = await this.runAutonomousTask(specs.supervisorReject, 'supervisorRejection', { resumeExisting });
-      if (evidence.workers.length < 2 || evidence.supervisors.length < 2) throw new Error('Supervisor rejection scenario did not prove reject -> repair -> re-review');
-      return { summary: `${evidence.supervisors.length} supervisor runs and ${evidence.workers.length} worker iterations`, taskId: evidence.task.id, supervisorRuns: evidence.supervisors.map((run) => run.id) };
+      const rejection = assertSupervisorRejectionEvidence(evidence);
+      return { summary: `${evidence.supervisors.length} supervisor runs and ${evidence.workers.length} worker iterations`, taskId: evidence.task.id, supervisorRuns: evidence.supervisors.map((run) => run.id), rejection };
     }, { revalidatePassed: true });
 
     await this.scenario('dashboard_restart_in_flight', async () => {
