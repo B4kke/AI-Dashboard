@@ -1100,10 +1100,16 @@ export class BetaHarness {
 
     await this.scenario('dashboard_restart_in_flight', async () => {
       await this.repairProjectSync();
+      // Wait until the Project is back to active so worker admission can proceed.
+      // A previous scenario's auto-merge can leave the Project paused as needs_sync.
+      await this.waitFor('project to be active', async () => {
+        const state = await this.state();
+        const project = state.projects.find((item) => item.id === this.session.projectId);
+        return project?.status === 'active' ? project : null;
+      }, { timeoutMs: 120_000 });
       await this.patchProject({ mode: 'autonomous', autoMerge: false });
       const task = await this.createTask(specs.restart);
       const active = await this.waitFor('active worker before dashboard restart', async () => {
-        await this.tick().catch(() => {});
         const state = await this.state();
         const evidence = this.taskEvidence(state, task.id);
         return evidence.workers.some((run) => ACTIVE_RUN_STATES.has(run.status)) ? evidence : null;
