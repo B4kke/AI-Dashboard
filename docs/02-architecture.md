@@ -328,6 +328,8 @@ GitHub publishes a PR's `merge_commit_sha` before the merge is terminal, so a st
 
 API failures are incomplete/error evidence, never an empty successful CI set. Pending/transient evidence uses durable bounded backoff. Merge retries only retry classified transient failures and remain budgeted.
 
+Post-merge local base synchronization is bound to the original Project admission identity. It rechecks that identity under the base-sync lock before touching Git; a concurrent repository, branch, policy or status change cannot redirect synchronization. A failed sync may pause only that same unchanged active Project as `needs_sync`, using compare-and-set. It is not blindly retried against a newly read Project configuration.
+
 ## Persistence and transactions
 
 SQLite/WAL is default persistence; JSON is legacy import.

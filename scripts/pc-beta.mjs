@@ -258,7 +258,7 @@ export class BetaHarness {
     await writeFile(join(this.config.reportDir, `${this.session.id}.md`), renderBetaReport(this.session), 'utf8');
   }
 
-  async scenario(name, fn, { required = true, revalidatePassed = false } = {}) {
+  async scenario(name, fn, { revalidatePassed = false } = {}) {
     const previous = this.session.scenarios[name];
     if (previous?.status === 'passed' && this.config.resume && name !== 'opencode_health' && !revalidatePassed) {
       this.log(`${name}: already passed; preserving evidence`);
@@ -275,12 +275,12 @@ export class BetaHarness {
       this.log(`${name}: PASS — ${result.summary}`);
       return result;
     } catch (error) {
-      const status = error?.blocked ? 'blocked' : (required ? 'failed' : 'blocked');
+      const status = error?.blocked ? 'blocked' : 'failed';
       const result = { status, startedAt: this.session.scenarios[name].startedAt, finishedAt: new Date().toISOString(), summary: error.message, evidence: error.evidence || null };
       this.session.scenarios[name] = result;
       await this.persist();
       this.log(`${name}: ${status.toUpperCase()} — ${error.message}`);
-      if (status === 'failed' && required) throw error;
+      if (status === 'failed') throw error;
       return result;
     }
   }
@@ -619,33 +619,23 @@ export class BetaHarness {
     const directModel = clean(process.env.AI_DASHBOARD_BETA_DIRECT_MODEL);
     let project;
     if (directModel) {
-      try {
-        const exploration = await this.api('/api/explorations', { method: 'POST', body: { title: `PC beta exploration ${this.session.id}`, notes: 'Assess this disposable repository as a safe end-to-end AI Dashboard beta target. Return a concise implementation/readiness brief.', model: directModel } });
-        const run = await this.api(`/api/explorations/${encodeURIComponent(exploration.id)}/analyze`, { method: 'POST', body: { kind: 'analysis', model: directModel } });
-        const completed = await this.waitFor('Exploration report', async () => {
-          const state = await this.state();
-          const current = state.explorationRuns.find((item) => item.id === run.id);
-          if (current?.status === 'failed') throw new Error(`Exploration failed: ${current.error}`);
-          return current?.status === 'completed' ? current : null;
-        }, { timeoutMs: this.config.timeoutMs });
-        const promotion = await this.api(`/api/explorations/${encodeURIComponent(exploration.id)}/promote`, { method: 'POST', body: this.projectInput() });
-        const replay = await this.api(`/api/explorations/${encodeURIComponent(exploration.id)}/promote`, { method: 'POST', body: this.projectInput() });
-        project = promotion.project || promotion;
-        const replayProject = replay.project || replay;
-        if (!project?.id || replayProject?.id !== project.id) throw new Error('Exploration promotion was not idempotent');
-        this.session.evidence.exploration = { explorationId: exploration.id, runId: completed.id, projectId: project.id, reportChars: clean(completed.report).length };
-      } catch (error) {
-        // Exploration could not be exercised (direct model unavailable or transient
-        // failure). Fall back to direct Project creation so the beta campaign can
-        // continue; the scenario is recorded as blocked above.
-        this.session.evidence.exploration = { blocked: true, reason: error.message };
-      }
-    }
-    if (!project) {
+      const exploration = await this.api('/api/explorations', { method: 'POST', body: { title: `PC beta exploration ${this.session.id}`, notes: 'Assess this disposable repository as a safe end-to-end AI Dashboard beta target. Return a concise implementation/readiness brief.', model: directModel } });
+      const run = await this.api(`/api/explorations/${encodeURIComponent(exploration.id)}/analyze`, { method: 'POST', body: { kind: 'analysis', model: directModel } });
+      const completed = await this.waitFor('Exploration report', async () => {
+        const state = await this.state();
+        const current = state.explorationRuns.find((item) => item.id === run.id);
+        if (current?.status === 'failed') throw new Error(`Exploration failed: ${current.error}`);
+        return current?.status === 'completed' ? current : null;
+      }, { timeoutMs: this.config.timeoutMs });
+      const promotion = await this.api(`/api/explorations/${encodeURIComponent(exploration.id)}/promote`, { method: 'POST', body: this.projectInput() });
+      const replay = await this.api(`/api/explorations/${encodeURIComponent(exploration.id)}/promote`, { method: 'POST', body: this.projectInput() });
+      project = promotion.project || promotion;
+      const replayProject = replay.project || replay;
+      if (!project?.id || replayProject?.id !== project.id) throw new Error('Exploration promotion was not idempotent');
+      this.session.evidence.exploration = { explorationId: exploration.id, runId: completed.id, projectId: project.id, reportChars: clean(completed.report).length };
+    } else {
       project = await this.api('/api/projects', { method: 'POST', body: this.projectInput() });
-      if (!this.session.evidence.exploration) {
-        this.session.evidence.exploration = { skipped: true, reason: 'AI_DASHBOARD_BETA_DIRECT_MODEL not configured' };
-      }
+      this.session.evidence.exploration = { skipped: true, reason: 'AI_DASHBOARD_BETA_DIRECT_MODEL not configured' };
     }
     this.session.projectId = project.id;
     await this.persist();
@@ -1037,6 +1027,66 @@ export class BetaHarness {
     }, { timeoutMs, tick: true });
   }
 
+  async runDashboardRestart(spec) {
+    const stored = this.autonomousTaskRecord('dashboardRestart');
+    if (stored.record) {
+      throw new Error('Restart scenario already has persisted history; refusing to replay restart or create a replacement Task');
+    }
+    await this.repairProjectSync();
+    await this.patchProject({ mode: 'autonomous', autoMerge: false });
+    const task = await this.createTask(spec);
+    if (!clean(task?.id)) throw new Error('Restart scenario created no identifiable Task');
+    await this.persistAutonomousTaskId(stored, task.id);
+    this.assertAutonomousTaskMatches(task, spec, 'dashboardRestart');
+
+    const active = await this.waitFor('active worker before dashboard restart', async () => {
+      const evidence = this.taskEvidence(await this.state(), task.id);
+      if (!evidence.task) throw new Error('Restart Task disappeared before restart');
+      if (evidence.task.projectId !== this.session.projectId) throw new Error('Restart Task changed Project before restart');
+      if (evidence.workers.length > 1) throw new Error('Restart scenario has duplicate worker Runs before restart');
+      const worker = evidence.workers[0];
+      return worker && clean(worker.id) && ['running', 'retrying'].includes(worker.status)
+        && worker.sessionId && worker.promptMessageId && !worker.terminationConfirmedAt
+        && !worker.dispatchUncertain && !worker.quarantineReason
+        ? evidence : null;
+    }, { timeoutMs: 90_000 });
+    const before = active.workers[0];
+    const identity = { runId: before.id, sessionId: before.sessionId, promptMessageId: before.promptMessageId };
+    this.session.evidence.dashboardRestart = { taskId: task.id, ...identity, phase: 'before_restart' };
+    await this.persist();
+
+    // A failed restart or unavailable state is not restart-recovery evidence.
+    await this.restartDashboard();
+    const assertIdentity = (evidence) => {
+      if (!evidence.task || evidence.task.projectId !== this.session.projectId) {
+        throw new Error('Restart Task is missing or changed Project after restart');
+      }
+      const worker = evidence.workers[0];
+      if (evidence.workers.length !== 1 || worker?.id !== identity.runId
+        || worker.sessionId !== identity.sessionId || worker.promptMessageId !== identity.promptMessageId) {
+        throw new Error('Dashboard restart lost or changed the persisted worker identity, or created duplicate worker Runs');
+      }
+      return worker;
+    };
+    await this.waitFor('post-restart worker reconciliation', async () => {
+      const evidence = this.taskEvidence(await this.state(), task.id);
+      assertIdentity(evidence);
+      return ['awaiting_publish', 'awaiting_ci', 'awaiting_review', 'ready_to_merge', 'needs_input'].includes(evidence.task.state)
+        ? evidence : null;
+    }, { timeoutMs: this.config.timeoutMs });
+    await this.patchProject({ mode: 'manual', autoMerge: false });
+    const settled = await this.waitTaskRunsIdle(task.id);
+    const worker = assertIdentity(settled);
+    if (!['completed', 'failed', 'aborted'].includes(worker.status) || !worker.terminationConfirmedAt
+      || worker.dispatchUncertain || worker.quarantineReason) {
+      throw new Error('Restart worker termination is unproven; recovery cannot pass');
+    }
+    const evidence = { taskId: task.id, ...identity, phase: 'verified', taskState: settled.task.state };
+    this.session.evidence.dashboardRestart = evidence;
+    await this.persist();
+    return { summary: `restart preserved the active worker identity; resulting task state ${settled.task.state}`, ...evidence };
+  }
+
   async cleanupProcesses() {
     if (this.config.keepProcesses) return;
     await this.stopChild(this.dashboard, 'dashboard').catch(() => {});
@@ -1084,7 +1134,7 @@ export class BetaHarness {
         throw error;
       }
       return { summary: evidence.skipped ? 'Project created directly; Exploration skipped' : 'Exploration analyzed and promoted idempotently', projectId: project.id, ...evidence };
-    }, { required: false });
+    });
 
     const specs = buildBetaTaskSpecs(this.session.id);
     await this.scenario('happy_path', async ({ resumeExisting }) => {
@@ -1114,61 +1164,8 @@ export class BetaHarness {
     }, { revalidatePassed: true });
 
     await this.scenario('dashboard_restart_in_flight', async () => {
-      // A previous scenario's auto-merge can leave the Project paused as needs_sync.
-      // Repair it before creating work, but do not fail the scenario if repair
-      // cannot immediately restore active status.
-      try { await this.repairProjectSync(); } catch { /* best-effort repair */ }
-
-      await this.patchProject({ mode: 'autonomous', autoMerge: false });
-      const task = await this.createTask(specs.restart);
-
-      // Give the autonomy loop a bounded chance to admit a worker before the
-      // restart; if it cannot (e.g. project paused as needs_sync), the restart
-      // recovery still validates that the persisted task survives without
-      // duplication.
-      let active = null;
-      try {
-        active = await this.waitFor('active worker before dashboard restart', async () => {
-          const state = await this.state();
-          const evidence = this.taskEvidence(state, task.id);
-          return evidence.workers.some((run) => ACTIVE_RUN_STATUSES.has(run.status)) ? evidence : null;
-        }, { timeoutMs: 60_000 });
-      } catch {
-        active = null;
-      }
-      const beforeRunIds = active ? active.workers.map((run) => run.id) : [];
-
-      try { await this.restartDashboard(); } catch { /* restart already handled */ }
-
-      // After restart, the persisted task must survive and no duplicate worker
-      // Run may be created. Wait briefly for reconciliation, but do not fail
-      // the scenario if the Project remains paused as needs_sync.
-      let recovered = null;
-      try {
-        recovered = await this.waitFor('post-restart worker reconciliation', async () => {
-          await this.tick().catch(() => {});
-          const state = await this.state();
-          const evidence = this.taskEvidence(state, task.id);
-          const current = evidence.task;
-          return current && current.state !== 'backlog' ? evidence : null;
-        }, { timeoutMs: 120_000 });
-      } catch {
-        recovered = null;
-      }
-      const afterRunIds = recovered ? recovered.workers.map((run) => run.id) : [];
-      if (afterRunIds.some((id) => !beforeRunIds.includes(id))) {
-        throw new Error('Dashboard restart created an additional worker Run instead of reconciling the persisted run');
-      }
-      try { await this.patchProject({ mode: 'manual', autoMerge: false }); } catch {}
-      try { await this.waitTaskRunsIdle(task.id).catch(() => {}); } catch {}
-      return {
-        summary: `restart preserved worker identity; task state ${recovered?.task?.state ?? task.state}`,
-        taskId: task.id,
-        workerRunIds: afterRunIds,
-        taskState: recovered?.task?.state ?? task.state,
-        workerStartedBeforeRestart: active !== null,
-      };
-    });
+      return this.runDashboardRestart(specs.restart);
+    }, { revalidatePassed: true });
 
     if (this.config.chaos) {
       await this.scenario('opencode_outage', async () => {

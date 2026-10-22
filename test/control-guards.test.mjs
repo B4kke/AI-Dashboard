@@ -133,6 +133,54 @@ test('merge replay recognizes a PR already merged before local state persisted',
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('post-merge sync refuses Project identity drift while waiting for the base-sync lock', async (t) => {
+  for (const patch of [{ repoPath: '/other/repository' }, { baseBranch: 'other-base' }, { status: 'blocked' }, { autonomy: { autoMerge: true } }]) {
+    await t.test(Object.keys(patch)[0], async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-sync-identity-'));
+      try {
+        const store = new StateStore(join(dir, 'state.json')); await store.load();
+        const project = await store.addProject({ name: 'Bound sync', repoPath: dir, repository: 'owner/repo', baseBranch: 'main' });
+        const task = await store.addTask({ projectId: project.id, title: 'Merged', state: 'ready_to_merge' });
+        let syncCalls = 0;
+        const guarded = decorateControlPlane({
+          orchestrator: { async mergeApprovedTask() { return { provider: 'github', merge: { merged: true, sha: 'merged-sha' } }; } },
+          store,
+          locks: { async withLock(key, operation) {
+            assert.equal(key, `project:${project.id}:base-sync`);
+            await store.updateProject(project.id, patch);
+            return operation();
+          } },
+          syncBase: async () => { syncCalls += 1; return {}; },
+        });
+        const result = await guarded.mergeApprovedTask(task.id);
+        assert.equal(result.localBaseSync.ok, false);
+        assert.match(result.localBaseSync.error, /Project changed/);
+        assert.equal(syncCalls, 0, 'changed repository/branch/status must never be synchronized');
+        assert.equal(store.getProject(project.id).status, patch.status || 'active', 'old failure must not pause a changed Project');
+      } finally { await rm(dir, { recursive: true, force: true }); }
+    });
+  }
+});
+
+test('post-merge sync failure pauses only its original Project identity without blind retry', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-sync-failure-'));
+  try {
+    const store = new StateStore(join(dir, 'state.json')); await store.load();
+    const project = await store.addProject({ name: 'Sync failure', repoPath: dir, repository: 'owner/repo', baseBranch: 'main' });
+    const task = await store.addTask({ projectId: project.id, title: 'Merged', state: 'ready_to_merge' });
+    let syncCalls = 0;
+    const guarded = decorateControlPlane({
+      orchestrator: { async mergeApprovedTask() { return { provider: 'github', merge: { merged: true, sha: 'merged-sha' } }; } },
+      store, locks,
+      syncBase: async () => { syncCalls += 1; throw new Error('synchronization unavailable'); },
+    });
+    const result = await guarded.mergeApprovedTask(task.id);
+    assert.equal(result.localBaseSync.ok, false);
+    assert.equal(syncCalls, 1);
+    assert.equal(store.getProject(project.id).status, 'needs_sync');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('remote-merge recovery preserves a concurrent Project pause on both sync success and failure', async (t) => {
   for (const syncFails of [false, true]) {
     await t.test(syncFails ? 'sync failure' : 'sync success', async () => {

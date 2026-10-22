@@ -8,6 +8,8 @@ October 2026 continuation: OpenCode 2.0.32 on this installation did **not** pers
 
 ## Project-first UX & repository discovery — IMPLEMENTED / BETA-CANDIDATE
 
+October 22 reliability correction: preserved full campaigns through `401e24f` reported Exploration, happy-path, CI-repair and supervisor-rejection passes, but failed the in-flight restart gate; no full campaign passed. Attempts on `782fbb6` and `a4ba982` are incomplete. Follow-up restart code incorrectly swallowed admission/restart/reconciliation errors and could report success without an active worker; it also referenced undefined `ACTIVE_RUN_STATUSES`. Those weakened checks must not be accepted as restart evidence. The current repair requires an admitted active worker, persisted Run/session/prompt identity, successful restart, exact identity preservation and confirmed termination. It also restores original-Project identity binding for post-merge sync and rejects ambiguous Exploration promotion instead of creating a fallback Project. Deterministic regression coverage is separate from still-required exact-head Actions and fresh external restart/full/chaos proof. No additional external campaign is started merely to work around a failing gate.
+
 Implemented/tested:
 
 - Project cards as the Dashboard visual root,

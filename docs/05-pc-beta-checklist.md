@@ -144,6 +144,8 @@ A full run is `blocked`, not `passed`, if a required scenario cannot actually be
 
 “Full” is a fixed contract, not “run whichever scenarios happened to be available.” Every required scenario must produce `passed`; a deliberately unavailable scenario produces `blocked`, and any identity/idempotency violation produces `failed`.
 
+Scenario failures are never downgraded merely because a scenario was previously labeled optional. Explicitly unavailable prerequisites may return `blocked`; integrity errors, programming errors and ambiguous promotion outcomes remain `failed`. A failed/uncertain Exploration promotion never triggers a fallback Project creation, since the original request may already have created one.
+
 ### Resume and evidence
 
 The default beta runtime directory is:
@@ -344,6 +346,10 @@ Expected:
 - no new worker Run is created merely because the control-plane process restarted
 
 Direct-model restart recovery remains covered by deterministic tests; it can also be manually dogfooded if desired because deliberately killing a provider request at exactly the right moment is timing-sensitive.
+
+The automated restart gate requires exactly one active admitted worker with a session and prompt-message ID **before** restarting. It persists the Task ID and the exact Run/session/prompt identity before the restart side effect, then requires the same identity after restart and confirmed worker termination. No worker, missing Task/Run, duplicate Run, changed session/prompt, failed restart, unavailable state, quarantine or unconfirmed termination is a pass. Repair/restart/reconciliation errors propagate instead of becoming empty evidence. A restart attempt with persisted history is not silently replayed by `--resume`; it stops for explicit inspection rather than creating a replacement Task. Restarting a backlog-only Task is not the in-flight scenario.
+
+October 22 correction: campaigns under `/tmp/opencode/beta-full9-*` through `beta-full14-*` did not pass the restart gate; `beta-full15-*` through `beta-full17-*` are incomplete. Preserve their original reports. Later error-swallowing restart code does not establish recovery proof, and no report from it should be promoted to a full-beta pass without revalidation against the strict contract above.
 
 ## 8. Base branch movement
 

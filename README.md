@@ -360,6 +360,8 @@ Do not promote a level-2/3 MCP or rendered-UI test into a claim that every real 
 
 The exact final head must satisfy level 3 before beta-candidate evidence is current. Level 4 remains a separate mandatory gate even after deterministic/Actions success. On `8f8e62c` level 4 is reached for the smoke happy path and the OpenCode read/master MCP interop gate only; the full-mode beta scenarios remain unverified.
 
+The in-flight restart beta gate requires an actually admitted worker before restart and preserves its exact Run/session/prompt identity afterward. Missing or unavailable evidence cannot pass; restart histories are not silently replayed. October 22 full-campaign attempts remain failed/incomplete, not full-beta approval; see `docs/04-roadmap.md` and `HANDOFF.md`.
+
 ## Canonical docs
 
 - `AGENTS.md` — binding agent/Master/safety and definition-of-done rules

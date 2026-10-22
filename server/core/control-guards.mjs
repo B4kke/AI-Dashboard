@@ -451,35 +451,30 @@ export function decorateControlPlane({ orchestrator, store, locks, github = null
   }
 
   async function syncAfterRemoteMerge(project, result) {
-    const maxAttempts = 3;
-    let lastError = null;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        const sync = await locks.withLock(`project:${project.id}:base-sync`, async () => {
-          const current = store.getProject(project.id);
-          return syncBase({ repoPath: current.repoPath, baseBranch: current.baseBranch || 'main' });
-        });
-        return { ...result, localBaseSync: { ok: true, ...sync } };
-      } catch (error) {
-        lastError = error;
-        if (attempt < maxAttempts) {
-          await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    const expectedProjectIdentity = projectAdmissionIdentity(project);
+    try {
+      const sync = await locks.withLock(`project:${project.id}:base-sync`, () => {
+        const current = store.getProject(project.id);
+        if (projectAdmissionIdentity(current) !== expectedProjectIdentity) {
+          throw new Error('Project changed before the merged base could be synchronized');
         }
-      }
-    }
-    const currentProject = store.getProject(project.id);
-    if (currentProject.status === 'active') {
-      await store.compareAndSetProjectStatus(project.id, {
-        expectedProjectIdentity: projectAdmissionIdentity(currentProject),
-        expectedStatus: 'active',
-        status: 'needs_sync',
+        return syncBase({ repoPath: current.repoPath, baseBranch: current.baseBranch || 'main' });
       });
+      return { ...result, localBaseSync: { ok: true, ...sync } };
+    } catch (error) {
+      if (project.status === 'active') {
+        await store.compareAndSetProjectStatus(project.id, {
+          expectedProjectIdentity,
+          expectedStatus: 'active',
+          status: 'needs_sync',
+        });
+      }
+      return {
+        ...result,
+        localBaseSync: { ok: false, error: error.message },
+        warning: 'Remote merge completed, but local base sync failed. Project autonomy is paused.',
+      };
     }
-    return {
-      ...result,
-      localBaseSync: { ok: false, error: String(lastError?.message || lastError) },
-      warning: 'Remote merge completed, but local base sync failed. Project autonomy is paused.',
-    };
   }
 
   async function recoverAlreadyMerged(task, project) {
