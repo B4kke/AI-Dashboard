@@ -1,4 +1,5 @@
-import { accessSync, constants, realpathSync, statSync } from 'node:fs';
+import { constants } from 'node:fs';
+import { access, realpath, stat } from 'node:fs/promises';
 import { delimiter, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 function environmentValue(env, name, platform = process.platform) {
@@ -7,10 +8,10 @@ function environmentValue(env, name, platform = process.platform) {
   return entry?.[1] || '';
 }
 
-function canonicalExistingFile(value) {
-  accessSync(value, constants.X_OK);
-  if (!statSync(value).isFile()) throw new Error('Executable path is not a file');
-  return realpathSync.native(value);
+async function canonicalExistingFile(value) {
+  await access(value, constants.X_OK);
+  if (!(await stat(value)).isFile()) throw new Error('Executable path is not a file');
+  return realpath(value);
 }
 
 function pathIsWithin(root, candidate) {
@@ -29,34 +30,37 @@ function executableNames(command, env, platform) {
     .map((extension) => `${command}${extension.toLowerCase()}`);
 }
 
-export function trustedExecutableSearchPath({ cwd = null, env = process.env, platform = process.platform } = {}) {
+export async function trustedExecutableSearchPath({ cwd = null, env = process.env, platform = process.platform } = {}) {
   let canonicalCwd = null;
-  try { canonicalCwd = cwd ? realpathSync.native(resolve(cwd)) : null; } catch { canonicalCwd = cwd ? resolve(cwd) : null; }
-  return environmentValue(env, 'PATH', platform)
+  try { canonicalCwd = cwd ? await realpath(resolve(cwd)) : null; } catch { canonicalCwd = cwd ? resolve(cwd) : null; }
+  const entries = environmentValue(env, 'PATH', platform)
     .split(delimiter)
     .map((entry) => entry.trim().replace(/^"|"$/g, ''))
-    .filter((entry) => isAbsolute(entry))
-    .filter((entry) => {
-      if (!canonicalCwd) return true;
-      let canonicalEntry;
-      try { canonicalEntry = realpathSync.native(entry); } catch { canonicalEntry = resolve(entry); }
-      return !pathIsWithin(canonicalCwd, canonicalEntry);
-    })
-    .join(delimiter);
+    .filter((entry) => isAbsolute(entry));
+  // Mounted or network PATH entries can take hundreds of milliseconds each.
+  // Resolve asynchronously, preserving order and rechecking symlinks on every
+  // invocation rather than caching a worktree-exclusion decision.
+  const trusted = await Promise.all(entries.map(async (entry) => {
+    if (!canonicalCwd) return true;
+    let canonicalEntry;
+    try { canonicalEntry = await realpath(entry); } catch { canonicalEntry = resolve(entry); }
+    return !pathIsWithin(canonicalCwd, canonicalEntry);
+  }));
+  return entries.filter((entry, index) => trusted[index]).join(delimiter);
 }
 
-export function trustedExecutionEnvironment(baseEnv = process.env, { cwd = null, platform = process.platform } = {}) {
+export async function trustedExecutionEnvironment(baseEnv = process.env, { cwd = null, platform = process.platform } = {}) {
   const env = Object.fromEntries(Object.entries(baseEnv || {}).filter(([key]) => (
     key.toUpperCase() !== 'PATH' && key.toUpperCase() !== 'NODEFAULTCURRENTDIRECTORYINEXEPATH'
   )));
   return {
     ...env,
-    PATH: trustedExecutableSearchPath({ cwd, env: baseEnv, platform }),
+    PATH: await trustedExecutableSearchPath({ cwd, env: baseEnv, platform }),
     NoDefaultCurrentDirectoryInExePath: '1',
   };
 }
 
-export function resolveTrustedExecutable(command, {
+export async function resolveTrustedExecutable(command, {
   cwd = null,
   env = process.env,
   platform = process.platform,
@@ -73,9 +77,9 @@ export function resolveTrustedExecutable(command, {
   if (containsSeparator || isAbsolute(requested)) {
     const candidate = isAbsolute(requested) ? requested : resolve(cwd || process.cwd(), requested);
     if (!isAbsolute(requested) && cwd) {
-      const canonicalRoot = realpathSync.native(resolve(cwd));
+      const canonicalRoot = await realpath(resolve(cwd));
       let canonicalCandidate;
-      try { canonicalCandidate = realpathSync.native(candidate); } catch { canonicalCandidate = resolve(candidate); }
+      try { canonicalCandidate = await realpath(candidate); } catch { canonicalCandidate = resolve(candidate); }
       if (!pathIsWithin(canonicalRoot, canonicalCandidate)) {
         throw new Error('Relative verification executable escapes the checkpoint worktree');
       }
@@ -83,10 +87,10 @@ export function resolveTrustedExecutable(command, {
     return canonicalExistingFile(candidate);
   }
 
-  const searchPath = trustedExecutableSearchPath({ cwd, env, platform });
+  const searchPath = await trustedExecutableSearchPath({ cwd, env, platform });
   for (const directory of searchPath.split(delimiter).filter(Boolean)) {
     for (const name of executableNames(requested, env, platform)) {
-      try { return canonicalExistingFile(resolve(directory, name)); } catch { /* continue through trusted PATH */ }
+      try { return await canonicalExistingFile(resolve(directory, name)); } catch { /* continue through trusted PATH */ }
     }
   }
   throw new Error(`Executable ${requested} was not found on an absolute trusted PATH outside the worktree`);

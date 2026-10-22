@@ -33,9 +33,9 @@ const UNSAFE_LOCAL_CONFIG = [
   /^(?:gpg(?:\..+)?\.program|commit\.gpgsign|push\.gpgsign)$/i,
 ];
 
-function controlPlaneGitEnv({ cwd, useRepositoryGrafts = false } = {}) {
+async function controlPlaneGitEnv({ cwd, useRepositoryGrafts = false } = {}) {
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => INHERITED_GIT_ENV.has(key.toUpperCase())));
-  const env = trustedExecutionEnvironment(inherited, { cwd });
+  const env = await trustedExecutionEnvironment(inherited, { cwd });
   Object.assign(env, {
     GIT_TERMINAL_PROMPT: '0',
     GIT_NO_REPLACE_OBJECTS: '1',
@@ -54,14 +54,16 @@ async function runGit(cwd, args, { timeoutMs = 60_000, useRepositoryGrafts = fal
     '-c', 'protocol.ext.allow=never',
     ...args,
   ];
-  const executable = resolveTrustedExecutable('git', { cwd });
+  const env = await controlPlaneGitEnv({ cwd, useRepositoryGrafts });
+  // The child and executable lookup share the same worktree-filtered PATH.
+  const executable = await resolveTrustedExecutable('git', { env });
   const { stdout } = await execFileAsync(executable, safeArgs, {
     cwd,
     encoding: 'utf8',
     windowsHide: true,
     timeout: timeoutMs,
     maxBuffer: 8 * 1024 * 1024,
-    env: controlPlaneGitEnv({ cwd, useRepositoryGrafts }),
+    env,
   });
   return stdout.trim();
 }

@@ -6,7 +6,7 @@ AI Dashboard connects existing projects/repositories, direct Tasks, optional Ide
 
 > Status: pre-alpha / PC-beta candidate. Exact-head Linux, Windows and rendered-UI Actions are required after every code change; a beta claim additionally requires current-stack OpenCode + disposable GitHub/Actions dogfood.
 >
-> Latest verified head `8f8e62c`: Actions run `39631408668` green (Linux, Windows, rendered UI) and a fresh current-stack **smoke** passed — real OpenCode worker, exact-one-parent checkpoint, disposable PR, green CI, independent supervisor, control-plane merge and the OpenCode read/master MCP interoperability gate. The full beta campaign (CI repair, supervisor rejection, restart, moved base, outage, chaos) is still open; see `docs/05-pc-beta-checklist.md`.
+> Latest published CI-verified head `afea639`: [Actions run 39788343998](https://github.com/B4kke/AI-Dashboard/actions/runs/39788343998) passed Linux, Windows and rendered UI. The latest passing current-stack **smoke** remains `8f8e62c` — real worker/checkpoint, PR/CI, independent supervisor, control-plane merge and MCP interoperability. No full campaign has passed. October 22 campaign 18 failed before restart-worker admission; campaign 19 failed on the provider's usage limit. The current local repairs still need their own committed-head CI and external beta evidence; see `HANDOFF.md` and `docs/05-pc-beta-checklist.md`.
 
 ## Product model
 
@@ -279,6 +279,10 @@ AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS=120000
 External MCP bearer config stores an environment-variable **name**, not the credential value.
 
 Open `http://127.0.0.1:7331`.
+
+`npm start`, `npm run beta` and `npm run beta:pc` load the checkout's optional `.env` file. Exported environment variables take precedence. Direct invocation of `server/index.mjs` or the beta scripts requires `node --env-file-if-exists=.env ...` when those settings are needed.
+
+Executable/PATH validation uses asynchronous filesystem I/O and rechecks worktree/symlink exclusions on each operation. Git lookup and its subprocess share one filtered PATH. Slow Windows-mounted PATH entries on WSL therefore no longer synchronously stall the control loop; repository configuration, scope and evidence checks remain enforced.
 
 ## MCP/API surfaces
 

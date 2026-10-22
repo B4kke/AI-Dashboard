@@ -315,11 +315,11 @@ export class BetaHarness {
   async state() { return this.api('/api/state'); }
   async tick() { return this.api(`/api/projects/${encodeURIComponent(this.session.projectId)}/autonomy/tick`, { method: 'POST', body: {} }); }
 
-  async waitFor(label, predicate, { timeoutMs = this.config.timeoutMs, tick = false } = {}) {
+  async waitFor(label, predicate, { timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS, tick = false } = {}) {
     const deadline = Date.now() + timeoutMs;
     let last = null;
     while (Date.now() < deadline) {
-      if (tick && this.session.projectId) await this.tick().catch(() => {});
+      if (tick && this.session.projectId) await this.tick();
       last = await predicate();
       if (last) return last;
       await sleep(POLL_MS);
@@ -650,6 +650,7 @@ export class BetaHarness {
   // local base branch catches up. Repair it (sync base, return to active)
   // before the next scenario so workers can be admitted again.
   async repairProjectSync() {
+    await this.waitForAutonomyIdle();
     const state = await this.state();
     const project = state.projects.find((item) => item.id === this.session.projectId);
     if (!project) throw new Error(`Project ${this.session.projectId} not found for sync repair`);
@@ -663,6 +664,21 @@ export class BetaHarness {
     if (repaired?.status !== 'active') {
       throw new Error(`Project sync repair did not restore active status (now ${repaired?.status})`);
     }
+  }
+
+  async waitForAutonomyIdle() {
+    return this.waitFor('previous autonomy tick and post-merge sync to settle', async () => {
+      const result = await this.tick();
+      if (result?.skipped === 'already-running') return null;
+      if (!Array.isArray(result?.actions)) throw new Error('Autonomy tick returned no settlement evidence');
+      const failures = result.actions.filter((action) => action.error || action.type?.endsWith('_failed'));
+      if (failures.length) {
+        const error = new Error('Autonomy tick failed while settling the previous beta scenario');
+        error.evidence = { actions: failures };
+        throw error;
+      }
+      return result;
+    });
   }
 
   async createTask(spec) {
@@ -975,8 +991,7 @@ export class BetaHarness {
   // moves it to needs_input or blocks the Project, the campaign has to fail
   // instead of reporting a happy path that the control plane rejected.
   async assertStableMergedTask(taskId) {
-    await this.tick().catch(() => {});
-    await sleep(POLL_MS);
+    await this.waitForAutonomyIdle();
     const state = await this.state();
     const task = (Array.isArray(state?.tasks) ? state.tasks : []).find((item) => item.id === taskId);
     if (!task) throw new Error(`Merged beta Task ${taskId} disappeared from Dashboard state`);

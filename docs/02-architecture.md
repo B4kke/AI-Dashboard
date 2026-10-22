@@ -302,6 +302,8 @@ No worktree/branch/merge path is created. Interrupted queued/running direct-mode
 
 ## Git integrity
 
+Trusted executable and subprocess PATH preparation is asynchronous. Every operation re-resolves symlinks and excludes relative/worktree PATH entries; Git uses the same filtered PATH for executable lookup and its child environment. No cached trust decision is reused across operations. This keeps slow mounted PATH entries from synchronously blocking the HTTP/autonomy event loop without removing repository config, graft, checkpoint or scope validation.
+
 1. Worker gets isolated managed worktree/branch.
 2. Worker is instructed not to commit.
 3. Control plane prepares and persists a versioned checkpoint intent containing the trusted parent SHA, staged tree SHA and commit message.

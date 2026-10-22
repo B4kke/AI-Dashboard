@@ -65,7 +65,7 @@ export async function runVerificationCommands({ cwd, commands = [], timeoutMs = 
     const startedAt = new Date().toISOString();
     const safeDisplay = bounded(parsed.display, 2_000);
     try {
-      const executable = resolveTrustedExecutable(parsed.command, { cwd });
+      const executable = await resolveTrustedExecutable(parsed.command, { cwd });
       const { stdout, stderr } = await execFileAsync(executable, parsed.args, {
         cwd,
         encoding: 'utf8',
@@ -73,7 +73,7 @@ export async function runVerificationCommands({ cwd, commands = [], timeoutMs = 
         timeout: timeoutMs,
         maxBuffer: 4 * 1024 * 1024,
         env: {
-          ...trustedExecutionEnvironment(process.env, { cwd }),
+          ...await trustedExecutionEnvironment(process.env, { cwd }),
           CI: process.env.CI || '1',
           GIT_TERMINAL_PROMPT: '0',
         },

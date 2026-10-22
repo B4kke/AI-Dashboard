@@ -565,7 +565,7 @@ test('PC beta persists a newly created autonomous Task before waiting for it', a
     events.push('wait');
     return { task, state };
   };
-  harness.tick = async () => { events.push('tick'); };
+  harness.tick = async () => { events.push('tick'); return { actions: [] }; };
   harness.state = async () => { events.push('state'); return { ...state, projects: [{ id: task.projectId, status: 'active' }] }; };
 
   const evidence = await harness.runAutonomousTask(AUTONOMOUS_SPEC, 'happyPath', { resumeExisting: false });
@@ -583,7 +583,7 @@ test('PC beta fails the happy path when a merged Task loses its done state after
   harness.createTask = async () => task;
   harness.persist = async () => {};
   harness.waitTask = async () => ({ task, state });
-  harness.tick = async () => {};
+  harness.tick = async () => ({ actions: [] });
   harness.state = async () => ({
     ...state,
     tasks: [{ ...task, state: 'needs_input', supervisorFeedback: 'Merged GitHub commit tree evidence is unavailable' }],
@@ -606,7 +606,7 @@ test('PC beta fails the happy path when the Project is blocked after the post-me
   harness.createTask = async () => task;
   harness.persist = async () => {};
   harness.waitTask = async () => ({ task, state });
-  harness.tick = async () => {};
+  harness.tick = async () => ({ actions: [] });
   harness.state = async () => ({ ...state, projects: [{ id: task.projectId, status: 'blocked' }] });
 
   await assert.rejects(
@@ -840,7 +840,7 @@ test('PC beta legacy resume adopts and persists one matching reviewing Task', as
     merged = true;
     return { task: completed, state: completedState };
   };
-  harness.tick = async () => {};
+  harness.tick = async () => ({ actions: [] });
 
   const evidence = await harness.runAutonomousTask(AUTONOMOUS_SPEC, 'happyPath');
   assert.equal(evidence.task.id, active.id);

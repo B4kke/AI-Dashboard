@@ -6,10 +6,10 @@
   "scripts": {
     "build": "vite build --config web/vite.config.ts",
     "dev": "vite --config web/vite.config.ts",
-    "start": "npm run build --silent && node --enable-source-maps server/index.mjs",
+    "start": "npm run build --silent && node --env-file-if-exists=.env --enable-source-maps server/index.mjs",
     "test": "node --test",
-    "beta": "node scripts/pc-beta-entry.mjs",
-    "beta:pc": "node scripts/pc-beta-entry.mjs",
+    "beta": "node --env-file-if-exists=.env scripts/pc-beta-entry.mjs",
+    "beta:pc": "node --env-file-if-exists=.env scripts/pc-beta-entry.mjs",
     "screenshots": "npm run build --silent && node scripts/seed-visual-state.mjs && node scripts/screenshot.mjs"
   },
   "engines": {
