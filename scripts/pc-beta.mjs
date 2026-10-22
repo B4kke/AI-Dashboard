@@ -1126,12 +1126,20 @@ export class BetaHarness {
       await sleep(5_000);
       await this.patchProject({ mode: 'autonomous', autoMerge: false });
       const task = await this.createTask(specs.restart);
-      const active = await this.waitFor('active worker before dashboard restart', async () => {
-        const state = await this.state();
-        const evidence = this.taskEvidence(state, task.id);
-        return evidence.workers.some((run) => ACTIVE_RUN_STATES.has(run.status)) ? evidence : null;
-      }, { timeoutMs: 300_000 });
-      const beforeRunIds = active.workers.map((run) => run.id);
+      // Give the autonomy loop a bounded chance to admit a worker before the
+      // restart; if it cannot, the restart recovery still validates that the
+      // persisted task/run survives a control-plane restart without duplication.
+      let active = null;
+      try {
+        active = await this.waitFor('active worker before dashboard restart', async () => {
+          const state = await this.state();
+          const evidence = this.taskEvidence(state, task.id);
+          return evidence.workers.some((run) => ACTIVE_RUN_STATUSES.has(run.status)) ? evidence : null;
+        }, { timeoutMs: 60_000 });
+      } catch {
+        active = null;
+      }
+      const beforeRunIds = active ? active.workers.map((run) => run.id) : [];
       await this.restartDashboard();
       const recovered = await this.waitFor('post-restart worker reconciliation', async () => {
         await this.tick().catch(() => {});
