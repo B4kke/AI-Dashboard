@@ -17,6 +17,13 @@
 - Generiske scenariofeil forblir `failed`; bare eksplisitt utilgjengelige forutsetninger kan være `blocked`. Tvetydig eller ikke-idempotent Exploration-promotering oppretter ikke et fallback-Project.
 - Ny deterministisk dekning: `test/pc-beta-restart.test.mjs` og post-merge-identitetstester i `test/control-guards.test.mjs`. Målrettet restart/beta: 130/130; målrettet post-merge: 9/9; syntaks og `git diff --check` passerte før sluttverifikasjon. Fullsuite og exact-head Actions må kontrolleres separat.
 
+## Oppfølging 2026-10-22 etter økt
+
+- Ny rotårsak til de manglende restart-workerne: restart-scenarioets venting sjekket kun Dashboard state og ikke `autonomy.tick()`. Worker-admisjon var dermed avhengig av den periodiske timeren. Kjøring 17 viser at selv happy-path endte i `awaiting_review` med åpen PR #31; en tilfeldig merge-SHA i payload er ikke bevis (`merged:false`). Den sesjonen/PR-en må beholdes til uavklart Task/PR er inspisert.
+- Utkast til retting: aktiv-worker-venting ber nå eksplisitt om tick; regresjonstest kontrollerer tick før worker-proben. Dette er ikke ennå fullstendig testet, committed eller Actions-verifisert.
+- Fullsuite som ble forsøkt tidligere ble avbrutt av prosessrestart ved test 70. En ny full kjøring og målrettet suite er startet i aktive shells, resultat ennå ukjent.
+- OpenCode-session audit `/tmp/opencode/pcbeta-session-preservation-f3623b4/session-audit.json`; bevarte beta-17 evidence (kopi av `session.json`, SQLite og logger) i samme mappe. 77 avsluttede PC-beta-sesjoner ble slettet med den pinnede `@opencode/client` sin `session.remove` API. Én sesjon ble bevart fordi den eies av Task/PR #31 (`awaiting_review`, PR open, CI green, unmerged); slettingsresultat i `deletion-result.json`. Ingen aktive sessions var i beta-listen. Ikke slett den bevarte sesjonen før PR/Task er terminalt avklart og evidens er arkivert.
+
 ## Neste steg og begrensninger
 
 1. Kjør full deterministisk suite og exact-head Linux/Windows Actions på ferdig commit. Ikke hevde fullført før disse faktisk er grønne.

@@ -1049,7 +1049,7 @@ export class BetaHarness {
         && worker.sessionId && worker.promptMessageId && !worker.terminationConfirmedAt
         && !worker.dispatchUncertain && !worker.quarantineReason
         ? evidence : null;
-    }, { timeoutMs: 90_000 });
+    }, { timeoutMs: 90_000, tick: true });
     const before = active.workers[0];
     const identity = { runId: before.id, sessionId: before.sessionId, promptMessageId: before.promptMessageId };
     this.session.evidence.dashboardRestart = { taskId: task.id, ...identity, phase: 'before_restart' };
