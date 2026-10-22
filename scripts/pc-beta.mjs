@@ -1107,6 +1107,8 @@ export class BetaHarness {
         const project = state.projects.find((item) => item.id === this.session.projectId);
         return project?.status === 'active' ? project : null;
       }, { timeoutMs: 120_000 });
+      // Let post-merge sync and control-plane state settle before creating work.
+      await sleep(2_000);
       await this.patchProject({ mode: 'autonomous', autoMerge: false });
       const task = await this.createTask(specs.restart);
       const active = await this.waitFor('active worker before dashboard restart', async () => {
