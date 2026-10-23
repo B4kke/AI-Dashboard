@@ -14,6 +14,20 @@ function stableId(prefix, value) {
   return `${prefix}${createHash('sha256').update(String(value)).digest('hex').slice(0, 48)}`;
 }
 
+async function recoverSessionAfterCreateFailure(client, sessionId) {
+  for (const delayMs of [0, 250, 500, 1_000]) {
+    if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    try {
+      const session = await client.getSession({ sessionId });
+      if (session?.id === sessionId) return session;
+    } catch {
+      // A deterministic session may become readable shortly after a lost
+      // create acknowledgement; retry only this read, never session.create.
+    }
+  }
+  return null;
+}
+
 export function openCodeSessionId(runId) {
   return stableId('ses', `ai-dashboard:${runId}:v2`);
 }
@@ -50,8 +64,7 @@ export function createRecoverableOpenCode({ client, store }) {
             await store.updateRun(run.id, { dispatchPhase: 'session_created', sessionCreateRecovered: false });
             return session;
           } catch (error) {
-            let recovered = null;
-            try { recovered = await target.getSession({ sessionId }); } catch { recovered = null; }
+            const recovered = await recoverSessionAfterCreateFailure(target, sessionId);
             if (recovered?.id !== sessionId) throw error;
             await store.updateRun(run.id, {
               dispatchPhase: 'session_created',

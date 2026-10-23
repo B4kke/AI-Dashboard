@@ -54,6 +54,33 @@ test('lost create-session acknowledgement recovers only the exact deterministic 
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 
+test('lost create-session acknowledgement retries only exact-session reads before failing closed', async () => {
+  const f = await fixture();
+  const sessions = new Map();
+  let creates = 0;
+  let reads = 0;
+  try {
+    const raw = {
+      async createSession(input) {
+        creates += 1;
+        sessions.set(input.id, { id: input.id });
+        throw new Error('create response was lost before session became readable');
+      },
+      async getSession({ sessionId }) {
+        reads += 1;
+        if (reads < 3) throw Object.assign(new Error('not yet visible'), { name: 'SessionNotFoundError' });
+        return sessions.get(sessionId) || null;
+      },
+    };
+    const client = createRecoverableOpenCode({ client: raw, store: f.store });
+    const recovered = await client.createSession({ directory: '/tmp/worktree', title: '[P2] Do work', kind: 'worker' });
+    assert.equal(recovered.id, openCodeSessionId(f.run.id));
+    assert.equal(creates, 1, 'session.create is never replayed after an ambiguous acknowledgement');
+    assert.equal(reads, 3, 'bounded read-only recovery observes the session once it becomes visible');
+    assert.equal(f.store.getRun(f.run.id).sessionCreateRecovered, true);
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});
+
 test('lost prompt acknowledgement is recovered from exact durable V2 message admission without replay', async () => {
   const f = await fixture();
   const admitted = new Map();
