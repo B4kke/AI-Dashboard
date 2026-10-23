@@ -2,7 +2,16 @@ import { RESULT_MARKER, RESULT_SCHEMA_VERSION } from './result-contract.mjs';
 import { taskWorkScopes } from './work-scope.mjs';
 
 function jsonContract(shape) {
-  return ['', 'Your final response MUST end with this exact marker followed by one JSON code block:', RESULT_MARKER, '```json', JSON.stringify(shape, null, 2), '```', 'Do not put any text after that JSON block.'];
+  return [
+    '',
+    'Your final response MUST end with this exact marker followed by one JSON code block:',
+    RESULT_MARKER,
+    '```json',
+    JSON.stringify(shape, null, 2),
+    '```',
+    'The code block must contain valid JSON with no comments or trailing commas. Inside JSON string values, use single quotation marks for quoted prose; if a double quotation mark is needed, escape it as \\".',
+    'Do not put any text after that JSON block.',
+  ];
 }
 function projectBrief(project) {
   if (!project?.brief) return [];

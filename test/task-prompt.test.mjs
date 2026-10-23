@@ -34,4 +34,7 @@ test('role prompts state the exact result-contract enums the control plane accep
   assert.match(supervisor, /"reject", "rejected", "changes-requested" and similar words are invalid verdicts/);
   assert.match(supervisor, /"approve" requires every acceptance criterion status to be exactly "passed"/);
   assert.match(supervisor, /status exactly "passed", "failed" or "unknown"/);
+  assert.match(supervisor, /valid JSON with no comments or trailing commas/);
+  assert.match(supervisor, /use single quotation marks for quoted prose/);
+  assert.match(supervisor, /escape it as \\\"/);
 });
