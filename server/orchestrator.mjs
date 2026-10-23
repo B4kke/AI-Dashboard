@@ -700,12 +700,12 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       const feedback = result.requiredChanges.join('\n- ') || result.summary;
       const exhausted = Number(task.iteration || 0) >= project.autonomy.maxTaskIterations;
       return (await settle(
-        terminalRunPatch({ status: 'completed', result, assistantText, evidence: { supervisor: result } }),
+        terminalRunPatch({ status: 'completed', result, assistantText, workerHead: worker.checkpointHead, evidence: { supervisor: result } }),
         { state: exhausted ? 'needs_input' : 'backlog', supervisorFeedback: feedback || 'Supervisor requested another iteration.' },
       )).applied;
     }
     return (await settle(
-      terminalRunPatch({ status: 'completed', result, assistantText, evidence: { supervisor: result } }),
+      terminalRunPatch({ status: 'completed', result, assistantText, workerHead: worker.checkpointHead, evidence: { supervisor: result } }),
       { state: 'needs_input', supervisorFeedback: result.summary || 'Supervisor blocked autonomous progress.' },
     )).applied;
   }

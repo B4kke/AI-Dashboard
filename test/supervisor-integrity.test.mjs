@@ -74,6 +74,23 @@ function approvalResult() {
   };
 }
 
+test('a changes_requested supervisor records the exact reviewed worker checkpoint', async () => {
+  const f = await fixture();
+  try {
+    const worker = f.orchestrator.latestWorker(f.task.id);
+    const supervisor = await f.orchestrator.startSupervisor(f.task.id);
+    f.opencode.set(supervisor.sessionId, rejectionResult());
+    await f.orchestrator.reconcileRun(supervisor.id);
+
+    const reviewed = f.store.getRun(supervisor.id);
+    assert.equal(reviewed.status, 'completed');
+    assert.equal(reviewed.parentRunId, worker.id);
+    assert.equal(reviewed.workerHead, worker.checkpointHead);
+    assert.equal(reviewed.result.verdict, 'changes_requested');
+    assert.equal(f.store.getTask(f.task.id).state, 'backlog');
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});
+
 test('a changes_requested supervisor cannot leave uncommitted edits for the next worker', async () => {
   const f = await fixture();
   try {
