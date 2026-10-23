@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fsPromises, { appendFile, mkdtemp, mkdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import fsPromises, { appendFile, mkdtemp, mkdir, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createChatContext } from '../server/master/chat-context.mjs';
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'ai-dashboard-chat-context-'));
+  // Windows TEMP may use an alias or short name. Match the runtime's canonical path.
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'ai-dashboard-chat-context-')));
   const project = { id: 'p1', name: 'Project One', repoPath: root, repository: null, baseBranch: 'main', autonomy: { requireCi: true } };
   const foreignProject = { id: 'p2', name: 'Project Two', repoPath: root };
   const task = { id: 't1', projectId: 'p1', title: 'Implement feature', description: 'A bounded description', acceptanceCriteria: ['Works safely'], state: 'backlog', priority: 'P1', updatedAt: '2026-10-01T00:00:00.000Z' };
@@ -175,9 +176,11 @@ test('a file growing after stat cannot cause a read beyond the context byte budg
   const originalOpen = fsPromises.open;
   t.after(() => { fsPromises.open = originalOpen; syncBuiltinESMExports(); });
   let bytesRead = 0;
+  let intercepted = false;
   fsPromises.open = async (...args) => {
     const handle = await originalOpen(...args);
     if (args[0] !== path) return handle;
+    intercepted = true;
     let grown = false;
     return new Proxy(handle, { get(target, key) {
       if (key === 'stat') return async (...options) => {
@@ -192,14 +195,16 @@ test('a file growing after stat cannot cause a read beyond the context byte budg
     } });
   };
   syncBuiltinESMExports();
-  await assert.rejects(createChatContext({ store: f.store }).resolve('c1', [{ kind: 'file', path: 'growing.md' }]), /changed|limit/);
+  const failure = await createChatContext({ store: f.store }).resolve('c1', [{ kind: 'file', path: 'growing.md' }]).then(() => null, (error) => error);
+  assert.equal(intercepted, true, 'the growing-file race must be injected at the actual open path');
+  assert.match(failure?.message || '', /changed|limit/);
   assert.ok(bytesRead <= 128 * 1024 + 1, `read ${bytesRead} bytes from a concurrently growing file`);
 });
 
 test('a parent symlink swap at open cannot attach an outside file after the path is restored', async (t) => {
   const f = await fixture();
   t.after(() => rm(f.root, { recursive: true, force: true }));
-  const outside = await mkdtemp(join(tmpdir(), 'ai-dashboard-context-race-'));
+  const outside = await realpath(await mkdtemp(join(tmpdir(), 'ai-dashboard-context-race-')));
   t.after(() => rm(outside, { recursive: true, force: true }));
   const parent = join(f.root, 'docs');
   const backup = join(f.root, 'docs-backup');
@@ -215,13 +220,17 @@ test('a parent symlink swap at open cannot attach an outside file after the path
   }
   const originalOpen = fsPromises.open;
   t.after(() => { fsPromises.open = originalOpen; syncBuiltinESMExports(); });
+  let intercepted = false;
   fsPromises.open = async (...args) => {
     if (args[0] !== candidate) return originalOpen(...args);
+    intercepted = true;
     await rename(parent, backup);
     await symlink(outside, parent, process.platform === 'win32' ? 'junction' : 'dir');
     try { return await originalOpen(...args); }
     finally { await unlink(parent); await rename(backup, parent); }
   };
   syncBuiltinESMExports();
-  await assert.rejects(createChatContext({ store: f.store }).resolve('c1', [{ kind: 'file', path: 'docs/note.md' }]), /changed/);
+  const failure = await createChatContext({ store: f.store }).resolve('c1', [{ kind: 'file', path: 'docs/note.md' }]).then(() => null, (error) => error);
+  assert.equal(intercepted, true, 'the parent-swap race must be injected at the actual open path');
+  assert.match(failure?.message || '', /changed/);
 });
