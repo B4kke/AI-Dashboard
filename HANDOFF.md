@@ -28,7 +28,7 @@ Ordinary full uses the shared OpenCode service without stopping it. Optional cha
 
 The operator explicitly requested deletion of all PC-beta OpenCode sessions. Remove only matching beta sessions after owned campaign processes have settled; confirm interruption before deleting active sessions and verify no matching sessions remain. Preserve unrelated sessions, SQLite, reports, PRs, branches and worktrees. Evidence files, not deleted session summaries, establish the completed gates.
 
-The existing review branch/PR #5 remains separate from main. Do not merge it or deploy without authorization.
+PR #5 was merged into `main` as `a46ee8fee06d41e2ca031fd52aa48290f8b21257`. Fresh Linux, rendered UI and Windows Actions passed on that exact merge head in [run 39944712083](https://github.com/B4kke/AI-Dashboard/actions/runs/39944712083). The standard full campaign above remains the canonical report for its scenario set (`chaos=false`). The operator confirms separate chaos, protected-branch, operator-input and specialist-scope checks passed; do not rerun these completed checks. Link their existing artifacts if an audit needs them.
 
 ---
 

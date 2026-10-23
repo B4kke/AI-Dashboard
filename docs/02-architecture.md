@@ -405,7 +405,7 @@ Claims must stay distinct:
 4. **real interoperability/dogfood** — real OpenCode/MCP host and real external systems execute the flow.
 5. **production-ready remote autonomy** — authentication, authorization, audit, kill switch and distributed side-effect fencing are proven.
 
-A green local MCP loopback or rendered-browser test proves only its defined boundary. Exact-head GitHub Actions is separate level-3 evidence, and none of those prove all external MCP hosts or public exposure. The full real OpenCode + disposable GitHub/Actions PC beta remains a mandatory level-4 gate.
+A green local MCP loopback or rendered-browser test proves only its defined boundary. Exact-head GitHub Actions is separate level-3 evidence, and none of those prove all external MCP hosts or public exposure. The standard real OpenCode + disposable GitHub/Actions PC-beta gate passed on source `9fc284c` in campaign `pcbeta-20261023065201-4097e116`; merge head `a46ee8f` has fresh Linux/Windows Actions. The operator confirms the separately-run chaos, protected-branch, operator-input and specialist-scope checks passed. Multi-instance/public exposure and interoperability with every external host remain unproven.
 
 
 ## Master SOUL and memory
