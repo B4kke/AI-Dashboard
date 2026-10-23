@@ -375,15 +375,12 @@ The suite covers:
 - atomic planner materialization, crash-suffix/dependency repair, stale/replan quarantine and replay idempotency,
 - process bind refusal plus full control-surface Host/Origin rejection.
 
-These are focused deterministic claims. Fresh Linux + Windows GitHub Actions on the exact final commit and full real external dogfood remain separate, currently open evidence levels.
+These are focused deterministic claims. The merged head `a46ee8f` has fresh Linux + Windows GitHub Actions, and the standard real OpenCode + disposable GitHub/Actions campaign passed on the same implementation tree (`9fc284c`, campaign `pcbeta-20261023065201-4097e116`). The operator confirms the separate operator-input, specialist-scope, chaos and protected-branch checks passed; do not rerun them. Their individual artifacts are separate from the standard campaign report.
 
 ## Explicit non-claims / next gates
 
-This implementation does not yet prove:
+The following remain outside the recorded standard PC-beta qualification:
 
-- fresh Linux + Windows GitHub Actions on the exact final hardening commit,
-- a complete full PC-beta campaign on that same clean commit,
-- real OpenCode configured as an MCP host against Dashboard on the user's PC,
 - interoperability with every MCP client/server implementation,
 - authenticated remote MCP,
 - richer Master context attachments,
@@ -392,4 +389,4 @@ This implementation does not yet prove:
 - ACP/Codex/Claude/local harness breadth,
 - production multi-instance fencing.
 
-Immediate external proof should first produce green Linux + Windows GitHub Actions on one exact commit, then connect real OpenCode to `/mcp/read` and `/mcp/master`, prove discovery and operator input, create two disjoint specialists/Tasks, prove parallel admission, and prove an overlapping scope is rejected. The full real OpenCode + disposable GitHub Actions PC beta on that same commit remains the higher-level control-plane gate.
+The standard campaign proves real OpenCode against `/mcp/read` and `/mcp/master`, resource/tool/prompt discovery, and the complete disposable GitHub Actions worker loop. Separate operator-input, disjoint-scope, overlap-rejection, chaos and protected-branch checks are confirmed passed by the operator; they are not in the standard campaign report and must not be rerun merely to reproduce a missing link. Authenticated remote MCP and production multi-instance fencing remain unproven.

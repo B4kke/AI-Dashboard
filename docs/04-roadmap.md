@@ -4,6 +4,8 @@
 
 > Evidence boundary: implementation, deterministic tests, exact-head GitHub Actions and real external dogfood are separate levels. Full PC-beta qualification requires every mandatory scenario plus MCP interoperability on the same clean source commit as Linux/Windows Actions. The canonical JSON/Markdown campaign report records that identity; missing or skipped required scenarios cannot pass.
 
+> **Current status (October 23, 2026; supersedes the older dated status snapshots below):** PR #5 is merged as `a46ee8f`; fresh Linux, rendered UI and Windows Actions passed on that exact merge head ([run 39944712083](https://github.com/B4kke/AI-Dashboard/actions/runs/39944712083)). Standard full PC beta passed on source `9fc284c` in `pcbeta-20261023065201-4097e116`; its implementation tree is the same as the merged head. The operator confirms the separate chaos/outage, protected-branch, operator-input and specialist-scope checks also passed. They were separate runs; the standard report has `chaos=false`. **Do not rerun completed beta gates.** Keep the standard report and the operator-confirmed separate results distinct; link their existing records when available rather than launching another campaign.
+
 **October 23 full qualification:** `9fc284cd762b9387ccd72d9a1ab660b1f6e2d8e0` passed 598/598 deterministic tests and Linux/Windows [Actions run 39914021725](https://github.com/B4kke/AI-Dashboard/actions/runs/39914021725). Complete full-mode campaign `pcbeta-20261023065201-4097e116` reported `passed` with every mandatory scenario green: repository fixture, OpenCode health, Exploration and idempotent Project promotion, happy path (PR #68 merged with checkpoint/tree/base evidence), deliberate CI failure and repair across two worker iterations (PR #69), supervisor rejection/rework bound to the reviewed worker checkpoint (PR #70), Dashboard restart during a real Run with preserved Run/session/prompt identity, moved base branch (stale work blocked to `needs_input`), abandoned worktree detected without uncontrolled cleanup, GitHub API outage returning a confirmed adapter failure while remaining fail-closed in `awaiting_ci`, and OpenCode V2 read/master MCP interoperability with resources, prompts and both profile tools executed. Actions and campaign share the same clean source commit.
 
 October 23 investigation: `6a7f578` passed 567/567 deterministic tests and Linux/Windows [Actions run 39907480534](https://github.com/B4kke/AI-Dashboard/actions/runs/39907480534). Campaign `pcbeta-20261023055141-26ea8c0e` passed Exploration, happy path, deliberate CI repair, supervisor rejection/rework, restart in flight and MCP interoperability, then failed moved-base detection. It remains **failed**. Independent API reads proved PR #67's reported base `f07a825` differed from live target ref `267198a`. The adapter now reads the exact live target ref for open PRs, validates commit/ref/SHA identity and fails closed on unavailable evidence; merged PRs preserve the historical base. A real read-only GitHub probe and normal integrity guard against a copied snapshot reproduce the required `needs_input` stop. Restart tests now wait for prompt acknowledgement and admission settlement, SDK retry counts are explicit, outage proof requires a completed API failure with unchanged publication identity, and report completeness is enforced. These mechanisms have dedicated regressions and are exercised by the qualifying campaign above.
@@ -121,10 +123,11 @@ Implemented/tested:
 - safe local merge/cleanup,
 - Task evidence API/UI.
 
-Still required to close M1:
+Qualification status:
 
-- exact-head full PC campaign qualification: **achieved** on `9fc284c` by campaign `pcbeta-20261023065201-4097e116` (CI failure/repair, supervisor rejection/rework, restart during a real Run, moved base, abandoned worktree, GitHub outage and MCP interoperability all `passed`); explicit chaos mode separately adds owned OpenCode outage/reconnect,
+- exact-head standard full PC campaign: **passed** on `9fc284c` by campaign `pcbeta-20261023065201-4097e116` (CI failure/repair, supervisor rejection/rework, restart during a real Run, moved base, abandoned worktree, GitHub outage and MCP interoperability all `passed`),
 - Exploration analysis/promotion against a configured direct model: **achieved** in the same campaign with Nemotron Super 3.5 via NVIDIA,
+- separate owned-OpenCode outage/reconnect, protected-branch, operator-input and specialist-scope checks: **operator-confirmed passed**; do not rerun. Their individual artifacts are separate from the standard campaign report, which records `chaos=false`,
 - Runs terminated through the compatibility path stay weaker evidence than prompt-bound durable events and must not be presented as such.
 
 ## M2 — GitHub feedback loop — ACTIVE / BETA-CANDIDATE
@@ -153,14 +156,11 @@ Implemented/tested:
 
 Historical disposable GitHub/Actions happy-path dogfood predates the current MCP/hardening/UX stack and is not current proof.
 
-Still required:
+Verification status:
 
-- full current-stack disposable GitHub/Actions campaign on one exact clean commit (the October 21 smoke covered the happy path and MCP interop only),
-- deliberate CI failure and repair,
-- moved base handling,
-- supervisor rejection then correction,
-- protected-branch behavior,
-- preserve report/evidence from the exact tested commit.
+- full current-stack disposable GitHub/Actions campaign, deliberate CI failure/repair, moved-base handling and supervisor rejection/correction: **passed** in campaign `pcbeta-20261023065201-4097e116`; its exact report is retained under `/tmp/ai-dashboard-beta-final-20261023/reports/`,
+- protected-branch behavior: **operator-confirmed passed** separately. Do not repeat the scenario; link its existing evidence when available,
+- exact-commit evidence: report records source `9fc284c`; PR #5 merged the same implementation tree as `a46ee8f`, with fresh Actions run `39944712083`.
 
 Deferred breadth: GitHub issue sync, webhooks, review-comment workflow and raw Actions-log ingestion.
 
@@ -354,22 +354,16 @@ Still planned: richer Master attachments, per-agent persona/memory, adaptive liv
 
 ## Immediate verification gates
 
-On one clean exact final commit:
+Qualification record for the merged implementation (`a46ee8f`):
 
-1. syntax + full deterministic Linux suite green,
-2. rendered Project-first browser acceptance green at 1440 / 768 / 390,
-3. Windows GitHub Actions portability green on the same commit,
-4. pinned lockfile + `npm ci`,
-5. real OpenCode configured as MCP host against Dashboard read/master,
-6. real MCP resource/tool/prompt discovery,
-7. real `task_resolve_input` operator round-trip through OpenCode where supported,
-8. Master creates two disjoint specialists/Tasks and both can be admitted concurrently,
-9. overlapping specialist/Task is rejected,
-10. restart retains ownership/uncertain-run protection,
-11. deterministic beta harness/resume proves stable IDs/contracts/evidence/idempotence,
-12. full real OpenCode + disposable GitHub Actions campaign including failure/repair/rejection/correction/merge.
+1. Linux syntax, deterministic tests, rendered UI, locked install/audit and Windows portability: **passed** on the exact merge head in [Actions run 39944712083](https://github.com/B4kke/AI-Dashboard/actions/runs/39944712083).
+2. Real OpenCode read/master MCP connection and resource/tool/prompt discovery: **passed** in `pcbeta-20261023065201-4097e116`.
+3. `task_resolve_input`, disjoint specialist admission, overlap rejection and deterministic resume/idempotency: **operator-confirmed passed** separately. Do not repeat these checks; their individual report references are not embedded in the standard campaign.
+4. Restart ownership and uncertain-dispatch protection: **passed** in the standard campaign and deterministic suite.
+5. Complete real OpenCode + disposable GitHub Actions full campaign (failure/repair, rejection/correction, moved base, outage and merge): **passed** in `pcbeta-20261023065201-4097e116`.
+6. Separate owned OpenCode chaos/reconnect and protected-branch dogfood: **operator-confirmed passed**. These are not represented by the standard report; do not start another campaign to repeat them.
 
-Gates 1–4 were proven on Project-first implementation head `5af53ae` / Actions `#451` before the documentation truth-sync. They were re-verified on fleet head `36b94c2` / PR run `32988127729`, on Master head `a990d75` / PR run `32995605683`, on P0 head `f959a7a` / push `33020151327` + PR `33020241708`, on `e80175c` / run `39177048004` and on `8f8e62c` / run `39631408668`. They must be green again on the final branch head after any subsequent commit.
+The standard PC-beta campaign explicitly ran with chaos disabled; the separately confirmed checks do not upgrade that report or alter its scenario set. Historical failed reports remain failed and are not promoted.
 
 A failed external scenario is evidence to harden the control plane, never permission to weaken a gate.
 
