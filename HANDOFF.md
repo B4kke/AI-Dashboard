@@ -1,3 +1,25 @@
+# Beta evidence and operation — 2026-10-23
+
+Qualification belongs to a complete campaign report and its exact clean source SHA, with Linux and Windows Actions green on that same SHA. The final campaign directory for this investigation is `/tmp/ai-dashboard-beta-final-20261023/`; inspect `session.json` and `reports/` for the actual result. An absent, incomplete, blocked or failed report is not qualification. No historical failure is upgraded.
+
+Source `6a7f578262f9891682be8b36a54df69d91f6c833` passed 567/567 deterministic tests and [Linux/Windows Actions 39907480534](https://github.com/B4kke/AI-Dashboard/actions/runs/39907480534). Its preserved full campaign `/tmp/ai-dashboard-beta-6a7f578-20261023/` passed fixture, OpenCode health, Exploration, happy path, CI repair, supervisor rejection, Dashboard restart and MCP interoperability. It failed moved-base detection before abandoned-worktree/GitHub-outage. This is a failed report, not a partial full-beta approval.
+
+The root cause was independently reproduced: open disposable PR #67 reported base `f07a8250948c4deb7ef20d8a89979411d1ce0046`, but its target `beta/pc-4126ea8c0e` actually pointed to `267198a1569a64f38b04687933c209f0c2e0f057`. Open PR evidence now reads and validates the actual target Git ref. Merged PRs retain historical base evidence. The edited adapter reproduced both cases against real PRs #67/#66. The normal integrity guard against a copy of the failed campaign snapshot produced `integrity_blocked` / Task `needs_input` with zero underlying progress calls; proof is `/tmp/ai-dashboard-base-ref-proof/proof.json`. Original state/report were preserved.
+
+Further corrections have dedicated regressions: confirmed dispatch plus admission settlement before restart; explicit SDK retry count; completed GitHub outage failure plus unchanged checkpoint/publication identity; complete required scenario set including MCP in canonical reports. No lease, CI, independent review or merge gate was removed.
+
+Use the existing local `.env`: Nemotron Super 3.5 via NVIDIA for coding, supervisor and direct analysis. Credentials stay in environment. Scope native Linux PATH to the campaign command on WSL; inherited Windows entries materially slow repeated trusted executable checks. A typical full command is `GH_TOKEN="$(gh auth token)" PATH=/usr/local/bin:/usr/bin:/bin AI_DASHBOARD_DIRECT_MODEL_TIMEOUT_MS=600000 AI_DASHBOARD_BETA_DIR=/tmp/ai-dashboard-beta-final-20261023 node --env-file-if-exists=.env scripts/pc-beta-entry.mjs --full --timeout-minutes=20`.
+
+Ordinary full uses the shared OpenCode service without stopping it. Optional chaos needs a separate harness-owned service. OpenCode's guarded message-based compatibility termination remains weaker than prompt-bound durable events. A passed local-PC campaign does not establish multi-instance/public deployment readiness.
+
+The operator explicitly requested deletion of all PC-beta OpenCode sessions. Remove only matching beta sessions after owned campaign processes have settled; confirm interruption before deleting active sessions and verify no matching sessions remain. Preserve unrelated sessions, SQLite, reports, PRs, branches and worktrees. Evidence files, not deleted session summaries, establish the completed gates.
+
+The existing review branch/PR #5 remains separate from main. Do not merge it or deploy without authorization.
+
+---
+
+## Historical investigation notes (superseded status snapshots)
+
 # AI Dashboard — status 2026-10-23
 
 ## Resultat og avgrensning

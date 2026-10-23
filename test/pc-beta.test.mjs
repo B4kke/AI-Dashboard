@@ -268,7 +268,7 @@ test('PC beta GitHub remote parsing accepts normal GitHub remotes and rejects cr
 });
 
 test('PC beta result is fail-closed across failed, blocked and incomplete scenarios', () => {
-  assert.equal(calculateOverallResult({ a: { status: 'passed' }, b: { status: 'passed' } }), 'passed');
+  assert.equal(calculateOverallResult({ a: { status: 'passed' }, b: { status: 'passed' } }), 'incomplete');
   assert.equal(calculateOverallResult({ a: { status: 'passed' }, b: { status: 'blocked' } }), 'blocked');
   assert.equal(calculateOverallResult({ a: { status: 'blocked' }, b: { status: 'failed' } }), 'failed');
   assert.equal(calculateOverallResult({ a: { status: 'running' } }), 'incomplete');
@@ -296,7 +296,7 @@ test('PC beta report carries scenario status and machine evidence references', (
     scenarios: { happy_path: { status: 'passed', summary: 'PR #1 merged' } },
     evidence: { happyPath: { checkpoint: 'deadbeef' } },
   });
-  assert.match(report, /Result: \*\*passed\*\*/);
+  assert.match(report, /Result: \*\*incomplete\*\*/);
   assert.match(report, /happy_path \| passed/);
   assert.match(report, /deadbeef/);
 });

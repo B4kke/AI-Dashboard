@@ -4,7 +4,7 @@ This checklist is the first real end-to-end dogfood gate for AI Dashboard.
 
 It is intentionally stricter than "the UI opened". The goal is to prove that the real OpenCode + Git + GitHub/Actions control loop behaves like the deterministic tests claim.
 
-Current status (2026-10-23): Linux, Windows and rendered UI Actions passed on `29a15e7` ([run 39840975559](https://github.com/B4kke/AI-Dashboard/actions/runs/39840975559)). A fresh Nemotron Super 3.5 full campaign on that exact commit passed Exploration, happy path (merged disposable PR #38) and MCP interoperability. CI repair failed closed when the immediate post-push PR read appeared to return the prior checkpoint; PR #39 now shows the exact second-worker checkpoint with green checks. The report at `/tmp/ai-dashboard-beta-29a15e7-20261023/` remains **failed**, so this does not count as a full-beta pass. A bounded exact-identity reread and a regression that simulates two stale PR reads are in the current working tree; the full 560-test suite passes, while fresh exact-head CI and a new full campaign remain required. The latest complete passing **smoke** remains `8f8e62c`.
+Qualification is recorded per clean source commit in the complete JSON/Markdown report and matching Linux/Windows Actions. Historical campaign `pcbeta-20261023055141-26ea8c0e` on `6a7f578` passed through restart and MCP interoperability, then failed moved-base detection; it remains failed. The live GitHub investigation and adapter correction are documented in `docs/04-roadmap.md`. See `HANDOFF.md` for report locations. Never infer a full pass from a smoke or a partial list of passing scenarios.
 
 October 19 evidence update: smoke on Dashboard `f54346d` reached a merged disposable PR with worker checkpoint, CI and supervisor evidence, but the **beta report failed** its independent baseline check because successful control evidence did not include `baseHead`/`scopeBaseHead`. The combined entrypoint also failed MCP interoperability despite completed Code Mode-wrapped read/master tool calls, because the probe recognized only direct tool parts. Commit `e80175c` repaired both checks without relaxing the baseline comparison or treating model text as tool execution. Its next beta smoke stopped before a passing report; disposable Beta PR #3 remains open as an orphan of that interrupted run. The historical `/tmp/opencode/beta-sol-*` session bundles named in `HANDOFF.md` are local artifacts, not part of this repository; verify their availability before attempting resume.
 
@@ -93,6 +93,8 @@ AI_DASHBOARD_BETA_AUTONOMY_INTERVAL_MS=5000
 AI_DASHBOARD_BETA_CHAOS_OPENCODE_URL=http://127.0.0.1:4196
 ```
 
+On WSL, inherited Windows PATH entries can make repeated trusted executable checks substantially slower. For Linux-hosted runs, scope PATH to the installed Linux Node/Git/SSH/gh tools for that command (for example `PATH=/usr/local/bin:/usr/bin:/bin` after verifying those locations). Do not change global settings or skip trust checks. The beta controller allows up to 120 seconds for admission, publication, autonomy ticks and the completed outage request; scenario/model timeouts remain separate bounds.
+
 The exact repository confirmation is intentional. If `AI_DASHBOARD_BETA_CONFIRM_DISPOSABLE` does not exactly equal `AI_DASHBOARD_BETA_REPOSITORY`, the harness refuses Git mutations.
 
 Normal `--smoke` and `--full` use the configured `OPENCODE_URL` and never stop that OpenCode process. The destructive outage/recovery scenario requires explicit chaos mode:
@@ -142,11 +144,15 @@ OpenCode V2 standalone servers are password-protected. The harness supplies one 
 
 CI repair must retain complete failed GitHub checks for an earlier completed worker's exact checkpoint SHA, followed by the independently verified successful final checkpoint. Supervisor repair must retain an actual completed `reiterate` verdict bound to the earlier worker/SHA, followed by approval of a different final checkpoint. Run counts, provider failures and timeouts alone cannot satisfy either scenario. The MCP probe requires separate sequential calls, including one returned MCP result per Code Mode `execute`; ambiguous batched results are rejected.
 
+Restart requires a running worker with acknowledged prompt dispatch (`dispatchPhase=dispatched`, `dispatchedAt`) and a settled autonomy tick before the Dashboard is stopped. It retains the same Run/session/prompt/dispatch identity and requires confirmed termination afterward. Durable operation leases remain intact.
+
+Moved-base validation reads the actual target branch ref; an open PR’s cached `base.sha` is insufficient. GitHub outage proof requires a completed sanitized GitHub adapter failure, the same worker/checkpoint/PR/base/tree and no new supervisor or merge. An aborted loopback request, CI backoff or unchanged pending state alone cannot pass.
+
 `--full --chaos` adds OpenCode outage/recovery without a duplicate worker Run, using the dedicated managed endpoint described above.
 
 A full run is `blocked`, not `passed`, if a required scenario cannot actually be exercised. For example, Exploration is blocked if no direct model is configured. A chaos run is additionally blocked if its dedicated OpenCode child cannot be started and controlled safely.
 
-“Full” is a fixed contract, not “run whichever scenarios happened to be available.” Every required scenario must produce `passed`; a deliberately unavailable scenario produces `blocked`, and any identity/idempotency violation produces `failed`.
+“Full” is a fixed contract. Every required scenario and `opencode_mcp_interop` must produce `passed`; a deliberately unavailable scenario produces `blocked`, a missing or skipped required scenario produces `incomplete`, and an integrity/idempotency violation produces `failed`. The core CLI result excludes the separately executed MCP stage, while persisted reports and the combined entrypoint include it. A successful MCP probe cannot upgrade an unfinished core campaign.
 
 Scenario failures are never downgraded merely because a scenario was previously labeled optional. Explicitly unavailable prerequisites may return `blocked`; integrity errors, programming errors and ambiguous promotion outcomes remain `failed`. A failed/uncertain Exploration promotion never triggers a fallback Project creation, since the original request may already have created one.
 

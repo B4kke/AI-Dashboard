@@ -153,6 +153,10 @@ Octokit owns authentication/API routing, generated REST endpoint bindings, GitHu
 
 AI Dashboard owns configured repository versus local-origin identity, checkpoint SHA/tree identity, PR head/base identity, CI/check evidence completeness, required-check/integration identity semantics, branch/ruleset policy interpretation, base movement detection, durable reconciliation/backoff, supervisor gate, expected-head merge, post-merge proof and fail-closed treatment of unknown evidence.
 
+For an open, unmerged PR, `baseSha` comes from the exact `rest.git.getRef` target (`heads/<branch>`), validated as that ref with a commit object and full SHA. `reportedBaseSha` preserves the PR snapshot for provenance. PR `base.sha` can remain stale after branch movement and cannot establish current base identity. For merged PRs, `baseSha` retains the historical reported base; reading the current target would incorrectly reject valid merges after subsequent movement/deletion. Failed or malformed live-ref reads never fall back to a stale snapshot.
+
+The adapter forwards the configured retry count explicitly to Octokit's retry plugin. An adapter retry budget and the controller's whole-operation deadline are separate; outage validation waits for a completed sanitized adapter failure rather than accepting a controller timeout.
+
 An external GitHub MCP may be useful to a conversational agent, but it must not replace Octokit for canonical autonomous merge evidence.
 
 GitHub fills a PR's `merge_commit_sha` before the merge is terminal. Dashboard therefore treats a stored merge SHA without terminal publication state (`state: 'merged'`, `merged: true`) and post-merge tree verification as non-terminal GitHub data, never as merge proof.

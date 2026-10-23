@@ -189,7 +189,7 @@ export class GitHubClient {
       baseUrl: this.baseUrl,
       userAgent: 'ai-dashboard',
       request: { timeout: timeoutMs },
-      retry: { enabled: retries > 0 },
+      retry: { enabled: retries > 0, retries },
       throttle: {
         onRateLimit: () => false,
         onSecondaryRateLimit: () => false,
@@ -308,6 +308,17 @@ export class GitHubClient {
     return this.call('pulls.get', () => this.octokit.rest.pulls.get({ owner, repo, pull_number: Number(number) }));
   }
 
+  async branchHead({ repository, branch }) {
+    if (typeof branch !== 'string' || !branch) throw new Error('GitHub target branch is missing');
+    const { owner, repo } = parseGitHubRepository(repository);
+    const ref = await this.call('git.getRef', () => this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${branch}` }));
+    if (ref?.ref !== `refs/heads/${branch}` || ref?.object?.type !== 'commit'
+      || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(ref?.object?.sha || '')) {
+      throw new Error('GitHub target branch ref evidence is invalid');
+    }
+    return ref.object.sha;
+  }
+
   async completeCheckRuns({ repository, sha }) {
     const { owner, repo } = parseGitHubRepository(repository);
     let reportedTotal = null;
@@ -382,21 +393,29 @@ export class GitHubClient {
   async pullRequestEvidence({ repository, number }) {
     const pull = await this.pullRequest({ repository, number });
     const sha = pull?.head?.sha || null;
-    const ci = sha
-      ? await this.commitChecks({ repository, sha })
-      : aggregateGitHubChecks({ errors: ['pull request did not expose a head SHA'] });
+    const merged = pull?.merged === true || Boolean(pull?.merged_at);
+    // Open PR snapshots can retain an old base SHA after the target branch moves.
+    // Merged PRs instead need their historical base, even if that branch is gone.
+    const [baseSha, ci] = await Promise.all([
+      pull?.state === 'open' && !merged
+        ? this.branchHead({ repository, branch: pull?.base?.ref })
+        : Promise.resolve(pull?.base?.sha || null),
+      sha ? this.commitChecks({ repository, sha })
+        : Promise.resolve(aggregateGitHubChecks({ errors: ['pull request did not expose a head SHA'] })),
+    ]);
     return {
       number: pull?.number || Number(number),
       url: pull?.html_url || null,
       state: pull?.state || null,
       draft: pull?.draft === true,
-      merged: pull?.merged === true || Boolean(pull?.merged_at),
+      merged,
       mergeSha: pull?.merge_commit_sha || null,
       mergeable: pull?.mergeable ?? null,
       mergeableState: pull?.mergeable_state || null,
       headSha: sha,
       headBranch: pull?.head?.ref || null,
-      baseSha: pull?.base?.sha || null,
+      baseSha,
+      reportedBaseSha: pull?.base?.sha || null,
       baseBranch: pull?.base?.ref || null,
       ci,
     };

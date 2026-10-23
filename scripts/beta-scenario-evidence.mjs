@@ -51,3 +51,48 @@ export function assertSupervisorRejectionEvidence(evidence) {
   }
   throw new Error('Supervisor repair did not prove an earlier checkpoint-bound changes_requested verdict');
 }
+
+export function assertGitHubOutageEvidence(before, after, refresh) {
+  if (refresh?.ok !== false || refresh.status !== 500
+    || !/^GitHub pulls\.get failed \(HTTP (?:500|502|503|504)\)$/.test(refresh.value?.error || '')) {
+    throw new Error('GitHub outage requires a completed GitHub adapter failure; a client timeout or pending response is not evidence');
+  }
+  const worker = finalWorker(before);
+  const current = finalWorker(after);
+  const publication = before.task.publication;
+  if (!publication?.prNumber || !publication.repository || publication.provider !== 'github'
+    || publication.headSha !== worker.checkpointHead || !publication.baseSha
+    || !publication.workerTreeSha || !publication.workerBaseSha
+    || publication.state !== 'open' || publication.merged === true) {
+    throw new Error('GitHub outage has no exact open PR/checkpoint baseline');
+  }
+  if (after.task.id !== before.task.id || after.task.projectId !== before.task.projectId
+    || !['awaiting_ci', 'needs_input'].includes(after.task.state)
+    || current.id !== worker.id || current.checkpointHead !== worker.checkpointHead
+    || after.task.publication?.merged === true || after.task.publication?.state !== 'open') {
+    throw new Error('GitHub outage changed checkpoint identity or advanced review/merge');
+  }
+  const identityFields = ['provider', 'repository', 'prNumber', 'number', 'headSha', 'headBranch', 'baseSha', 'baseBranch', 'workerTreeSha', 'workerBaseSha', 'mergeSha'];
+  if (identityFields.some((key) => after.task.publication?.[key] !== publication[key])) {
+    throw new Error('GitHub outage changed PR/checkpoint identity');
+  }
+  const runIds = (value) => (value.runs || []).map((run) => run.id).sort();
+  if (before.workers.length !== 1 || after.workers.length !== 1
+    || before.supervisors.length || after.supervisors.length
+    || JSON.stringify(runIds(before)) !== JSON.stringify(runIds(after))) {
+    throw new Error('GitHub outage scheduled duplicate worker or supervisor work');
+  }
+  return {
+    taskId: before.task.id,
+    workerRunId: worker.id,
+    checkpointHead: worker.checkpointHead,
+    prNumber: publication.prNumber,
+    headSha: publication.headSha,
+    baseSha: publication.baseSha,
+    workerTreeSha: publication.workerTreeSha,
+    workerBaseSha: publication.workerBaseSha,
+    httpStatus: refresh.status,
+    errorCode: 'github_pulls_get_failed',
+    taskState: after.task.state,
+  };
+}

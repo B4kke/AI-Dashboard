@@ -62,6 +62,9 @@ test('task -> worker -> PR -> CI fail -> repair -> supervisor -> merge', async (
       const url = new URL(req.url, 'http://localhost');
       const remoteHead = async () => pr ? (await exec('git', [`--git-dir=${bare}`, 'rev-parse', `refs/heads/${pr.head}`], { encoding: 'utf8' })).stdout.trim() : null;
       const remoteBase = async () => (await exec('git', [`--git-dir=${bare}`, 'rev-parse', 'refs/heads/main'], { encoding: 'utf8' })).stdout.trim();
+      if (req.method === 'GET' && decodeURIComponent(url.pathname) === '/repos/owner/repo/git/ref/heads/main') {
+        return res.end(JSON.stringify({ ref: 'refs/heads/main', object: { type: 'commit', sha: await remoteBase() } }));
+      }
       if (req.method === 'GET' && url.pathname === '/repos/owner/repo/pulls') return res.end(JSON.stringify(pr ? [{ number: 1, html_url: 'http://github.test/pr/1', state: 'open', head: { ref: pr.head }, base: { ref: pr.base } }] : []));
       if (req.method === 'POST' && url.pathname === '/repos/owner/repo/pulls') {
         const body = await readJson(req); pr = { head: body.head, base: body.base };

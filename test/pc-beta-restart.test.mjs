@@ -14,6 +14,7 @@ function fixture() {
   const run = {
     id: 'r1', taskId: 't1', kind: 'worker', status: 'running', sessionId: 's1', promptMessageId: 'm1',
     createdAt: '2026-10-22T00:00:00.000Z', terminationConfirmedAt: null,
+    dispatchPhase: 'dispatched', dispatchedAt: '2026-10-22T00:00:01.000Z',
   };
   const before = { projects: [{ id: 'p1', status: 'active' }], tasks: [task], runs: [run] };
   const after = structuredClone(before);
@@ -23,6 +24,7 @@ function fixture() {
   const f = { harness, session, spec, before, after, restarted: false, events: [], persisted: [] };
   harness.log = () => {};
   harness.repairProjectSync = async () => { f.events.push('repair'); };
+  harness.waitForAutonomyIdle = async () => { f.events.push('settled'); };
   harness.patchProject = async () => { f.events.push('patch'); };
   harness.createTask = async () => { f.events.push('create'); return task; };
   harness.persist = async () => { f.persisted.push(structuredClone(session.evidence)); };
@@ -37,6 +39,7 @@ function fixture() {
   harness.restartDashboard = async () => {
     assert.deepEqual(session.evidence.dashboardRestart, {
       taskId: 't1', runId: 'r1', sessionId: 's1', promptMessageId: 'm1', phase: 'before_restart',
+      dispatchedAt: '2026-10-22T00:00:01.000Z',
     });
     f.events.push('restart');
     f.restarted = true;
@@ -66,6 +69,13 @@ test('restart proof persists the active worker and verifies its exact identity a
   assert.equal(f.persisted[1].dashboardRestart.phase, 'before_restart');
   assert.equal(f.session.evidence.dashboardRestart.phase, 'verified');
   assert.ok(f.events.includes('restart'));
+});
+
+test('restart cannot select a Run still awaiting prompt admission acknowledgement', async () => {
+  const f = fixture();
+  f.before.runs[0].dispatchPhase = 'prompting';
+  await assert.rejects(f.harness.runDashboardRestart(f.spec), /active worker before dashboard restart/);
+  assert.equal(f.restarted, false);
 });
 
 test('restart proof cannot pass without an active admitted worker', async (t) => {

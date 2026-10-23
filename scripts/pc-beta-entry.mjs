@@ -140,7 +140,7 @@ export async function mergeMcpGateIntoBetaReport(runtimeDir, gateReport) {
     evidence: gateReport.evidence,
   };
   session.updatedAt = new Date().toISOString();
-  session.result = calculateOverallResult(session.scenarios);
+  session.result = calculateOverallResult(session.scenarios, session);
   await writeJsonAtomic(sessionFile, session);
   const reportDir = join(runtimeDir, 'reports');
   await mkdir(reportDir, { recursive: true });
@@ -181,9 +181,13 @@ export async function runPcBetaEntry(argv = process.argv.slice(2)) {
     throw error;
   }
 
-  await mergeMcpGateIntoBetaReport(runtimeDir, gateReport);
+  const merged = await mergeMcpGateIntoBetaReport(runtimeDir, gateReport);
+  const session = merged ? JSON.parse(await readFile(join(runtimeDir, 'session.json'), 'utf8')) : null;
+  const result = session?.result || 'incomplete';
+  console.log(`PC beta result: ${result.toUpperCase()}`);
   if (child.code !== 0) process.exitCode = child.code;
-  return { gateReport, child };
+  else if (result !== 'passed') process.exitCode = 2;
+  return { gateReport, child, result };
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;

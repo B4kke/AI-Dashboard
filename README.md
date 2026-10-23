@@ -4,9 +4,9 @@ Self-hosted control center for AI-assisted and progressively autonomous project 
 
 AI Dashboard connects existing projects/repositories, direct Tasks, optional Ideas/Explorations, specialist agents, AI coding harnesses, model providers, MCP capabilities, read-only Research Runs, isolated Git worktrees and GitHub/CI evidence behind one fail-closed control plane.
 
-> Status: pre-alpha / PC-beta candidate. Exact-head Linux, Windows and rendered-UI Actions are required after every code change; a beta claim additionally requires current-stack OpenCode + disposable GitHub/Actions dogfood.
+> Release qualification is tied to the exact tested commit: Linux and Windows Actions plus a complete current-stack OpenCode + disposable GitHub/Actions campaign. A smoke pass proves only its listed scenarios.
 >
-> Latest published CI-verified head `29a15e7`: [Actions run 39840975559](https://github.com/B4kke/AI-Dashboard/actions/runs/39840975559) passed Linux, Windows and rendered UI. A fresh full campaign on that exact head passed Exploration, happy path (merged disposable PR #38) and MCP interoperability, then failed CI repair when an immediate GitHub PR read appeared to return the prior head after a successful worker push. PR #39 now shows the exact repair checkpoint and green checks, but the campaign report remains failed. A bounded exact-identity reread and regression test are now in the working tree; the complete local suite passes 560/560. These changes still need fresh exact-head Actions and full beta evidence. See `HANDOFF.md` and `docs/05-pc-beta-checklist.md`.
+> October 23 investigation: head `6a7f578` passed Linux/Windows Actions ([run 39907480534](https://github.com/B4kke/AI-Dashboard/actions/runs/39907480534)) and 567 deterministic tests. Its full campaign passed through restart recovery and MCP interoperability, then failed moved-base detection. GitHub PR #67 retained an old base SHA while the actual branch had advanced. Open PR evidence now reads the exact live target ref; merged PR evidence retains its historical base. Reports require every scenario, and the outage gate requires a completed GitHub API failure. Historical failed reports remain failed. See `docs/05-pc-beta-checklist.md` for the qualification contract and `HANDOFF.md` for evidence locations.
 
 ## Product model
 
@@ -362,9 +362,9 @@ Keep claims separate:
 
 Do not promote a level-2/3 MCP or rendered-UI test into a claim that every real external host/workflow has been verified.
 
-The exact final head must satisfy level 3 before beta-candidate evidence is current. Level 4 remains a separate mandatory gate even after deterministic/Actions success. On `8f8e62c` level 4 is reached for the smoke happy path and the OpenCode read/master MCP interop gate only; the full-mode beta scenarios remain unverified.
+The exact final head must satisfy level 3 and every mandatory full-campaign scenario at level 4 before full PC-beta qualification. Qualification belongs to that report and commit; an earlier smoke, a subset of passing scenarios or a report from another source SHA cannot establish it.
 
-The in-flight restart beta gate requires an actually admitted worker before restart and preserves its exact Run/session/prompt identity afterward. Missing or unavailable evidence cannot pass; restart histories are not silently replayed. October 22 full-campaign attempts remain failed/incomplete, not full-beta approval; see `docs/04-roadmap.md` and `HANDOFF.md`.
+The in-flight restart beta gate requires an active worker with confirmed prompt dispatch and a settled admission tick before restart, and preserves its exact Run/session/prompt/dispatch identity afterward. Durable leases are not deleted to accelerate recovery. Missing or unavailable evidence cannot pass; restart histories are not silently replayed. October 22 full-campaign attempts remain failed/incomplete, not full-beta approval; see `docs/04-roadmap.md` and `HANDOFF.md`.
 
 Managed beta OpenCode instances share a per-process credential with their isolated Dashboard and MCP probe. It stays in memory/environment, is reused across owned restarts and never enters session/evidence state. Process logging redacts credentials, including split output chunks. This supports password-protected V2 standalone servers without changing or restarting the shared OpenCode service.
 

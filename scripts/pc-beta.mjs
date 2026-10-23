@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { attachBetaProcessLog } from './beta-process-log.mjs';
 import { GitHubClient } from '../server/integrations/github.mjs';
-import { assertCiRepairEvidence, assertSupervisorRejectionEvidence } from './beta-scenario-evidence.mjs';
+import { assertCiRepairEvidence, assertGitHubOutageEvidence, assertSupervisorRejectionEvidence } from './beta-scenario-evidence.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -135,12 +135,18 @@ function exactGitHubRemoteSet(value, expectedRepository) {
   return urls.length === 1 && parseGitHubRemote(urls[0]) === expectedRepository;
 }
 
-export function calculateOverallResult(scenarios = {}) {
+export function calculateOverallResult(scenarios = {}, { mode = 'full', chaos = false, includeMcp = true } = {}) {
+  if (!scenarios || typeof scenarios !== 'object' || Array.isArray(scenarios)) return 'incomplete';
   const values = Object.values(scenarios);
   if (values.some((item) => item?.status === 'failed')) return 'failed';
   if (values.some((item) => item?.status === 'blocked')) return 'blocked';
-  if (values.length && values.every((item) => ['passed', 'skipped'].includes(item?.status))) return 'passed';
-  return 'incomplete';
+  if (!['smoke', 'full'].includes(mode)) return 'incomplete';
+  const required = ['repository_fixture', 'opencode_health', 'exploration_project', 'happy_path'];
+  if (mode === 'full') required.push('ci_failure_repair', 'supervisor_rejection', 'dashboard_restart_in_flight', 'moved_base_branch', 'abandoned_worktree', 'github_api_outage');
+  if (chaos) required.push('opencode_outage');
+  if (includeMcp) required.push('opencode_mcp_interop');
+  if (required.some((name) => scenarios[name]?.status !== 'passed')) return 'incomplete';
+  return values.every((item) => ['passed', 'skipped'].includes(item?.status)) ? 'passed' : 'incomplete';
 }
 
 export function buildBetaTaskSpecs(sessionId) {
@@ -195,7 +201,7 @@ export function buildBetaTaskSpecs(sessionId) {
 
 export function renderBetaReport(session) {
   const rows = Object.entries(session.scenarios || {}).map(([name, item]) => `| ${name} | ${item.status} | ${String(item.summary || '').replaceAll('|', '\\|')} |`);
-  return `# AI Dashboard PC beta report\n\n- Result: **${calculateOverallResult(session.scenarios)}**\n- Session: \`${session.id}\`\n- Mode: \`${session.mode}\`\n- Chaos: \`${session.chaos === true ? 'enabled' : 'disabled'}\`\n- Dashboard commit: \`${session.dashboardCommit || 'unknown'}\`\n- Repository: \`${session.repository}\`\n- Base branch: \`${session.baseBranch}\`\n- Started: ${session.startedAt}\n- Updated: ${session.updatedAt}\n\n| Scenario | Status | Summary |\n|---|---|---|\n${rows.join('\n')}\n\n## Evidence\n\n\`\`\`json\n${JSON.stringify(session.evidence || {}, null, 2)}\n\`\`\`\n`;
+  return `# AI Dashboard PC beta report\n\n- Result: **${calculateOverallResult(session.scenarios, session)}**\n- Session: \`${session.id}\`\n- Mode: \`${session.mode}\`\n- Chaos: \`${session.chaos === true ? 'enabled' : 'disabled'}\`\n- Dashboard commit: \`${session.dashboardCommit || 'unknown'}\`\n- Repository: \`${session.repository}\`\n- Base branch: \`${session.baseBranch}\`\n- Started: ${session.startedAt}\n- Updated: ${session.updatedAt}\n\n| Scenario | Status | Summary |\n|---|---|---|\n${rows.join('\n')}\n\n## Evidence\n\n\`\`\`json\n${JSON.stringify(session.evidence || {}, null, 2)}\n\`\`\`\n`;
 }
 
 async function git(cwd, args, timeoutMs = 120_000) {
@@ -255,7 +261,7 @@ export class BetaHarness {
 
   async persist() {
     this.session.updatedAt = new Date().toISOString();
-    this.session.result = calculateOverallResult(this.session.scenarios);
+    this.session.result = calculateOverallResult(this.session.scenarios, this.session);
     await mkdir(dirname(this.config.sessionFile), { recursive: true });
     const temp = `${this.config.sessionFile}.tmp`;
     await writeFile(temp, `${JSON.stringify(this.session, null, 2)}\n`, 'utf8');
@@ -320,7 +326,7 @@ export class BetaHarness {
   }
 
   async state() { return this.api('/api/state'); }
-  async tick() { return this.api(`/api/projects/${encodeURIComponent(this.session.projectId)}/autonomy/tick`, { method: 'POST', body: {} }); }
+  async tick() { return this.api(`/api/projects/${encodeURIComponent(this.session.projectId)}/autonomy/tick`, { method: 'POST', body: {}, timeoutMs: 120_000 }); }
 
   async waitFor(label, predicate, { timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS, tick = false, reconcileTickFailure = false } = {}) {
     const deadline = Date.now() + timeoutMs;
@@ -1085,11 +1091,18 @@ export class BetaHarness {
       const worker = evidence.workers[0];
       return worker && clean(worker.id) && ['running', 'retrying'].includes(worker.status)
         && worker.sessionId && worker.promptMessageId && !worker.terminationConfirmedAt
+        && worker.dispatchPhase === 'dispatched' && clean(worker.dispatchedAt)
         && !worker.dispatchUncertain && !worker.quarantineReason
         ? evidence : null;
     }, { timeoutMs: 90_000, tick: true, reconcileTickFailure: true });
-    const before = active.workers[0];
-    const identity = { runId: before.id, sessionId: before.sessionId, promptMessageId: before.promptMessageId };
+    await this.waitForAutonomyIdle();
+    const before = this.taskEvidence(await this.state(), task.id).workers[0];
+    if (!before || before.id !== active.workers[0].id || !['running', 'retrying'].includes(before.status)
+      || before.dispatchPhase !== 'dispatched' || !clean(before.dispatchedAt)
+      || before.terminationConfirmedAt || before.dispatchUncertain || before.quarantineReason) {
+      throw new Error('Restart worker is no longer active with confirmed prompt admission before dashboard restart');
+    }
+    const identity = { runId: before.id, sessionId: before.sessionId, promptMessageId: before.promptMessageId, dispatchedAt: before.dispatchedAt };
     this.session.evidence.dashboardRestart = { taskId: task.id, ...identity, phase: 'before_restart' };
     await this.persist();
 
@@ -1101,7 +1114,8 @@ export class BetaHarness {
       }
       const worker = evidence.workers[0];
       if (evidence.workers.length !== 1 || worker?.id !== identity.runId
-        || worker.sessionId !== identity.sessionId || worker.promptMessageId !== identity.promptMessageId) {
+        || worker.sessionId !== identity.sessionId || worker.promptMessageId !== identity.promptMessageId
+        || worker.dispatchedAt !== identity.dispatchedAt) {
         throw new Error('Dashboard restart lost or changed the persisted worker identity, or created duplicate worker Runs');
       }
       return worker;
@@ -1265,11 +1279,14 @@ export class BetaHarness {
       const evidence = await this.manualWorkerToPublish(specs.githubOutage);
       const originalApi = process.env.GITHUB_API_URL;
       await this.restartDashboard({ GITHUB_API_URL: 'http://127.0.0.1:9' });
-      const refresh = await this.api(`/api/tasks/${encodeURIComponent(evidence.task.id)}/github/refresh`, { method: 'POST', body: {}, allowError: true, timeoutMs: 8_000 });
-      const during = this.taskEvidence(await this.state(), evidence.task.id);
-      if (['awaiting_review', 'ready_to_merge', 'done'].includes(during.task.state)) throw new Error(`GitHub API outage failed open into ${during.task.state}`);
-      await this.restartDashboard({ GITHUB_API_URL: originalApi });
-      return { summary: `GitHub outage remained fail-closed in ${during.task.state}`, taskId: evidence.task.id, httpStatus: refresh.status, taskState: during.task.state };
+      try {
+        const refresh = await this.api(`/api/tasks/${encodeURIComponent(evidence.task.id)}/github/refresh`, { method: 'POST', body: {}, allowError: true, timeoutMs: 120_000 });
+        const during = this.taskEvidence(await this.state(), evidence.task.id);
+        const proof = assertGitHubOutageEvidence(evidence, during, refresh);
+        return { summary: `GitHub outage returned a confirmed API failure and remained fail-closed in ${during.task.state}`, ...proof };
+      } finally {
+        await this.restartDashboard({ GITHUB_API_URL: originalApi });
+      }
     });
   }
 }
@@ -1347,12 +1364,17 @@ async function main() {
   process.once('SIGTERM', () => harness.cleanupProcesses().finally(() => process.exit(143)));
   try {
     await harness.run();
+  } catch (error) {
+    if (!Object.values(session.scenarios).some((scenario) => scenario?.status === 'failed')) {
+      session.scenarios.campaign_execution = { status: 'failed', finishedAt: new Date().toISOString(), summary: 'Campaign stopped outside a completed scenario; see process diagnostics.' };
+    }
+    throw error;
   } finally {
     await harness.persist().catch(() => {});
     await harness.cleanupProcesses();
   }
-  const result = calculateOverallResult(session.scenarios);
-  console.log(`\nPC beta result: ${result.toUpperCase()}`);
+  const result = calculateOverallResult(session.scenarios, { ...session, includeMcp: false });
+  console.log(`\nPC beta core result: ${result.toUpperCase()}`);
   console.log(`Report: ${join(config.reportDir, `${session.id}.md`)}`);
   if (result !== 'passed') process.exitCode = 2;
 }
