@@ -37,10 +37,10 @@ function hasSecretLikeContent(value) {
   if (redactSecretPatterns(text) !== text) return true;
   if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/i.test(text)) return true;
   if (/\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|(?:sk|rk|pk)-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b/.test(text)) return true;
-  const assignment = /(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)\s*["']?\s*[:=]\s*["']?([^\s"',;}]{8,})/ig;
+  const assignment = /(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)\s*["']?\s*[:=]\s*["']?(\$\{[A-Z_][A-Z0-9_]*\}|[^\s"',;}]{8,})/ig;
   for (const match of text.matchAll(assignment)) {
     const candidate = match[1].trim();
-    if (!candidate || /^\$\{|^\$[A-Z_]|process\.env|env\.|<[^>]+>|YOUR_|CHANGE_ME|example/i.test(candidate)) continue;
+    if (!candidate || /^(?:\$\{[A-Z_][A-Z0-9_]*\}|\$[A-Z_][A-Z0-9_]*|(?:process\.env|env)\.[A-Z_][A-Z0-9_]*|<[^<>\s]+>|YOUR_[A-Z0-9_]+|CHANGE_ME)$/i.test(candidate)) continue;
     return true;
   }
   return false;
@@ -83,7 +83,7 @@ function normalizeRefs(refs) {
 
 function sourceResult(ref, { identity = null, revision = null, label, text = '', stale = false, available = true, truncated = false } = {}) {
   const safeText = bounded(text, MAX_SOURCE_CHARS);
-  const wasTruncated = truncated || safeText.length < String(text ?? '').length;
+  const wasTruncated = truncated || String(text ?? '').length > MAX_SOURCE_CHARS;
   return {
     kind: ref.kind,
     ...(ref.id ? { id: ref.id } : {}),
@@ -151,12 +151,14 @@ function serializeEvidence(taskId, bundle) {
 
 async function resolveProjectFile(project, ref, projectRoot) {
   const relativePath = ref.path;
-  if (relativePath.includes('\\') || relativePath.includes(':') || /[\u0000-\u001f\u007f]/.test(relativePath)
+  if (/[\\<>:"|?*\u0000-\u001f\u007f]/.test(relativePath)
     || isAbsolute(relativePath) || relativePath.startsWith('/') || relativePath.startsWith('\\')) {
     throw new Error('File context path must be a safe project-relative path');
   }
   const segments = relativePath.split('/');
-  if (!segments.length || segments.some((part) => !part || part === '.' || part === '..' || EXCLUDED_PARTS.has(part.toLowerCase()) || sensitiveName(part))) {
+  if (!segments.length || segments.some((part) => !part || part !== part.trim() || /[. ]$/.test(part)
+    || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)
+    || part === '.' || part === '..' || EXCLUDED_PARTS.has(part.toLowerCase()) || sensitiveName(part))) {
     throw new Error('File context path contains a forbidden segment');
   }
   if (!TEXT_EXTENSIONS.has(extname(relativePath).toLowerCase())) throw new Error('File context extension is not supported');
@@ -167,6 +169,11 @@ async function resolveProjectFile(project, ref, projectRoot) {
   const rootStat = await lstat(rootPath);
   if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Error('Project repository root must be a real directory');
   const realRoot = await realpath(rootPath);
+  const samePath = (left, right) => process.platform === 'win32'
+    ? left.toLocaleLowerCase('en-US') === right.toLocaleLowerCase('en-US')
+    : left === right;
+  const sameFile = (left, right) => left.dev === right.dev && left.ino === right.ino;
+  const checkedPaths = [{ path: realRoot, stat: await lstat(realRoot) }];
   let cursor = realRoot;
   for (const [index, segment] of segments.entries()) {
     cursor = resolve(cursor, segment);
@@ -179,6 +186,7 @@ async function resolveProjectFile(project, ref, projectRoot) {
     }
     if (stat.isSymbolicLink()) throw new Error('File context does not follow symlinks or junctions');
     if (index < segments.length - 1 && !stat.isDirectory()) throw new Error('File context parent must be a directory');
+    checkedPaths.push({ path: cursor, stat });
   }
 
   const candidate = resolve(realRoot, ...segments);
@@ -186,26 +194,39 @@ async function resolveProjectFile(project, ref, projectRoot) {
   if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('File context path escapes the Project root');
   const targetStat = await lstat(candidate);
   if (!targetStat.isFile() || targetStat.size > MAX_FILE_BYTES) throw new Error('File context must be a regular file no larger than 128 KiB');
+  if (!samePath(await realpath(candidate), candidate)) throw new Error('File context changed identity before being read');
 
   const noFollow = Number(constants.O_NOFOLLOW || 0);
-  const handle = await open(candidate, constants.O_RDONLY | noFollow);
+  const handle = await open(candidate, constants.O_RDONLY | noFollow | Number(constants.O_NONBLOCK || 0));
   let buffer;
   let openedStat;
   try {
     openedStat = await handle.stat();
-    if (!openedStat.isFile() || openedStat.size > MAX_FILE_BYTES) throw new Error('File context changed or exceeded the 128 KiB limit');
-    buffer = await handle.readFile();
+    if (!openedStat.isFile() || !sameFile(targetStat, openedStat) || openedStat.size > MAX_FILE_BYTES) throw new Error('File context changed or exceeded the 128 KiB limit');
+    // A file may grow after stat(). Bound the read itself, not only its eventual result.
+    const boundedBuffer = Buffer.alloc(MAX_FILE_BYTES + 1);
+    let length = 0;
+    while (length < boundedBuffer.length) {
+      const { bytesRead } = await handle.read(boundedBuffer, length, boundedBuffer.length - length, length);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    buffer = boundedBuffer.subarray(0, length);
+    const finalStat = await handle.stat();
+    if (finalStat.size !== openedStat.size || finalStat.mtimeMs !== openedStat.mtimeMs || finalStat.ctimeMs !== openedStat.ctimeMs) {
+      throw new Error('File context changed while being read');
+    }
   } finally {
     await handle.close();
   }
   if (buffer.length > MAX_FILE_BYTES || buffer.includes(0)) throw new Error('File context is binary or exceeds the 128 KiB limit');
   const text = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
   if (hasSecretLikeContent(text)) throw new Error('File context contains secret-like content');
-  const after = await realpath(candidate);
-  const samePath = process.platform === 'win32'
-    ? after.toLocaleLowerCase('en-US') === candidate.toLocaleLowerCase('en-US')
-    : after === candidate;
-  if (!samePath) throw new Error('File context changed identity while being read');
+  if (!samePath(await realpath(candidate), candidate)) throw new Error('File context changed identity while being read');
+  for (const checked of checkedPaths) {
+    const current = await lstat(checked.path);
+    if (current.isSymbolicLink() || !sameFile(checked.stat, current)) throw new Error('File context changed identity while being read');
+  }
   return sourceResult(ref, {
     identity: `${project.id}:${relativePath}`,
     revision: `${openedStat.mtimeMs}:${openedStat.size}`,
@@ -278,7 +299,10 @@ export function createChatContext({ store, projectRoot = null }) {
       const bundle = evidenceBundleForTask(store, task.id);
       const text = serializeEvidence(task.id, bundle);
       if (hasSecretLikeContent(text)) throw new Error(`Evidence for Task ${ref.id} contains secret-like context`);
-      records.push(sourceResult(ref, { identity: `evidence:${task.id}`, revision: bundle.evidenceHash, label: `Evidence for ${task.title}`, text }));
+      // The canonical bundle hash includes its generation clock. Preview freshness
+      // must depend on evidence changes, not on the time of a later read.
+      const { createdAt, evidenceHash, ...evidence } = bundle;
+      records.push(sourceResult(ref, { identity: `evidence:${task.id}`, revision: digest(evidence), label: `Evidence for ${task.title}`, text }));
     }
 
     let totalChars = 0;
@@ -290,13 +314,12 @@ export function createChatContext({ store, projectRoot = null }) {
       const remaining = MAX_CONTEXT_CHARS - totalChars - separatorChars;
       if (remaining <= header.length) {
         record.truncated = true;
-        break;
+        continue;
       }
       const body = record.text.slice(0, Math.min(record.text.length, remaining - header.length));
       record.truncated ||= body.length < record.text.length;
       projected.push(`${header}${body}`);
       totalChars += separatorChars + header.length + body.length;
-      if (totalChars >= MAX_CONTEXT_CHARS) break;
     }
 
     return {

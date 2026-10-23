@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
+import { streamText } from 'ai';
 import { asSchema, safeValidateTypes } from '@ai-sdk/provider-utils';
 import { createMCPClient } from '@ai-sdk/mcp';
 import { redactSecretPatterns } from '../core/verification.mjs';
@@ -14,6 +15,8 @@ const MAX_METADATA_CHARS = 512_000;
 const MAX_TURNS = 200;
 const MAX_PROPOSALS = 50;
 const CONTEXT_PREVIEW_TTL_MS = 5 * 60_000;
+const MAX_ASSISTANT_CHARS = 40_000;
+const MAX_STREAM_LINE_CHARS = 40_000;
 
 const READ_TOOLS = new Set([
   'dashboard_status', 'project_list', 'project_get', 'task_list', 'task_get', 'task_evidence',
@@ -28,7 +31,6 @@ const MUTATING_TOOL_FORBIDDEN = new Set(['task_resolve_input', 'publish', 'revie
 const SECRET_MARKERS = [
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i,
   /\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b/,
-  /\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)\s*[:=]\s*["']?[^\s"']{12,}/i,
 ];
 
 function cleanText(value, max) {
@@ -40,7 +42,46 @@ function cleanText(value, max) {
 
 function containsSecretLikeText(value) {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
-  return redactSecretPatterns(text) !== text || SECRET_MARKERS.some((pattern) => pattern.test(text));
+  if (redactSecretPatterns(text) !== text || SECRET_MARKERS.some((pattern) => pattern.test(text))) return true;
+  const assignment = /(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)\s*["']?\s*[:=]\s*["']?(\$\{[A-Z_][A-Z0-9_]*\}|[^\s"',;}]{8,})/ig;
+  for (const match of text.matchAll(assignment)) {
+    const candidate = match[1].trim();
+    if (!candidate || /^(?:\$\{[A-Z_][A-Z0-9_]*\}|\$[A-Z_][A-Z0-9_]*|(?:process\.env|env)\.[A-Z_][A-Z0-9_]*|<[^<>\s]+>|YOUR_[A-Z0-9_]+|CHANGE_ME)$/i.test(candidate)) continue;
+    return true;
+  }
+  return false;
+}
+
+function safeToolText(value, maxChars = MAX_ASSISTANT_CHARS) {
+  const text = redactSecretPatterns(String(value ?? ''));
+  return containsSecretLikeText(text)
+    ? '[REDACTED SECRET-LIKE CONTENT]'
+    : text.slice(0, maxChars);
+}
+
+function safeToolValue(value, depth = 0) {
+  if (depth > 8) return '[depth-limited]';
+  if (typeof value === 'string') return safeToolText(value, 24_000);
+  if (Array.isArray(value)) return value.slice(0, 200).map((item) => safeToolValue(item, depth + 1));
+  if (!value || typeof value !== 'object') return value;
+  const output = {};
+  for (const [key, item] of Object.entries(value).slice(0, 200)) {
+    output[safeToolText(key).slice(0, 200)] = safeToolValue(item, depth + 1);
+  }
+  try {
+    const json = JSON.stringify(output);
+    if (json.length > 24_000) return { truncated: true, characters: json.length };
+  } catch {
+    return { truncated: true, reason: 'not_serializable' };
+  }
+  return output;
+}
+
+function safeToolError(error) {
+  const message = error instanceof Error ? error.message : String(error || 'Dashboard tool failed');
+  return containsSecretLikeText(message)
+    ? new Error('Dashboard tool failed; sensitive details were removed.')
+    : new Error(errorText(error));
 }
 
 function plainJson(value, label) {
@@ -58,6 +99,11 @@ function defaultConversationMetadata(conversationId) {
 
 function messageMetaKey(messageId) { return `${META_PREFIX}:message:${messageId}`; }
 function conversationMetaKey(conversationId) { return `${META_PREFIX}:conversation:${conversationId}`; }
+function requestMetaKey(conversationId, requestId) {
+  const identity = createHash('sha256').update(requestId).digest('hex');
+  return `${META_PREFIX}:request:${conversationId}:${identity}`;
+}
+function activeRequestKey(conversationId, requestId) { return JSON.stringify([conversationId, requestId]); }
 
 function safeReferences(value) {
   if (!Array.isArray(value)) throw new Error('contextRefs must be an array');
@@ -110,14 +156,39 @@ function sameFreshness(left, right) {
 
 function errorText(error) {
   const text = error instanceof Error ? error.message : String(error || 'Unknown error');
-  return redactSecretPatterns(text).replace(/[\r\n\0]/g, ' ').slice(0, 1_000);
+  return safeToolText(text, 1_000).replace(/[\r\n\0]/g, ' ');
 }
 
-function redactTree(value) {
-  if (typeof value === 'string') return redactSecretPatterns(value);
-  if (Array.isArray(value)) return value.map(redactTree);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactSecretPatterns(key), redactTree(item)]));
-  return value;
+function drainSafeStreamText(scope, options, flush = false) {
+  if (scope.streamStopped) return;
+  while (scope.streamBuffer) {
+    const newline = scope.streamBuffer.indexOf('\n');
+    if (newline < 0 && !flush) {
+      if (scope.streamBuffer.length > MAX_STREAM_LINE_CHARS) {
+        scope.streamBuffer = '';
+        scope.streamStopped = true;
+      }
+      return;
+    }
+    const length = newline < 0 ? scope.streamBuffer.length : newline + 1;
+    const segment = scope.streamBuffer.slice(0, length);
+    scope.streamBuffer = scope.streamBuffer.slice(length);
+    if (scope.streamPrivateKey) {
+      if (/-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i.test(segment)) scope.streamPrivateKey = false;
+      continue;
+    }
+    const remaining = MAX_ASSISTANT_CHARS - scope.streamSentChars;
+    if (segment.length > remaining) {
+      scope.streamBuffer = '';
+      scope.streamStopped = true;
+      return;
+    }
+    const privateKey = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i.test(segment);
+    if (privateKey) scope.streamPrivateKey = !/-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i.test(segment);
+    const token = privateKey ? '[REDACTED PRIVATE KEY]\n'.slice(0, remaining) : safeToolText(segment, remaining);
+    scope.streamSentChars += token.length;
+    try { options.onEvent?.({ type: 'token', token, conversationId: scope.conversationId, assistantId: scope.assistantMessageId || null }); } catch { /* Presentation events are best effort. */ }
+  }
 }
 
 function requestFingerprint(content, refs) {
@@ -134,7 +205,7 @@ function schemaJson(tool) {
 }
 
 function resultText(value) {
-  const { parsed, json } = plainJson(redactTree(value), 'MCP tool result');
+  const { parsed, json } = plainJson(safeToolValue(value), 'MCP tool result');
   if (json.length <= 4_000) return parsed;
   return { truncated: true, characters: json.length };
 }
@@ -146,7 +217,7 @@ export function createChatRuntime({
   soulPath,
   dashboardBaseUrl,
   createMcp = createMCPClient,
-  stream,
+  stream = streamText,
   generate,
   contextResolver = null,
 }) {
@@ -207,6 +278,28 @@ export function createChatRuntime({
     });
   }
 
+  function readRequestTombstone(conversationId, requestId) {
+    const saved = persistence.getMeta(requestMetaKey(conversationId, requestId), null);
+    if (!saved) return null;
+    if (saved.version !== 1 || saved.conversationId !== conversationId || saved.requestId !== requestId || typeof saved.status !== 'string') {
+      throw new Error('Master request identity metadata is invalid; refusing to continue');
+    }
+    return saved;
+  }
+
+  async function writeRequestTombstone(conversationId, requestId, input) {
+    const current = readRequestTombstone(conversationId, requestId);
+    const saved = {
+      version: 1,
+      conversationId,
+      requestId,
+      ...(current || {}),
+      ...input,
+    };
+    await persistence.setMeta(requestMetaKey(conversationId, requestId), saved);
+    return saved;
+  }
+
   function serializeTurn(conversationId, operation) {
     const previous = turnQueues.get(conversationId) || Promise.resolve();
     const current = previous.catch(() => {}).then(operation);
@@ -252,7 +345,7 @@ export function createChatRuntime({
       error: null,
     };
     await mutateMetadata(context.conversationId, (metadata) => {
-      metadata.proposals = metadata.proposals.filter((item) => !['dismissed', 'completed', 'failed'].includes(item.status)).slice(-MAX_PROPOSALS + 1);
+      metadata.proposals = metadata.proposals.filter((item) => !['dismissed', 'completed', 'failed'].includes(item.status));
       const count = metadata.proposals.length;
       if (count >= MAX_PROPOSALS) throw new Error('Too many unresolved Master proposals; resolve one before creating another');
       metadata.proposals.push(proposal);
@@ -271,7 +364,11 @@ export function createChatRuntime({
   const scopedStore = new Proxy(store, {
     get(target, property) {
       if (property === 'masterMessagesFor') return (conversationId) => {
-        const messages = target.masterMessagesFor(conversationId);
+        const messages = target.masterMessagesFor(conversationId).map((message) => ({
+          ...message,
+          content: safeToolText(message.content),
+          ...(Array.isArray(message.toolCalls) ? { toolCalls: safeToolValue(message.toolCalls) } : {}),
+        }));
         const scope = turnScope.getStore();
         if (!scope || scope.conversationId !== conversationId || !scope.context || !scope.userMessageId) return messages;
         return messages.map((message) => message.id === scope.userMessageId
@@ -279,7 +376,10 @@ export function createChatRuntime({
           : message);
       };
       if (property === 'addMasterMessage') return async (input) => {
-        const message = await target.addMasterMessage(input);
+        const safeInput = input && typeof input === 'object'
+          ? { ...input, content: safeToolText(input.content), ...(Array.isArray(input.toolCalls) ? { toolCalls: safeToolValue(input.toolCalls) } : {}) }
+          : input;
+        const message = await target.addMasterMessage(safeInput);
         const scope = turnScope.getStore();
         if (scope && scope.conversationId === message.conversationId && message.role === 'user' && message.kind === 'conversation') {
           scope.userMessageId = message.id;
@@ -295,8 +395,30 @@ export function createChatRuntime({
               turn.updatedAt = new Date().toISOString();
             }
           });
+          await writeRequestTombstone(message.conversationId, scope.requestId, { userMessageId: message.id });
         }
         return message;
+      };
+      if (property === 'updateMasterMessage') return (messageId, input) => {
+        if (!input || typeof input !== 'object') return target.updateMasterMessage(messageId, input);
+        const safeInput = { ...input };
+        if (typeof safeInput.content === 'string') safeInput.content = safeToolText(safeInput.content);
+        if (Array.isArray(safeInput.toolCalls)) safeInput.toolCalls = safeToolValue(safeInput.toolCalls);
+        return target.updateMasterMessage(messageId, safeInput);
+      };
+      if (property === 'getProject') return (projectId) => {
+        const project = target.getProject(projectId);
+        if (!project) return null;
+        return {
+          ...project,
+          ...(typeof project.name === 'string' ? { name: safeToolText(project.name) } : {}),
+          ...(typeof project.objective === 'string' ? { objective: safeToolText(project.objective) } : {}),
+          ...(typeof project.definitionOfDone === 'string'
+            ? { definitionOfDone: safeToolText(project.definitionOfDone) }
+            : Array.isArray(project.definitionOfDone)
+              ? { definitionOfDone: project.definitionOfDone.map((item) => typeof item === 'string' ? safeToolText(item) : item) }
+              : {}),
+        };
       };
       const value = Reflect.get(target, property, target);
       return typeof value === 'function' ? value.bind(target) : value;
@@ -313,7 +435,16 @@ export function createChatRuntime({
         const visible = {};
         for (const [name, definition] of Object.entries(discovered)) {
           if (READ_TOOLS.has(name) && typeof definition?.execute === 'function') {
-            visible[name] = definition;
+            visible[name] = {
+              ...definition,
+              execute: async (...args) => {
+                try {
+                  return safeToolValue(await definition.execute(...args));
+                } catch (error) {
+                  throw safeToolError(error);
+                }
+              },
+            };
             continue;
           }
           if (!PROPOSAL_TOOLS.has(name) || MUTATING_TOOL_FORBIDDEN.has(name) || typeof definition?.execute !== 'function') continue;
@@ -325,8 +456,12 @@ export function createChatRuntime({
               options.abortSignal?.throwIfAborted?.();
               const scope = turnScope.getStore();
               if (!scope) throw new Error('Dashboard mutations can only be proposed during an interactive Master turn');
-              const proposal = await recordProposal(scope, name, args, definition, options.toolCallId);
-              return toolReturn({ proposalId: proposal.id, tool: name, status: 'draft_until_turn_completes' });
+              try {
+                const proposal = await recordProposal(scope, name, args, definition, options.toolCallId);
+                return toolReturn({ proposalId: proposal.id, tool: name, status: 'draft_until_turn_completes' });
+              } catch (error) {
+                throw safeToolError(error);
+              }
             },
           };
         }
@@ -354,7 +489,9 @@ export function createChatRuntime({
     persistence,
     soulPath,
     createMcp: filteredMcpClient,
-    ...(stream ? { stream: (options) => stream({ ...options, maxRetries: 0 }) } : {}),
+    // The SDK default error hook logs raw provider bodies and request context.
+    // Failures are consumed from fullStream and sanitized by this runtime.
+    stream: (options) => stream({ ...options, maxRetries: 0, onError: () => {} }),
     ...(generate ? { generate } : {}),
   });
 
@@ -363,8 +500,10 @@ export function createChatRuntime({
   async function turn(conversationId, content, options = {}) {
     if (closed) throw new Error('Master chat runtime is shutting down');
     const operation = serializeTurn(conversationId, async () => {
+      options.abortSignal?.throwIfAborted?.();
       const conversation = requireConversation(conversationId);
       const userText = cleanText(content, MAX_USER_CHARS);
+      if (containsSecretLikeText(userText)) throw new Error('Master chat text appears to contain secret-like content; remove it before sending');
       const preview = readConversationMetadata(conversationId).contextPreview;
       const requestedRefs = options.contextRefs === undefined
         ? (options.contextPreviewId && preview?.id === options.contextPreviewId ? preview.refs : [])
@@ -374,14 +513,27 @@ export function createChatRuntime({
         ? cleanText(options.requestId, 200)
         : randomUUID();
       const fingerprint = requestFingerprint(userText, refs);
-      const previous = readConversationMetadata(conversationId).turns.find((item) => item.requestId === requestId);
+      const activeKey = activeRequestKey(conversationId, requestId);
+      const savedTombstone = readRequestTombstone(conversationId, requestId);
+      const previous = savedTombstone || readConversationMetadata(conversationId).turns.find((item) => item.requestId === requestId);
       if (previous) {
         if (previous.fingerprint !== fingerprint) throw new Error('Master requestId was already used for different content');
+        if (!savedTombstone) {
+          await writeRequestTombstone(conversationId, requestId, {
+            fingerprint: previous.fingerprint,
+            status: previous.status,
+            userMessageId: previous.userMessageId || null,
+            assistantMessageId: previous.assistantMessageId || null,
+            createdAt: previous.createdAt || new Date().toISOString(),
+            updatedAt: previous.updatedAt || new Date().toISOString(),
+          });
+        }
         if (previous.status === 'completed') {
           const messages = store.masterMessagesFor(conversationId);
           return { user: messages.find((item) => item.id === previous.userMessageId) || null, assistant: messages.find((item) => item.id === previous.assistantMessageId) || null, replayed: true, requestId };
         }
         if (previous.status === 'started') {
+          await writeRequestTombstone(conversationId, requestId, { status: 'outcome_unknown', updatedAt: new Date().toISOString() });
           await mutateMetadata(conversationId, (metadata) => {
             const turnRecord = locateTurn(metadata, requestId);
             if (turnRecord?.status === 'started') { turnRecord.status = 'outcome_unknown'; turnRecord.updatedAt = new Date().toISOString(); }
@@ -421,23 +573,50 @@ export function createChatRuntime({
         throw new Error('Context changed or became unavailable after preview; review a fresh preview before sending');
       }
 
-      await mutateMetadata(conversationId, (metadata) => {
-        const unresolved = metadata.turns.filter((item) => ['started', 'outcome_unknown'].includes(item.status));
-        const resolved = metadata.turns.filter((item) => !['started', 'outcome_unknown'].includes(item.status)).slice(-Math.max(0, MAX_TURNS - unresolved.length - 1));
-        metadata.turns = [...resolved, ...unresolved];
-        if (metadata.turns.length >= MAX_TURNS) throw new Error('Master chat turn metadata is full');
-        metadata.turns.push({
-          requestId,
-          fingerprint,
-          status: 'started',
-          userMessageId: null,
-          assistantMessageId: null,
-          contextRefs: references,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          error: null,
+      try {
+        await mutateMetadata(conversationId, async (metadata) => {
+          for (const oldTurn of metadata.turns) {
+            if (!readRequestTombstone(conversationId, oldTurn.requestId)) {
+              await writeRequestTombstone(conversationId, oldTurn.requestId, {
+                fingerprint: oldTurn.fingerprint,
+                status: oldTurn.status,
+                userMessageId: oldTurn.userMessageId || null,
+                assistantMessageId: oldTurn.assistantMessageId || null,
+                createdAt: oldTurn.createdAt || new Date().toISOString(),
+                updatedAt: oldTurn.updatedAt || new Date().toISOString(),
+              });
+            }
+          }
+          const unresolved = metadata.turns.filter((item) => ['started', 'outcome_unknown'].includes(item.status));
+          const resolved = metadata.turns.filter((item) => !['started', 'outcome_unknown'].includes(item.status)).slice(-Math.max(0, MAX_TURNS - unresolved.length - 1));
+          metadata.turns = [...resolved, ...unresolved];
+          if (metadata.turns.length >= MAX_TURNS) throw new Error('Master chat turn metadata is full');
+          const now = new Date().toISOString();
+          metadata.turns.push({
+            requestId,
+            fingerprint,
+            status: 'started',
+            userMessageId: null,
+            assistantMessageId: null,
+            contextRefs: references,
+            createdAt: now,
+            updatedAt: now,
+            error: null,
+          });
+          activeRequests.add(activeKey);
+          await writeRequestTombstone(conversationId, requestId, {
+            fingerprint,
+            status: 'started',
+            userMessageId: null,
+            assistantMessageId: null,
+            createdAt: now,
+            updatedAt: now,
+          });
         });
-      });
+      } catch (error) {
+        activeRequests.delete(activeKey);
+        throw error;
+      }
 
       const scope = {
         conversationId,
@@ -448,22 +627,39 @@ export function createChatRuntime({
         userMessageId: null,
         assistantMessageId: null,
         pendingTerminalEvent: null,
+        streamBuffer: '',
+        streamSentChars: 0,
+        streamStopped: false,
+        streamPrivateKey: false,
         onEvent: (event) => {
           if (event?.type === 'start' && typeof event.assistantId === 'string') scope.assistantMessageId = event.assistantId;
           if (event?.type === 'done' || event?.type === 'error') {
-            scope.pendingTerminalEvent = event?.type === 'error' ? { ...event, error: errorText(event.error) } : event;
+            drainSafeStreamText(scope, options, true);
+            scope.pendingTerminalEvent = event?.type === 'error' ? { ...event, error: safeToolError(event.error).message } : event;
             return;
           }
-          try { options.onEvent?.(event); } catch { /* UI events are presentation only. */ }
+          if (event?.type === 'token' && typeof event.token === 'string') {
+            scope.streamBuffer += event.token;
+            drainSafeStreamText(scope, options);
+            return;
+          }
+          const safeEvent = event;
+          try { options.onEvent?.(safeEvent); } catch { /* UI events are presentation only. */ }
         },
       };
-      activeRequests.add(requestId);
       try {
         const result = await turnScope.run(scope, () => service.turn(conversationId, userText, {
           abortSignal: options.abortSignal,
           onEvent: scope.onEvent,
           skipLearning: false,
         }));
+        options.abortSignal?.throwIfAborted?.();
+        await writeRequestTombstone(conversationId, requestId, {
+          status: 'completed',
+          userMessageId: result.user.id,
+          assistantMessageId: result.assistant.id,
+          updatedAt: new Date().toISOString(),
+        });
         await mutateMetadata(conversationId, (metadata) => {
           const turnRecord = locateTurn(metadata, requestId);
           if (!turnRecord) throw new Error('Master turn metadata disappeared before completion');
@@ -487,10 +683,20 @@ export function createChatRuntime({
         }
         return { ...result, requestId };
       } catch (error) {
+        drainSafeStreamText(scope, options, true);
+        const status = options.abortSignal?.aborted || error?.name === 'AbortError' ? 'cancelled' : 'failed';
+        if (['started', 'completed'].includes(readRequestTombstone(conversationId, requestId)?.status)) {
+          await writeRequestTombstone(conversationId, requestId, {
+            status,
+            userMessageId: scope.userMessageId,
+            assistantMessageId: scope.assistantMessageId,
+            updatedAt: new Date().toISOString(),
+          }).catch(() => {});
+        }
         await mutateMetadata(conversationId, (metadata) => {
           const turnRecord = locateTurn(metadata, requestId);
           if (!turnRecord) return;
-          turnRecord.status = options.abortSignal?.aborted || error?.name === 'AbortError' ? 'cancelled' : 'failed';
+          turnRecord.status = status;
           turnRecord.userMessageId ||= scope.userMessageId;
           turnRecord.assistantMessageId ||= scope.assistantMessageId;
           turnRecord.updatedAt = new Date().toISOString();
@@ -503,14 +709,15 @@ export function createChatRuntime({
             }
           }
         }).catch(() => {});
-        if (scope.pendingTerminalEvent) {
-          try { options.onEvent?.(scope.pendingTerminalEvent); } catch { /* UI events are presentation only. */ }
-        }
+        const terminalError = scope.pendingTerminalEvent?.type === 'error'
+          ? scope.pendingTerminalEvent
+          : { type: 'error', error: errorText(error), conversationId, assistantId: scope.assistantMessageId || null };
+        try { options.onEvent?.(terminalError); } catch { /* Chat events are presentation only. */ }
         const safeError = new Error(errorText(error));
         safeError.name = error?.name === 'AbortError' ? 'AbortError' : 'Error';
         throw safeError;
       } finally {
-        activeRequests.delete(requestId);
+        activeRequests.delete(activeKey);
       }
     });
     return track(operation);
@@ -519,11 +726,12 @@ export function createChatRuntime({
   async function metadata(conversationId) {
     requireConversation(conversationId);
     let output;
-    await mutateMetadata(conversationId, (saved) => {
+    await mutateMetadata(conversationId, async (saved) => {
       for (const turnRecord of saved.turns) {
-        if (turnRecord.status === 'started' && !activeRequests.has(turnRecord.requestId)) {
+        if (turnRecord.status === 'started' && !activeRequests.has(activeRequestKey(conversationId, turnRecord.requestId))) {
           turnRecord.status = 'outcome_unknown';
           turnRecord.updatedAt = new Date().toISOString();
+          await writeRequestTombstone(conversationId, turnRecord.requestId, { status: 'outcome_unknown', updatedAt: turnRecord.updatedAt });
         }
       }
       for (const proposal of saved.proposals) {
@@ -554,9 +762,17 @@ export function createChatRuntime({
     const keys = Object.keys(input);
     if (keys.some((key) => !['contextRefs', 'model'].includes(key))) throw new Error('Unsupported Master chat configuration field');
     const hasModel = Object.hasOwn(input, 'model');
-    const modelOverride = input.model === undefined || input.model === null || input.model === ''
-      ? null
-      : cleanText(input.model, 200);
+    let modelOverride = null;
+    if (input.model !== undefined && input.model !== null && input.model !== '') {
+      modelOverride = cleanText(input.model, 200);
+      if (/[\u0000-\u001f\u007f]/.test(modelOverride) || containsSecretLikeText(modelOverride)) {
+        throw new Error('Master model must not contain control characters or secret-like content');
+      }
+      const separator = modelOverride.indexOf('/');
+      if (separator <= 0 || separator === modelOverride.length - 1) throw new Error('Master model must use provider/model format');
+      const providerId = modelOverride.slice(0, separator);
+      if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(providerId)) throw new Error('Master model provider ID is invalid');
+    }
     const hasRefs = Object.hasOwn(input, 'contextRefs');
     const refs = hasRefs ? safeReferences(input.contextRefs) : null;
     let contextPreview = undefined;
@@ -600,20 +816,25 @@ export function createChatRuntime({
     const operation = (async () => {
       requireConversation(conversationId);
       let proposal;
-      await mutateMetadata(conversationId, (saved) => {
-        proposal = saved.proposals.find((item) => item.id === proposalId) || null;
-        if (!proposal) throw new Error('Master proposal not found');
-        if (proposal.conversationId !== conversationId) throw new Error('Master proposal belongs to another conversation');
-        if (proposal.status !== 'proposed') throw new Error(`Master proposal cannot execute from status ${proposal.status}`);
-        if (!PROPOSAL_TOOLS.has(proposal.tool) || MUTATING_TOOL_FORBIDDEN.has(proposal.tool)) throw new Error('Master proposal tool is not permitted');
-        const { json } = plainJson(proposal.args, 'Proposal arguments');
-        if (json.length > MAX_PROPOSAL_ARGS_CHARS || containsSecretLikeText(proposal.args)) throw new Error('Stored proposal arguments are invalid or exceed the supported limit');
-        proposal.status = 'executing';
-        proposal.updatedAt = new Date().toISOString();
-        proposal.executionAttemptId = randomUUID();
-        proposal = structuredClone(proposal);
-      });
-      activeExecutions.add(proposal.id);
+      try {
+        await mutateMetadata(conversationId, (saved) => {
+          proposal = saved.proposals.find((item) => item.id === proposalId) || null;
+          if (!proposal) throw new Error('Master proposal not found');
+          if (proposal.conversationId !== conversationId) throw new Error('Master proposal belongs to another conversation');
+          if (proposal.status !== 'proposed') throw new Error(`Master proposal cannot execute from status ${proposal.status}`);
+          if (!PROPOSAL_TOOLS.has(proposal.tool) || MUTATING_TOOL_FORBIDDEN.has(proposal.tool)) throw new Error('Master proposal tool is not permitted');
+          const { json } = plainJson(proposal.args, 'Proposal arguments');
+          if (json.length > MAX_PROPOSAL_ARGS_CHARS || containsSecretLikeText(proposal.args)) throw new Error('Stored proposal arguments are invalid or exceed the supported limit');
+          proposal.status = 'executing';
+          proposal.updatedAt = new Date().toISOString();
+          proposal.executionAttemptId = randomUUID();
+          proposal = structuredClone(proposal);
+          activeExecutions.add(proposal.id);
+        });
+      } catch (error) {
+        if (proposal?.id) activeExecutions.delete(proposal.id);
+        throw error;
+      }
       let client = null;
       let toolCallStarted = false;
       try {
@@ -677,9 +898,26 @@ export function createChatRuntime({
     if (initialized) return;
     await service.initialize();
     for (const conversation of store.listMasterConversations()) {
-      await mutateMetadata(conversation.id, (saved) => {
+      if (conversation.projectId) {
+        const project = store.getProject(conversation.projectId);
+        if (project?.orchestration?.conversationId === conversation.id) continue;
+      }
+      const messages = store.masterMessagesFor(conversation.id);
+      if (messages.some((message) => message.role === 'system' || message.kind === 'executing' && message.role !== 'assistant')) continue;
+      await mutateMetadata(conversation.id, async (saved) => {
         for (const turnRecord of saved.turns) {
           if (turnRecord.status === 'started') { turnRecord.status = 'outcome_unknown'; turnRecord.updatedAt = new Date().toISOString(); }
+          const current = readRequestTombstone(conversation.id, turnRecord.requestId);
+          if (!current || current.status !== turnRecord.status) {
+            await writeRequestTombstone(conversation.id, turnRecord.requestId, {
+              fingerprint: turnRecord.fingerprint,
+              status: turnRecord.status,
+              userMessageId: turnRecord.userMessageId || null,
+              assistantMessageId: turnRecord.assistantMessageId || null,
+              createdAt: turnRecord.createdAt || new Date().toISOString(),
+              updatedAt: turnRecord.updatedAt || new Date().toISOString(),
+            });
+          }
         }
         for (const proposal of saved.proposals) {
           if (proposal.status === 'executing') { proposal.status = 'outcome_unknown'; proposal.updatedAt = new Date().toISOString(); }

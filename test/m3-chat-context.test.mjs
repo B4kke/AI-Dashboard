@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import fsPromises, { appendFile, mkdtemp, mkdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createChatContext } from '../server/master/chat-context.mjs';
@@ -108,6 +109,10 @@ test('file references reject binary, oversized, and secret-like source content',
   for (const path of ['binary.txt', 'large.txt', 'secret.md']) {
     await assert.rejects(() => context.resolve('c1', [{ kind: 'file', path }]), /binary|128 KiB|secret-like|forbidden segment/i, path);
   }
+  for (const value of ['actual-example-password-12345', 'actual-process.env-password-12345', 'actual-env.password-12345']) {
+    await writeFile(join(f.root, 'settings.txt'), `password=${value}`);
+    await assert.rejects(context.resolve('c1', [{ kind: 'file', path: 'settings.txt' }]), /secret-like/);
+  }
 });
 
 test('context projection is bounded and marks clipped sources', async (t) => {
@@ -119,4 +124,104 @@ test('context projection is bounded and marks clipped sources', async (t) => {
   assert.ok(result.totalChars <= 10_000);
   assert.equal(result.references[0].truncated, true);
   assert.ok(result.references[0].hash);
+});
+
+test('evidence freshness tracks canonical changes rather than the bundle generation clock', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  t.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 9, 23) });
+  const context = createChatContext({ store: f.store });
+  const refs = [{ kind: 'evidence', id: f.task.id }];
+  const first = await context.resolve('c1', refs);
+  t.mock.timers.tick(1_000);
+  const unchanged = await context.resolve('c1', refs);
+  assert.equal(unchanged.references[0].revision, first.references[0].revision);
+  assert.equal(unchanged.references[0].hash, first.references[0].hash);
+
+  f.task.state = 'ready_to_merge';
+  t.mock.timers.tick(1_000);
+  const changed = await context.resolve('c1', refs);
+  assert.notEqual(changed.references[0].revision, first.references[0].revision);
+  assert.notEqual(changed.references[0].hash, first.references[0].hash);
+});
+
+test('sources omitted by the shared context budget remain visibly marked as truncated', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  f.task.description = 'D'.repeat(20_000);
+  const result = await createChatContext({ store: f.store }).resolve('c1', [
+    { kind: 'task', id: f.task.id }, { kind: 'run', id: f.run.id }, { kind: 'research', id: f.research.id },
+  ]);
+  assert.equal(result.totalChars, 10_000);
+  assert.equal(result.references.length, 3);
+  assert.ok(result.references.every((reference) => reference.truncated));
+  assert.doesNotMatch(result.context, /Option A is simpler/);
+});
+
+test('file paths reject platform-ambiguous segments before accessing the filesystem', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  const context = createChatContext({ store: f.store });
+  for (const path of ['docs /README.md', 'docs./README.md', 'CON.md', 'a?.md', 'a*.md']) {
+    await assert.rejects(context.resolve('c1', [{ kind: 'file', path }]), /path|segment/i, path);
+  }
+});
+
+test('a file growing after stat cannot cause a read beyond the context byte budget', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  const path = join(f.root, 'growing.md');
+  await writeFile(path, 'initial content');
+  const originalOpen = fsPromises.open;
+  t.after(() => { fsPromises.open = originalOpen; syncBuiltinESMExports(); });
+  let bytesRead = 0;
+  fsPromises.open = async (...args) => {
+    const handle = await originalOpen(...args);
+    if (args[0] !== path) return handle;
+    let grown = false;
+    return new Proxy(handle, { get(target, key) {
+      if (key === 'stat') return async (...options) => {
+        const stat = await target.stat(...options);
+        if (!grown) { grown = true; await appendFile(path, 'A'.repeat(512 * 1024)); }
+        return stat;
+      };
+      if (key === 'readFile') return async (...options) => { const data = await target.readFile(...options); bytesRead += data.length; return data; };
+      if (key === 'read') return async (...options) => { const result = await target.read(...options); bytesRead += result.bytesRead; return result; };
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+  };
+  syncBuiltinESMExports();
+  await assert.rejects(createChatContext({ store: f.store }).resolve('c1', [{ kind: 'file', path: 'growing.md' }]), /changed|limit/);
+  assert.ok(bytesRead <= 128 * 1024 + 1, `read ${bytesRead} bytes from a concurrently growing file`);
+});
+
+test('a parent symlink swap at open cannot attach an outside file after the path is restored', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  const outside = await mkdtemp(join(tmpdir(), 'ai-dashboard-context-race-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  const parent = join(f.root, 'docs');
+  const backup = join(f.root, 'docs-backup');
+  const candidate = join(parent, 'note.md');
+  await mkdir(parent);
+  await writeFile(candidate, 'inside');
+  await writeFile(join(outside, 'note.md'), 'EXTERNAL FILE MUST NOT BE ATTACHED');
+  const probe = join(f.root, 'symlink-probe');
+  try { await symlink(outside, probe, process.platform === 'win32' ? 'junction' : 'dir'); await unlink(probe); }
+  catch (error) {
+    if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) return t.skip(`Directory symlinks unavailable: ${error.code}`);
+    throw error;
+  }
+  const originalOpen = fsPromises.open;
+  t.after(() => { fsPromises.open = originalOpen; syncBuiltinESMExports(); });
+  fsPromises.open = async (...args) => {
+    if (args[0] !== candidate) return originalOpen(...args);
+    await rename(parent, backup);
+    await symlink(outside, parent, process.platform === 'win32' ? 'junction' : 'dir');
+    try { return await originalOpen(...args); }
+    finally { await unlink(parent); await rename(backup, parent); }
+  };
+  syncBuiltinESMExports();
+  await assert.rejects(createChatContext({ store: f.store }).resolve('c1', [{ kind: 'file', path: 'docs/note.md' }]), /changed/);
 });

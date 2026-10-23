@@ -22,7 +22,7 @@ function referenceChoice(value: Record<string, unknown>): MasterContextChoice | 
       : null;
   if (!ref) return null;
   const status = value.stale === true ? 'stale' : value.available === false ? 'unavailable' : typeof value.revision === 'string' ? `rev ${value.revision}` : undefined;
-  return { ref, label: typeof value.label === 'string' ? value.label : (ref.kind === 'file' ? ref.path : ref.id), ...(status ? { status } : {}) };
+  return { ref, label: typeof value.label === 'string' ? value.label : (ref.kind === 'file' ? ref.path : ref.id), ...(status ? { status } : {}), truncated: value.truncated === true };
 }
 
 function proposalTitle(proposal: MasterChatMetadata['proposals'][number]) {
@@ -56,20 +56,28 @@ export default function MasterChatContainer({ state, setup, routeId, projectId, 
   const [metadata, setMetadata] = useState<MasterChatMetadata | null>(null);
   const [memories, setMemories] = useState<MasterMemoryItem[]>([]);
   const activeControllers = useRef(new Map<string, AbortController>());
+  const selectedConversationId = useRef(conversationId);
+  selectedConversationId.current = conversationId;
+  const metadataRequestIds = useRef(new Map<string, number>());
 
   const refreshMetadata = useCallback(async (id: string) => {
-    const latest = await masterChatApi.metadata(id);
-    if (id === conversationId) setMetadata(latest);
-    return latest;
-  }, [conversationId]);
+    const requestId = (metadataRequestIds.current.get(id) || 0) + 1;
+    metadataRequestIds.current.set(id, requestId);
+    try {
+      const latest = await masterChatApi.metadata(id);
+      if (id === selectedConversationId.current && latest.conversationId === id && requestId === metadataRequestIds.current.get(id)) setMetadata(latest);
+      return latest;
+    } catch (error) {
+      if (id === selectedConversationId.current && requestId === metadataRequestIds.current.get(id)) setMetadata(null);
+      throw error;
+    }
+  }, []);
 
   useEffect(() => {
-    let active = true;
     setMetadata(null);
-    if (!conversationId) return () => { active = false; };
-    masterChatApi.metadata(conversationId).then((latest) => { if (active) setMetadata(latest); }).catch(() => { if (active) setMetadata(null); });
-    return () => { active = false; };
-  }, [conversationId, state.masterMessages.length]);
+    if (!conversationId) return;
+    void refreshMetadata(conversationId).catch(() => {});
+  }, [conversationId, state.masterMessages.length, refreshMetadata]);
 
   useEffect(() => {
     let active = true;
@@ -88,13 +96,14 @@ export default function MasterChatContainer({ state, setup, routeId, projectId, 
     ...researchRuns.map((run) => ({ ref: { kind: 'research' as const, id: run.id }, label: `Research: ${run.prompt.slice(0, 80)}`, status: run.status })),
     ...tasks.map((task) => ({ ref: { kind: 'evidence' as const, id: task.id }, label: `Evidence: ${task.title}`, status: task.state })),
   ];
+  const currentMetadata = metadata?.conversationId === conversationId ? metadata : null;
   const contextByMessageId: Record<string, MasterContextChoice[]> = {};
-  for (const turn of metadata?.turns || []) {
+  for (const turn of currentMetadata?.turns || []) {
     if (!turn.userMessageId || !Array.isArray(turn.contextRefs)) continue;
     contextByMessageId[turn.userMessageId] = turn.contextRefs.map(referenceChoice).filter((choice): choice is MasterContextChoice => Boolean(choice));
   }
   const turnMetadata: Record<string, MasterTurnMetadata> = {};
-  for (const turn of metadata?.turns || []) {
+  for (const turn of currentMetadata?.turns || []) {
     if (!turn.assistantMessageId) continue;
     turnMetadata[turn.assistantMessageId] = {
       status: turn.status,
@@ -105,7 +114,7 @@ export default function MasterChatContainer({ state, setup, routeId, projectId, 
     };
   }
   const proposalStatuses = new Set<MasterProposal['status']>(['draft', 'proposed', 'executing', 'outcome_unknown', 'completed', 'dismissed', 'failed', 'needs_input']);
-  const proposals: MasterProposal[] = (metadata?.proposals || []).map((proposal) => ({
+  const proposals: MasterProposal[] = (currentMetadata?.proposals || []).map((proposal) => ({
     ...proposal,
     title: proposalTitle(proposal),
     summary: proposal.error || `Review the saved arguments for ${proposal.tool}.`,
@@ -115,9 +124,9 @@ export default function MasterChatContainer({ state, setup, routeId, projectId, 
     ...(setup.integrations?.modelProviders || []).flatMap((provider: any) => (provider.lastModels || []).map((model: any) => `${provider.id}/${model.id}`)),
     ...(setup.masterModel ? [setup.masterModel] : []),
   ])];
-  const currentModel = metadata?.model || setup.masterModel || '';
-  const contextPreview = (metadata?.contextPreview?.references || []).map((item) => referenceChoice(item)).filter((choice: MasterContextChoice | null): choice is MasterContextChoice => Boolean(choice));
-  const busy = (metadata?.turns || []).some((turn) => turn.status === 'started');
+  const currentModel = currentMetadata?.model || setup.masterModel || '';
+  const contextPreview = (currentMetadata?.contextPreview?.references || []).map((item) => referenceChoice(item)).filter((choice: MasterContextChoice | null): choice is MasterContextChoice => Boolean(choice));
+  const busy = (currentMetadata?.turns || []).some((turn) => turn.status === 'started');
 
   const createConversation = async (input: { title: string; projectId?: string }) => {
     const conversation = await masterChatApi.createConversation(input);
@@ -125,8 +134,8 @@ export default function MasterChatContainer({ state, setup, routeId, projectId, 
     return conversation;
   };
   const chooseConversation = (id: string) => {
-    if (id) location.hash = routeFor(projectId, id);
-    else void createConversation({ title: 'New conversation', ...(projectId ? { projectId } : {}) });
+    if (id) { location.hash = routeFor(projectId, id); return; }
+    return createConversation({ title: 'New conversation', ...(projectId ? { projectId } : {}) });
   };
   const refreshMemory = async () => {
     const result = await api.masterMemory(projectId);
@@ -165,6 +174,7 @@ export default function MasterChatContainer({ state, setup, routeId, projectId, 
 
   return <MasterChat
     conversationId={conversationId}
+    invalidConversationRoute={Boolean(routeId && !selectedConversation)}
     projectId={projectId}
     projectName={projectName}
     conversations={conversations}

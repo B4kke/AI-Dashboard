@@ -219,7 +219,7 @@ Still planned:
 - image/file uploads and broad binary attachments (the current file context is a safe project-relative text reference only),
 - per-agent persona/memory and richer adaptive fleet rebalancing (M3A/M3C).
 
-M3B plan-mode/context follow-up is implemented on `codex/m3-chat-platform` and exact-head verified on `efabdabac9ca832218c95ec74d1ee9174dbcf03f` (PR #9, stacked on the engine-boundary PR #8):
+M3B plan-mode/context follow-up is implemented on `codex/m3-chat-platform` (PR #9, stacked on the engine-boundary PR #8). The initial implementation was exact-head verified on `efabdabac9ca832218c95ec74d1ee9174dbcf03f`; current PR checks qualify subsequent review fixes:
 
 - separate interactive chat runtime leaves the beta-tested automatic planner service and its tool path unchanged,
 - bounded read tools and `propose_<tool>` wrappers; explicit proposal-ID execution revalidates the saved schema/arguments and invokes the original tool once without another model call,
@@ -227,6 +227,9 @@ M3B plan-mode/context follow-up is implemented on `codex/m3-chat-platform` and e
 - explicit one-use previews for at most five Task/Run/Research/evidence/text-file references and 10,000 total resolved characters, with Project containment, source-freshness, secret and filesystem checks,
 - per-conversation model override, abort-backed Stop, new-request Retry and actual-usage-only display,
 - inspectable/editable/deletable memory and read-only specialist summaries in the chat workspace; no StateStore schema change,
+- review fixes preserve durable request identity beyond visible-history limits, retain unresolved proposals, exclude planner/system history safely during startup, disable production SDK retries and sanitize model-facing/persisted chat data,
+- evidence-preview freshness ignores generated timestamps; bounded file reads and identity rechecks reject growing files and parent-symlink swaps; dropped context is visibly marked truncated,
+- browser regressions cover duplicate sends, cancellation/retry, invalid routes, stale async metadata/previews, canonical saved answers and visible proposal/memory errors; phone controls preserve new-chat access, contained model selection and readable context/actions,
 - deterministic M3 HTTP/runtime/context/UI/boundary tests and a production Vite build pass locally,
 - exact-head Linux and Windows Actions, including full deterministic suites and rendered UI smoke, passed in [run 39982662420](https://github.com/B4kke/AI-Dashboard/actions/runs/39982662420); the rendered chat was also visually inspected at 1440, 768 and 390 px.
 

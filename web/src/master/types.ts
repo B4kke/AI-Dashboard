@@ -4,7 +4,7 @@ export type MasterChatMode = 'plan';
 export type MasterContextRef =
   | { kind: 'task' | 'run' | 'research' | 'evidence'; id: string }
   | { kind: 'file'; path: string };
-export type MasterContextChoice = { ref: MasterContextRef; label: string; status?: string; updatedAt?: string };
+export type MasterContextChoice = { ref: MasterContextRef; label: string; status?: string; updatedAt?: string; truncated?: boolean };
 export type MasterProposal = {
   id: string;
   conversationId: string;
@@ -51,6 +51,7 @@ export type MasterChatTransport = {
 
 export type MasterChatProps = {
   conversationId?: string;
+  invalidConversationRoute?: boolean;
   projectId?: string;
   projectName?: string;
   conversations?: MasterConversation[];
@@ -70,5 +71,5 @@ export type MasterChatProps = {
   onOpenTask?: (taskId: string) => void;
   onNavigate?: (destination: 'tasks' | 'research' | 'evidence' | 'agents' | 'needs_input') => void;
   onConversationCreated?: (conversation: MasterConversation) => void;
-  onConversationSelected?: (conversationId: string) => void;
+  onConversationSelected?: (conversationId: string) => void | Promise<unknown>;
 };

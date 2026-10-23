@@ -23,7 +23,9 @@ test('M3 Master chat keeps model content and user actions inside safe explicit U
   assert.match(component, /sessionStorage\.setItem\(draftStoreKey, value\)/);
   assert.match(component, /m3-master-draft:\$\{projectId \|\| 'global'\}/);
   assert.match(component, /props\.transport\?\.stop/);
-  assert.match(component, /send\(undefined, lastUserMessage\.content\)/);
+  assert.match(component, /send\(undefined, retryContent\)/);
+  assert.match(component, /retryContent: content/);
+  assert.match(component, /sendGuard\.current/);
   assert.match(component, /contextPreviewId: sendPreviewId/);
   assert.match(component, /maxLength=\{8000\}/);
   assert.match(component, /className="m3-empty master-empty"/);
