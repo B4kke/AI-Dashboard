@@ -11,7 +11,7 @@ function history() {
       { id: 'w2', taskId: 't', status: 'completed', checkpointHead: 'green' },
     ],
     supervisors: [
-      { id: 's1', taskId: 't', status: 'completed', parentRunId: 'w1', workerHead: 'red', result: { verdict: 'reiterate' } },
+      { id: 's1', taskId: 't', status: 'completed', parentRunId: 'w1', workerHead: 'red', result: { verdict: 'changes_requested' } },
       { id: 's2', taskId: 't', status: 'merged', parentRunId: 'w2', workerHead: 'green', result: { verdict: 'approve' } },
     ],
   };
@@ -73,6 +73,7 @@ test('review counts, provider failures, and unbound verdicts cannot prove superv
   const changes = {
     'failed earlier supervisor': (h) => { h.supervisors[0].status = 'failed'; },
     'approve without reject': (h) => { h.supervisors[0].result.verdict = 'approve'; },
+    'legacy reiterate alias': (h) => { h.supervisors[0].result.verdict = 'reiterate'; },
     'wrong rejected parent': (h) => { h.supervisors[0].parentRunId = 'unknown'; },
     'wrong rejected SHA': (h) => { h.supervisors[0].workerHead = 'green'; },
     'wrong rejected Task': (h) => { h.supervisors[0].taskId = 'other'; },

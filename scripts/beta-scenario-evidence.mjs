@@ -37,7 +37,7 @@ export function assertSupervisorRejectionEvidence(evidence) {
   }
   for (const review of evidence.supervisors.slice(0, -1)) {
     if (!review?.id || review.taskId !== evidence.task.id || review.status !== 'completed'
-      || review.result?.verdict !== 'reiterate') continue;
+      || review.result?.verdict !== 'changes_requested') continue;
     const worker = evidence.workers.slice(0, -1).find((item) => item?.id === review.parentRunId
       && item.taskId === evidence.task.id && item.status === 'completed'
       && item.checkpointHead && item.checkpointHead === review.workerHead
@@ -49,5 +49,5 @@ export function assertSupervisorRejectionEvidence(evidence) {
       approvedSupervisorRunId: approval.id,
     };
   }
-  throw new Error('Supervisor repair did not prove an earlier checkpoint-bound reiterate verdict');
+  throw new Error('Supervisor repair did not prove an earlier checkpoint-bound changes_requested verdict');
 }
