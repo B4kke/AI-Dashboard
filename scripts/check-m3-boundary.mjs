@@ -12,6 +12,16 @@ export const SDK_ROOTS = Object.freeze([
 ]);
 
 const APPROVED_ADDITIONS = Object.freeze({ 'react-markdown': '10.1.0', 'remark-gfm': '4.0.1' });
+const APPROVED_RENDERER_GRAPH_SHA256 = '2349168d1f48b28b287d29936dde957b2e42fccb390a632de0a340c21909ade6';
+const MANIFEST_DEPENDENCY_METADATA = Object.freeze([
+  'optionalDependencies', 'peerDependencies', 'peerDependenciesMeta',
+  'bundledDependencies', 'bundleDependencies', 'workspaces', 'overrides', 'resolutions',
+  'os', 'cpu', 'libc',
+]);
+const LOCK_ROOT_METADATA = Object.freeze([
+  'name', 'version', 'dependencies', 'devDependencies', 'optionalDependencies',
+  'peerDependencies', 'peerDependenciesMeta', 'engines', 'os', 'cpu', 'libc',
+]);
 const MARKERS_BY_FILE = Object.freeze({
   'server/index.mjs': new Set(['IMPORTS', 'RUNTIME', 'HTTP', 'SHUTDOWN']),
   'server/http-server.mjs': new Set(['IMPORTS', 'ROUTE_SETUP', 'ROUTE']),
@@ -208,6 +218,36 @@ export function sdkGraph(lock, packageJson) {
   return JSON.stringify(stable(nodes.sort((left, right) => `${left.name}@${left.version}:${left.integrity}`.localeCompare(`${right.name}@${right.version}:${right.integrity}`))));
 }
 
+export function lockedDependencyGraph(lock, roots) {
+  const packages = lockPackages(lock);
+  const root = packages[''];
+  if (!root) throw new Error('package-lock is missing its root package entry');
+  const queue = [];
+  for (const name of roots) {
+    const declared = root.dependencies?.[name];
+    const location = resolveLockedPackage(packages, '', name);
+    if (!declared || !location) throw new Error(`Locked dependency graph root is missing: ${name}`);
+    queue.push(location);
+  }
+  const seen = new Set();
+  const nodes = [];
+  while (queue.length) {
+    const location = queue.shift();
+    if (seen.has(location)) continue;
+    seen.add(location);
+    const entry = packages[location];
+    if (!entry?.version) throw new Error(`Locked dependency graph package has no version: ${location}`);
+    nodes.push({ location, entry });
+    for (const kind of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+      for (const name of Object.keys(entry[kind] || {}).sort()) {
+        const resolved = resolveLockedPackage(packages, location, name);
+        if (resolved) queue.push(resolved);
+      }
+    }
+  }
+  return JSON.stringify(stable(nodes.sort((left, right) => left.location.localeCompare(right.location))));
+}
+
 export function validateRootManifest(baseline, current) {
   for (const key of ['name', 'version', 'type', 'engines', 'scripts']) {
     if (JSON.stringify(stable(baseline[key])) !== JSON.stringify(stable(current[key]))) {
@@ -225,6 +265,48 @@ export function validateRootManifest(baseline, current) {
         throw new Error(`M3 boundary forbids adding ${field}.${name}@${version}`);
       }
     }
+  }
+  for (const field of MANIFEST_DEPENDENCY_METADATA) {
+    if (JSON.stringify(stable(baseline[field])) !== JSON.stringify(stable(current[field]))) {
+      throw new Error(`M3 boundary forbids changing package.json ${field}`);
+    }
+  }
+}
+
+export function validateLockRootMetadata(manifest, lock) {
+  const root = lockPackages(lock)[''];
+  if (!root) throw new Error('package-lock is missing its root package entry');
+  for (const field of LOCK_ROOT_METADATA) {
+    if (JSON.stringify(stable(manifest[field])) !== JSON.stringify(stable(root[field]))) {
+      throw new Error(`M3 boundary: package-lock root ${field} does not match package.json`);
+    }
+  }
+}
+
+export function validateLockAdditions(baselineLock, currentLock, manifest) {
+  const baselinePackages = lockPackages(baselineLock);
+  const currentPackages = lockPackages(currentLock);
+  const rendererNames = Object.keys(APPROVED_ADDITIONS).filter((name) => manifest.dependencies?.[name] === APPROVED_ADDITIONS[name]);
+  if (rendererNames.length !== 0 && rendererNames.length !== Object.keys(APPROVED_ADDITIONS).length) {
+    throw new Error('M3 boundary: approved Markdown renderer dependencies must be added as a pair');
+  }
+
+  const rendererGraph = rendererNames.length ? JSON.parse(lockedDependencyGraph(currentLock, rendererNames)) : [];
+  const rendererLocations = new Set(rendererGraph.map(({ location }) => location));
+  if (rendererNames.length && hash(JSON.stringify(rendererGraph)) !== APPROVED_RENDERER_GRAPH_SHA256) {
+    throw new Error('M3 boundary: approved Markdown renderer dependency graph changed');
+  }
+  for (const [location, entry] of Object.entries(baselinePackages)) {
+    if (location === '') continue;
+    const currentEntry = currentPackages[location];
+    if (!currentEntry) throw new Error(`M3 boundary: package-lock baseline entry was removed: ${location}`);
+    if (!rendererLocations.has(location) && JSON.stringify(stable(entry)) !== JSON.stringify(stable(currentEntry))) {
+      throw new Error(`M3 boundary: package-lock baseline entry changed outside the approved renderer graph: ${location}`);
+    }
+  }
+  for (const location of Object.keys(currentPackages)) {
+    if (location === '' || Object.hasOwn(baselinePackages, location) || rendererLocations.has(location)) continue;
+    throw new Error(`M3 boundary: new package-lock entry is outside the approved renderer graph: ${location}`);
   }
 }
 
@@ -377,6 +459,9 @@ export function validateBoundary(root) {
   validateRootManifest(baselineManifest, currentManifest);
   const baselineLock = JSON.parse(baselineText(root, 'package-lock.json'));
   const currentLock = JSON.parse(readFileSync(resolve(root, 'package-lock.json'), 'utf8'));
+  validateLockRootMetadata(baselineManifest, baselineLock);
+  validateLockRootMetadata(currentManifest, currentLock);
+  validateLockAdditions(baselineLock, currentLock, currentManifest);
   if (sdkGraph(baselineLock, baselineManifest) !== sdkGraph(currentLock, currentManifest)) {
     throw new Error('M3 boundary: an existing AI, MCP, OpenCode, GitHub, or Zod SDK dependency graph changed');
   }
