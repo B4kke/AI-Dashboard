@@ -350,7 +350,7 @@ Implemented and level-3 verified on P0 head `f959a7a` (push `33020151327` + PR `
 - mobile width-contract is fail-closed; rendered smoke covers `/#/master` (setup card), `/#/projects`, `/#/project/:id`, `/#/master/:id` and `/#/system` on 1440/768/390,
 - production `npm audit --omit=dev --audit-level=high` is gated in CI; lockfile is pinned and refreshed via `p0-lock-and-verify.yml`.
 
-Still planned: richer Master attachments, per-agent persona/memory, adaptive live-work rebalancing (M3A/M3C/M3E), broader provider/harness breadth and remote/public topology. See Issue #1 for the remaining real PC-beta E2E gate.
+Still planned: richer Master attachments, per-agent persona/memory, adaptive live-work rebalancing (M3A/M3C/M3E), broader provider/harness breadth and remote/public topology. The real PC-beta E2E gate is complete; see the qualification record above and Issue #1 for its tracking history.
 
 ## Immediate verification gates
 
