@@ -70,6 +70,8 @@ function safeToolValue(value, depth = 0) {
   }
   try {
     const json = JSON.stringify(output);
+    // A credential can be split between an object key and its string value.
+    if (containsSecretLikeText(json)) return { redacted: '[REDACTED SECRET-LIKE CONTENT]' };
     if (json.length > 24_000) return { truncated: true, characters: json.length };
   } catch {
     return { truncated: true, reason: 'not_serializable' };

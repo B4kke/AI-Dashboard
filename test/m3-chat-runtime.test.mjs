@@ -46,11 +46,11 @@ async function fixture({ contextResolver = null, beforeText = null, assistantTex
     calls.maxRetries.push(config.maxRetries);
     return {
       tools: async () => ({
-        dashboard_status: tool('status', { type: 'object', properties: {}, additionalProperties: false }, async () => ({ status: 'ok', note: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789' })),
+        dashboard_status: tool('status', { type: 'object', properties: {}, additionalProperties: false }, async () => ({ status: 'ok', note: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789', nested: { password: 'structured-read-secret-0123456789' } })),
         task_get: tool('task detail', { type: 'object', properties: {}, additionalProperties: false }, async () => { throw new Error('failed with ghp_abcdefghijklmnopqrstuvwxyz0123456789'); }),
         task_create: tool('create task', {
           type: 'object', properties: { title: { type: 'string' } }, required: ['title'], additionalProperties: false,
-        }, async (args) => { calls.mutation += 1; calls.executeArgs = structuredClone(args); return { taskId: 'task-created', token: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789', detail: 'password=do-not-persist-this-value' }; }),
+        }, async (args) => { calls.mutation += 1; calls.executeArgs = structuredClone(args); return { taskId: 'task-created', token: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789', detail: 'password=do-not-persist-this-value', nested: { password: 'structured-mutation-secret-0123456789' } }; }),
         task_resolve_input: tool('resolve input', { type: 'object', properties: {}, additionalProperties: false }, async () => { throw new Error('must never run'); }),
       }),
       close: async () => {},
@@ -103,6 +103,7 @@ test('interactive Master proposes actions for review and executes the exact save
     assert.deepEqual(f.calls.executeArgs, { title: 'Prepare release' });
     assert.doesNotMatch(JSON.stringify(executed.result), /ghp_abcdefghijklmnopqrstuvwxyz/);
     assert.doesNotMatch(JSON.stringify(executed.result), /do-not-persist-this-value/);
+    assert.doesNotMatch(JSON.stringify(executed.result), /structured-mutation-secret/);
     assert.equal(f.calls.stream, 1, 'Execute must not make another model call');
     assert.ok(f.calls.maxRetries.every((value) => value === 0));
     await assert.rejects(f.runtime.executeProposal(f.conversation.id, proposal.id), /cannot execute/);
@@ -119,6 +120,7 @@ test('tool outputs, errors, and persisted proposal progress metadata redact secr
     assert.match(f.calls.system, /REDACTED/);
     const readResult = await f.calls.modelTools.dashboard_status.execute({});
     assert.doesNotMatch(JSON.stringify(readResult), /ghp_abcdefghijklmnopqrstuvwxyz/);
+    assert.doesNotMatch(JSON.stringify(readResult), /structured-read-secret/);
     assert.match(JSON.stringify(readResult), /REDACTED/);
     await assert.rejects(f.calls.modelTools.task_get.execute({}), (error) => {
       assert.doesNotMatch(error.message, /ghp_abcdefghijklmnopqrstuvwxyz/);
