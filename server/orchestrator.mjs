@@ -23,6 +23,9 @@ import {
 
 const ACTIVE_RUN_STATUSES = new Set(['preparing', 'running', 'retrying', 'dispatch_unknown']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'merged', 'failed', 'aborted']);
+const PULL_REQUEST_IDENTITY_RETRY_DELAYS_MS = Object.freeze([250, 500, 1_000, 2_000]);
+
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 function minutesSince(iso) {
   if (!iso) return 0;
@@ -539,7 +542,16 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
         }));
       }
       if (!pull?.number) throw new Error('GitHub did not return a pull request number');
-      const evidence = await github.pullRequestEvidence({ repository: expected.fullName, number: pull.number });
+      let evidence;
+      for (let attempt = 0; attempt <= PULL_REQUEST_IDENTITY_RETRY_DELAYS_MS.length; attempt += 1) {
+        evidence = await github.pullRequestEvidence({ repository: expected.fullName, number: pull.number });
+        if (branchEvidenceMatches(project, worker, evidence)) break;
+        const retryDelayMs = PULL_REQUEST_IDENTITY_RETRY_DELAYS_MS[attempt];
+        if (retryDelayMs === undefined) break;
+        // GitHub may briefly return the previous PR head after a successful branch push.
+        // Re-read boundedly, but publish only after every branch/head/base identity is exact.
+        await sleep(retryDelayMs);
+      }
       if (!branchEvidenceMatches(project, worker, evidence)) throw new Error('GitHub PR branch/head identity does not match the verified worker checkpoint');
       const now = new Date().toISOString();
       const publication = {
@@ -688,12 +700,12 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
       const feedback = result.requiredChanges.join('\n- ') || result.summary;
       const exhausted = Number(task.iteration || 0) >= project.autonomy.maxTaskIterations;
       return (await settle(
-        terminalRunPatch({ status: 'completed', result, assistantText, evidence: { supervisor: result } }),
+        terminalRunPatch({ status: 'completed', result, assistantText, workerHead: worker.checkpointHead, evidence: { supervisor: result } }),
         { state: exhausted ? 'needs_input' : 'backlog', supervisorFeedback: feedback || 'Supervisor requested another iteration.' },
       )).applied;
     }
     return (await settle(
-      terminalRunPatch({ status: 'completed', result, assistantText, evidence: { supervisor: result } }),
+      terminalRunPatch({ status: 'completed', result, assistantText, workerHead: worker.checkpointHead, evidence: { supervisor: result } }),
       { state: 'needs_input', supervisorFeedback: result.summary || 'Supervisor blocked autonomous progress.' },
     )).applied;
   }
@@ -1010,7 +1022,11 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
 
     const fresh = store.snapshot();
     for (const task of fresh.tasks) {
-      const active = fresh.runs.some((run) => run.taskId === task.id && ['running', 'retrying', 'preparing'].includes(run.status));
+      const active = fresh.runs.some((run) => run.taskId === task.id && (
+        ACTIVE_RUN_STATUSES.has(run.status)
+        || run.dispatchUncertain === true
+        || Boolean(run.quarantineReason)
+      ));
       if (task.state === 'reviewing' && !active) {
         await store.updateTask(task.id, { state: 'awaiting_review', supervisorFeedback: 'Recovered review state after process restart.' });
         actions.push({ type: 'task.review_recovered', taskId: task.id });

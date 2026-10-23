@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
+import { attachBetaProcessLog } from './beta-process-log.mjs';
+import { GitHubClient } from '../server/integrations/github.mjs';
+import { assertCiRepairEvidence, assertGitHubOutageEvidence, assertSupervisorRejectionEvidence } from './beta-scenario-evidence.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -133,12 +135,18 @@ function exactGitHubRemoteSet(value, expectedRepository) {
   return urls.length === 1 && parseGitHubRemote(urls[0]) === expectedRepository;
 }
 
-export function calculateOverallResult(scenarios = {}) {
+export function calculateOverallResult(scenarios = {}, { mode = 'full', chaos = false, includeMcp = true } = {}) {
+  if (!scenarios || typeof scenarios !== 'object' || Array.isArray(scenarios)) return 'incomplete';
   const values = Object.values(scenarios);
   if (values.some((item) => item?.status === 'failed')) return 'failed';
   if (values.some((item) => item?.status === 'blocked')) return 'blocked';
-  if (values.length && values.every((item) => ['passed', 'skipped'].includes(item?.status))) return 'passed';
-  return 'incomplete';
+  if (!['smoke', 'full'].includes(mode)) return 'incomplete';
+  const required = ['repository_fixture', 'opencode_health', 'exploration_project', 'happy_path'];
+  if (mode === 'full') required.push('ci_failure_repair', 'supervisor_rejection', 'dashboard_restart_in_flight', 'moved_base_branch', 'abandoned_worktree', 'github_api_outage');
+  if (chaos) required.push('opencode_outage');
+  if (includeMcp) required.push('opencode_mcp_interop');
+  if (required.some((name) => scenarios[name]?.status !== 'passed')) return 'incomplete';
+  return values.every((item) => ['passed', 'skipped'].includes(item?.status)) ? 'passed' : 'incomplete';
 }
 
 export function buildBetaTaskSpecs(sessionId) {
@@ -193,7 +201,7 @@ export function buildBetaTaskSpecs(sessionId) {
 
 export function renderBetaReport(session) {
   const rows = Object.entries(session.scenarios || {}).map(([name, item]) => `| ${name} | ${item.status} | ${String(item.summary || '').replaceAll('|', '\\|')} |`);
-  return `# AI Dashboard PC beta report\n\n- Result: **${calculateOverallResult(session.scenarios)}**\n- Session: \`${session.id}\`\n- Mode: \`${session.mode}\`\n- Chaos: \`${session.chaos === true ? 'enabled' : 'disabled'}\`\n- Dashboard commit: \`${session.dashboardCommit || 'unknown'}\`\n- Repository: \`${session.repository}\`\n- Base branch: \`${session.baseBranch}\`\n- Started: ${session.startedAt}\n- Updated: ${session.updatedAt}\n\n| Scenario | Status | Summary |\n|---|---|---|\n${rows.join('\n')}\n\n## Evidence\n\n\`\`\`json\n${JSON.stringify(session.evidence || {}, null, 2)}\n\`\`\`\n`;
+  return `# AI Dashboard PC beta report\n\n- Result: **${calculateOverallResult(session.scenarios, session)}**\n- Session: \`${session.id}\`\n- Mode: \`${session.mode}\`\n- Chaos: \`${session.chaos === true ? 'enabled' : 'disabled'}\`\n- Dashboard commit: \`${session.dashboardCommit || 'unknown'}\`\n- Repository: \`${session.repository}\`\n- Base branch: \`${session.baseBranch}\`\n- Started: ${session.startedAt}\n- Updated: ${session.updatedAt}\n\n| Scenario | Status | Summary |\n|---|---|---|\n${rows.join('\n')}\n\n## Evidence\n\n\`\`\`json\n${JSON.stringify(session.evidence || {}, null, 2)}\n\`\`\`\n`;
 }
 
 async function git(cwd, args, timeoutMs = 120_000) {
@@ -240,6 +248,11 @@ export class BetaHarness {
     this.dashboard = null;
     this.openCode = null;
     this.openCodeOwned = false;
+    // V2 standalone servers are password-protected even without explicit
+    // configuration. Keep one credential in memory across owned restarts.
+    this.managedOpenCodePassword = config.manageOpenCode
+      ? (process.env.OPENCODE_SERVER_PASSWORD || process.env.OPENCODE_PASSWORD || randomBytes(32).toString('base64url'))
+      : null;
     this.dashboardLog = null;
     this.openCodeLog = null;
   }
@@ -248,7 +261,7 @@ export class BetaHarness {
 
   async persist() {
     this.session.updatedAt = new Date().toISOString();
-    this.session.result = calculateOverallResult(this.session.scenarios);
+    this.session.result = calculateOverallResult(this.session.scenarios, this.session);
     await mkdir(dirname(this.config.sessionFile), { recursive: true });
     const temp = `${this.config.sessionFile}.tmp`;
     await writeFile(temp, `${JSON.stringify(this.session, null, 2)}\n`, 'utf8');
@@ -313,15 +326,26 @@ export class BetaHarness {
   }
 
   async state() { return this.api('/api/state'); }
-  async tick() { return this.api(`/api/projects/${encodeURIComponent(this.session.projectId)}/autonomy/tick`, { method: 'POST', body: {} }); }
+  async tick() { return this.api(`/api/projects/${encodeURIComponent(this.session.projectId)}/autonomy/tick`, { method: 'POST', body: {}, timeoutMs: 120_000 }); }
 
-  async waitFor(label, predicate, { timeoutMs = this.config.timeoutMs, tick = false } = {}) {
+  async waitFor(label, predicate, { timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS, tick = false, reconcileTickFailure = false } = {}) {
     const deadline = Date.now() + timeoutMs;
     let last = null;
     while (Date.now() < deadline) {
-      if (tick && this.session.projectId) await this.tick().catch(() => {});
+      let tickError = null;
+      if (tick && this.session.projectId) {
+        try {
+          await this.tick();
+        } catch (error) {
+          if (!reconcileTickFailure) throw error;
+          // A timed-out tick may already have admitted work. Reconcile with
+          // read-only evidence once; never replay the ambiguous POST here.
+          tickError = error;
+        }
+      }
       last = await predicate();
       if (last) return last;
+      if (tickError) throw tickError;
       await sleep(POLL_MS);
     }
     const error = new Error(`Timed out waiting for ${label}`);
@@ -345,11 +369,15 @@ export class BetaHarness {
   }
 
   attachLogs(child, file, prefix) {
-    const stream = createWriteStream(file, { flags: 'a' });
-    child.stdout?.on('data', (chunk) => stream.write(chunk));
-    child.stderr?.on('data', (chunk) => stream.write(chunk));
-    child.once('exit', (code, signal) => { stream.write(`\n[${prefix} exit code=${code} signal=${signal}]\n`); stream.end(); });
-    return stream;
+    return attachBetaProcessLog(child, file, prefix, { secrets: [this.managedOpenCodePassword] });
+  }
+
+  openCodeEnvironment() {
+    return this.managedOpenCodePassword ? {
+      OPENCODE_SERVER_USERNAME: 'opencode',
+      OPENCODE_SERVER_PASSWORD: this.managedOpenCodePassword,
+      OPENCODE_PASSWORD: this.managedOpenCodePassword,
+    } : {};
   }
 
   async spawnDashboard(overrides = {}) {
@@ -363,6 +391,7 @@ export class BetaHarness {
       AI_DASHBOARD_DATA: this.config.legacyFile,
       AI_DASHBOARD_AUTONOMY_INTERVAL_MS: String(this.config.autonomyIntervalMs),
       OPENCODE_URL: this.config.openCodeUrl,
+      ...this.openCodeEnvironment(),
       ...overrides,
     };
     for (const [key, value] of Object.entries(env)) if (value === undefined || value === null) delete env[key];
@@ -416,7 +445,7 @@ export class BetaHarness {
       throw error;
     }
     const { command, args } = this.openCodeCommand();
-    this.openCode = spawn(command, args, { cwd: this.config.repoPath, env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    this.openCode = spawn(command, args, { cwd: this.config.repoPath, env: { ...process.env, ...this.openCodeEnvironment() }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     this.openCodeOwned = true;
     this.openCodeLog = this.attachLogs(this.openCode, this.config.openCodeLog, 'opencode');
     await this.waitFor('managed OpenCode health', () => this.openCodeConnected(), { timeoutMs: 45_000 });
@@ -650,6 +679,7 @@ export class BetaHarness {
   // local base branch catches up. Repair it (sync base, return to active)
   // before the next scenario so workers can be admitted again.
   async repairProjectSync() {
+    await this.waitForAutonomyIdle();
     const state = await this.state();
     const project = state.projects.find((item) => item.id === this.session.projectId);
     if (!project) throw new Error(`Project ${this.session.projectId} not found for sync repair`);
@@ -663,6 +693,21 @@ export class BetaHarness {
     if (repaired?.status !== 'active') {
       throw new Error(`Project sync repair did not restore active status (now ${repaired?.status})`);
     }
+  }
+
+  async waitForAutonomyIdle() {
+    return this.waitFor('previous autonomy tick and post-merge sync to settle', async () => {
+      const result = await this.tick();
+      if (result?.skipped === 'already-running') return null;
+      if (!Array.isArray(result?.actions)) throw new Error('Autonomy tick returned no settlement evidence');
+      const failures = result.actions.filter((action) => action.error || action.type?.endsWith('_failed'));
+      if (failures.length) {
+        const error = new Error('Autonomy tick failed while settling the previous beta scenario');
+        error.evidence = { actions: failures };
+        throw error;
+      }
+      return result;
+    });
   }
 
   async createTask(spec) {
@@ -975,8 +1020,7 @@ export class BetaHarness {
   // moves it to needs_input or blocks the Project, the campaign has to fail
   // instead of reporting a happy path that the control plane rejected.
   async assertStableMergedTask(taskId) {
-    await this.tick().catch(() => {});
-    await sleep(POLL_MS);
+    await this.waitForAutonomyIdle();
     const state = await this.state();
     const task = (Array.isArray(state?.tasks) ? state.tasks : []).find((item) => item.id === taskId);
     if (!task) throw new Error(`Merged beta Task ${taskId} disappeared from Dashboard state`);
@@ -1003,9 +1047,9 @@ export class BetaHarness {
   async manualWorkerToPublish(spec) {
     await this.patchProject({ mode: 'manual', autoMerge: false });
     const task = await this.createTask(spec);
-    await this.api(`/api/tasks/${encodeURIComponent(task.id)}/delegate`, { method: 'POST', body: {} });
+    await this.api(`/api/tasks/${encodeURIComponent(task.id)}/delegate`, { method: 'POST', body: {}, timeoutMs: 120_000 });
     await this.waitTask(task.id, ['awaiting_publish'], { tick: false });
-    await this.api(`/api/tasks/${encodeURIComponent(task.id)}/publish`, { method: 'POST', body: {} });
+    await this.api(`/api/tasks/${encodeURIComponent(task.id)}/publish`, { method: 'POST', body: {}, timeoutMs: 120_000 });
     const state = await this.state();
     return this.taskEvidence(state, task.id);
   }
@@ -1047,11 +1091,18 @@ export class BetaHarness {
       const worker = evidence.workers[0];
       return worker && clean(worker.id) && ['running', 'retrying'].includes(worker.status)
         && worker.sessionId && worker.promptMessageId && !worker.terminationConfirmedAt
+        && worker.dispatchPhase === 'dispatched' && clean(worker.dispatchedAt)
         && !worker.dispatchUncertain && !worker.quarantineReason
         ? evidence : null;
-    }, { timeoutMs: 90_000, tick: true });
-    const before = active.workers[0];
-    const identity = { runId: before.id, sessionId: before.sessionId, promptMessageId: before.promptMessageId };
+    }, { timeoutMs: 90_000, tick: true, reconcileTickFailure: true });
+    await this.waitForAutonomyIdle();
+    const before = this.taskEvidence(await this.state(), task.id).workers[0];
+    if (!before || before.id !== active.workers[0].id || !['running', 'retrying'].includes(before.status)
+      || before.dispatchPhase !== 'dispatched' || !clean(before.dispatchedAt)
+      || before.terminationConfirmedAt || before.dispatchUncertain || before.quarantineReason) {
+      throw new Error('Restart worker is no longer active with confirmed prompt admission before dashboard restart');
+    }
+    const identity = { runId: before.id, sessionId: before.sessionId, promptMessageId: before.promptMessageId, dispatchedAt: before.dispatchedAt };
     this.session.evidence.dashboardRestart = { taskId: task.id, ...identity, phase: 'before_restart' };
     await this.persist();
 
@@ -1063,7 +1114,8 @@ export class BetaHarness {
       }
       const worker = evidence.workers[0];
       if (evidence.workers.length !== 1 || worker?.id !== identity.runId
-        || worker.sessionId !== identity.sessionId || worker.promptMessageId !== identity.promptMessageId) {
+        || worker.sessionId !== identity.sessionId || worker.promptMessageId !== identity.promptMessageId
+        || worker.dispatchedAt !== identity.dispatchedAt) {
         throw new Error('Dashboard restart lost or changed the persisted worker identity, or created duplicate worker Runs');
       }
       return worker;
@@ -1152,15 +1204,15 @@ export class BetaHarness {
 
     await this.scenario('ci_failure_repair', async ({ resumeExisting }) => {
       const evidence = await this.runAutonomousTask(specs.ciRepair, 'ciFailureRepair', { resumeExisting });
-      if (evidence.workers.length < 2) throw new Error('CI repair scenario did not exercise a second worker iteration; deliberate CI failure was not proven');
-      return { summary: `CI failure repaired across ${evidence.workers.length} worker iterations`, taskId: evidence.task.id, prNumber: evidence.task.publication.prNumber, workerRuns: evidence.workers.map((run) => run.id) };
+      const repair = await assertCiRepairEvidence(evidence, { github: new GitHubClient(), repository: this.session.repository });
+      return { summary: `CI failure repaired across ${evidence.workers.length} worker iterations`, taskId: evidence.task.id, prNumber: evidence.task.publication.prNumber, workerRuns: evidence.workers.map((run) => run.id), repair };
     }, { revalidatePassed: true });
 
     await this.scenario('supervisor_rejection', async ({ resumeExisting }) => {
       await this.repairProjectSync();
       const evidence = await this.runAutonomousTask(specs.supervisorReject, 'supervisorRejection', { resumeExisting });
-      if (evidence.workers.length < 2 || evidence.supervisors.length < 2) throw new Error('Supervisor rejection scenario did not prove reject -> repair -> re-review');
-      return { summary: `${evidence.supervisors.length} supervisor runs and ${evidence.workers.length} worker iterations`, taskId: evidence.task.id, supervisorRuns: evidence.supervisors.map((run) => run.id) };
+      const rejection = assertSupervisorRejectionEvidence(evidence);
+      return { summary: `${evidence.supervisors.length} supervisor runs and ${evidence.workers.length} worker iterations`, taskId: evidence.task.id, supervisorRuns: evidence.supervisors.map((run) => run.id), rejection };
     }, { revalidatePassed: true });
 
     await this.scenario('dashboard_restart_in_flight', async () => {
@@ -1227,11 +1279,14 @@ export class BetaHarness {
       const evidence = await this.manualWorkerToPublish(specs.githubOutage);
       const originalApi = process.env.GITHUB_API_URL;
       await this.restartDashboard({ GITHUB_API_URL: 'http://127.0.0.1:9' });
-      const refresh = await this.api(`/api/tasks/${encodeURIComponent(evidence.task.id)}/github/refresh`, { method: 'POST', body: {}, allowError: true, timeoutMs: 8_000 });
-      const during = this.taskEvidence(await this.state(), evidence.task.id);
-      if (['awaiting_review', 'ready_to_merge', 'done'].includes(during.task.state)) throw new Error(`GitHub API outage failed open into ${during.task.state}`);
-      await this.restartDashboard({ GITHUB_API_URL: originalApi });
-      return { summary: `GitHub outage remained fail-closed in ${during.task.state}`, taskId: evidence.task.id, httpStatus: refresh.status, taskState: during.task.state };
+      try {
+        const refresh = await this.api(`/api/tasks/${encodeURIComponent(evidence.task.id)}/github/refresh`, { method: 'POST', body: {}, allowError: true, timeoutMs: 120_000 });
+        const during = this.taskEvidence(await this.state(), evidence.task.id);
+        const proof = assertGitHubOutageEvidence(evidence, during, refresh);
+        return { summary: `GitHub outage returned a confirmed API failure and remained fail-closed in ${during.task.state}`, ...proof };
+      } finally {
+        await this.restartDashboard({ GITHUB_API_URL: originalApi });
+      }
     });
   }
 }
@@ -1309,12 +1364,17 @@ async function main() {
   process.once('SIGTERM', () => harness.cleanupProcesses().finally(() => process.exit(143)));
   try {
     await harness.run();
+  } catch (error) {
+    if (!Object.values(session.scenarios).some((scenario) => scenario?.status === 'failed')) {
+      session.scenarios.campaign_execution = { status: 'failed', finishedAt: new Date().toISOString(), summary: 'Campaign stopped outside a completed scenario; see process diagnostics.' };
+    }
+    throw error;
   } finally {
     await harness.persist().catch(() => {});
     await harness.cleanupProcesses();
   }
-  const result = calculateOverallResult(session.scenarios);
-  console.log(`\nPC beta result: ${result.toUpperCase()}`);
+  const result = calculateOverallResult(session.scenarios, { ...session, includeMcp: false });
+  console.log(`\nPC beta core result: ${result.toUpperCase()}`);
   console.log(`Report: ${join(config.reportDir, `${session.id}.md`)}`);
   if (result !== 'passed') process.exitCode = 2;
 }

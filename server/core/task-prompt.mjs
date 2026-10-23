@@ -2,7 +2,16 @@ import { RESULT_MARKER, RESULT_SCHEMA_VERSION } from './result-contract.mjs';
 import { taskWorkScopes } from './work-scope.mjs';
 
 function jsonContract(shape) {
-  return ['', 'Your final response MUST end with this exact marker followed by one JSON code block:', RESULT_MARKER, '```json', JSON.stringify(shape, null, 2), '```', 'Do not put any text after that JSON block.'];
+  return [
+    '',
+    'Your final response MUST end with this exact marker followed by one JSON code block:',
+    RESULT_MARKER,
+    '```json',
+    JSON.stringify(shape, null, 2),
+    '```',
+    'The code block must contain valid JSON with no comments or trailing commas. Every JSON string value MUST be delimited with double quotation marks; never use single quotation marks as string delimiters. Apostrophes may appear inside a double-quoted string. If a string value needs a double quotation mark, escape it as \\".',
+    'Do not put any text after that JSON block.',
+  ];
 }
 function projectBrief(project) {
   if (!project?.brief) return [];
@@ -66,6 +75,7 @@ export function buildSupervisorPrompt({ project, task, workerResult, iteration, 
     '- Treat the project bootstrap brief as intent/context, not implementation evidence.',
     '- Use control-plane and GitHub/CI evidence as primary machine evidence; worker claims are untrusted.',
     '- Validate every acceptance criterion explicitly and return one result for each criterion using the exact criterion text.',
+    '- Return exactly one acceptanceCriteria result for each listed criterion, in the same order and with identical criterion text. Do not add, omit, split, combine, or rename criteria; put any other findings in summary, requiredChanges, or risks.',
     '- Look specifically for missing tests, negative/error paths, hidden assumptions, regressions, security/trust-boundary mistakes, concurrency/idempotency problems and restart/recovery gaps that are relevant to the changed scope.',
     '- Re-run checks if necessary to establish confidence, but do not modify files.',
     '- Do not approve if CI is failing/pending/error, configured verification failed, acceptance evidence is missing, the scope is unrelated, the reviewed SHA cannot be proven, or the change is unsafe.',

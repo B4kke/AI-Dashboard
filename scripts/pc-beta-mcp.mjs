@@ -214,6 +214,8 @@ export async function verifyOpenCodeMcpInterop({
         'This is an interoperability probe. Stay read-only and do not edit files.',
         `Call the MCP tool named ${readTool} and wait for it to complete.`,
         `Then call the MCP tool named ${masterTool} and wait for it to complete.`,
+        'Make each call separately and sequentially. Do not batch calls or use Promise.all.',
+        'If using Code Mode execute, make exactly one MCP call per execute and return only its result with return await. Do not console.log or wrap the result in an array.',
         'Do not substitute another tool for either call.',
         'After both calls succeed, respond with exactly AI_DASHBOARD_MCP_TOOL_OK.',
       ].join('\n'),

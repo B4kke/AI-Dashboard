@@ -19,8 +19,8 @@ const execFileAsync = promisify(execFile);
 // independently proven. Partial/mismatched directories are never deleted or
 // overwritten automatically.
 
-function cloneGitEnvironment(cwd) {
-  const env = trustedExecutionEnvironment(process.env, { cwd });
+async function cloneGitEnvironment(cwd) {
+  const env = await trustedExecutionEnvironment(process.env, { cwd });
   env.GIT_TERMINAL_PROMPT = '0';
   return env;
 }
@@ -66,7 +66,8 @@ export async function assertClonedOriginMatches(destinationPath, expectedFullNam
 }
 
 async function assertCloneHasCommit(destinationPath) {
-  const executable = resolveTrustedExecutable('git', { cwd: destinationPath });
+  const env = await cloneGitEnvironment(destinationPath);
+  const executable = await resolveTrustedExecutable('git', { env });
   try {
     await execFileAsync(executable, ['-C', destinationPath, 'rev-parse', '--verify', 'HEAD^{commit}'], {
       cwd: destinationPath,
@@ -74,7 +75,7 @@ async function assertCloneHasCommit(destinationPath) {
       windowsHide: true,
       timeout: 30_000,
       maxBuffer: 1024 * 1024,
-      env: cloneGitEnvironment(destinationPath),
+      env,
     });
   } catch {
     throw new Error(`Existing clone destination has no verifiable HEAD commit: ${destinationPath}`);
@@ -116,14 +117,15 @@ export async function cloneGitHubRepository({
   }
 
   const invocation = buildCloneArguments(expected.fullName, destination);
-  const executable = resolveTrustedExecutable(invocation.executable, { cwd: root });
+  const env = await cloneGitEnvironment(root);
+  const executable = await resolveTrustedExecutable(invocation.executable, { env });
   await execFileAsync(executable, invocation.args, {
     cwd: root,
     encoding: 'utf8',
     windowsHide: true,
     timeout: timeoutMs,
     maxBuffer: 8 * 1024 * 1024,
-    env: cloneGitEnvironment(root),
+    env,
   });
   // Fail closed unless the cloned origin and a real HEAD commit prove that the
   // network side effect completed as the requested repository.

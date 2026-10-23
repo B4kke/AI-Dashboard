@@ -4,7 +4,7 @@ This checklist is the first real end-to-end dogfood gate for AI Dashboard.
 
 It is intentionally stricter than "the UI opened". The goal is to prove that the real OpenCode + Git + GitHub/Actions control loop behaves like the deterministic tests claim.
 
-Current status (2026-10-21): the harness and its fail-closed resume/evidence contract are implemented and deterministically tested. Linux, Windows and rendered UI Actions passed on exact commit `8f8e62c` (run `39631408668`). A fresh current-stack **smoke** passed on that exact head — repository fixture, OpenCode health, direct Project creation, real worker checkpoint, PR #4, green Actions CI, independent supervisor approval, control-plane merge and the OpenCode read/master MCP interoperability gate. The **full** campaign (CI failure/repair, supervisor rejection, restart in flight, moved base, abandoned worktree, GitHub outage, chaos) has **not** passed; any newer source change needs its own exact-head Actions. This checklist records the required proof, not a claim that the full proof exists.
+Qualification is recorded per clean source commit in the complete JSON/Markdown report and matching Linux/Windows Actions. **Head `9fc284c` is qualified:** complete campaign `pcbeta-20261023065201-4097e116` reported `passed` on every mandatory scenario plus MCP interoperability, with Linux/Windows [Actions run 39914021725](https://github.com/B4kke/AI-Dashboard/actions/runs/39914021725) and 598/598 deterministic tests on the same clean source commit. Historical campaign `pcbeta-20261023055141-26ea8c0e` on `6a7f578` passed through restart and MCP interoperability, then failed moved-base detection; it remains failed, as do all earlier campaigns. The live GitHub investigation and adapter correction are documented in `docs/04-roadmap.md`. See `HANDOFF.md` for report locations. Never infer a full pass from a smoke or a partial list of passing scenarios.
 
 October 19 evidence update: smoke on Dashboard `f54346d` reached a merged disposable PR with worker checkpoint, CI and supervisor evidence, but the **beta report failed** its independent baseline check because successful control evidence did not include `baseHead`/`scopeBaseHead`. The combined entrypoint also failed MCP interoperability despite completed Code Mode-wrapped read/master tool calls, because the probe recognized only direct tool parts. Commit `e80175c` repaired both checks without relaxing the baseline comparison or treating model text as tool execution. Its next beta smoke stopped before a passing report; disposable Beta PR #3 remains open as an orphan of that interrupted run. The historical `/tmp/opencode/beta-sol-*` session bundles named in `HANDOFF.md` are local artifacts, not part of this repository; verify their availability before attempting resume.
 
@@ -93,6 +93,8 @@ AI_DASHBOARD_BETA_AUTONOMY_INTERVAL_MS=5000
 AI_DASHBOARD_BETA_CHAOS_OPENCODE_URL=http://127.0.0.1:4196
 ```
 
+On WSL, inherited Windows PATH entries can make repeated trusted executable checks substantially slower. For Linux-hosted runs, scope PATH to the installed Linux Node/Git/SSH/gh tools for that command (for example `PATH=/usr/local/bin:/usr/bin:/bin` after verifying those locations). Do not change global settings or skip trust checks. The beta controller allows up to 120 seconds for admission, publication, autonomy ticks and the completed outage request; scenario/model timeouts remain separate bounds.
+
 The exact repository confirmation is intentional. If `AI_DASHBOARD_BETA_CONFIRM_DISPOSABLE` does not exactly equal `AI_DASHBOARD_BETA_REPOSITORY`, the harness refuses Git mutations.
 
 Normal `--smoke` and `--full` use the configured `OPENCODE_URL` and never stop that OpenCode process. The destructive outage/recovery scenario requires explicit chaos mode:
@@ -114,6 +116,8 @@ AI_DASHBOARD_BETA_OPENCODE_COMMAND_JSON=["opencode","serve","--hostname","127.0.
 ```
 
 The harness stops only the child process it started for the dedicated chaos endpoint. Do not point the chaos endpoint at an OpenCode instance used by an active agent.
+
+OpenCode V2 standalone servers are password-protected. The harness supplies one in-memory credential to its owned process, isolated Dashboard and MCP client, using both V2 `OPENCODE_PASSWORD` and legacy `OPENCODE_SERVER_PASSWORD` environment names. The credential is reused for owned restarts, excluded from stored session/config/evidence and redacted from stdout/stderr logs even when split across chunks. The harness does not change the shared service's credentials. See the [V2 standalone server contract](https://opencode.ai/v2/docs/cli/web).
 
 ### Smoke versus full
 
@@ -138,11 +142,17 @@ The harness stops only the child process it started for the dedicated chaos endp
 5. abandoned worktree detection
 6. GitHub API outage fail-closed behavior
 
+CI repair must retain complete failed GitHub checks for an earlier completed worker's exact checkpoint SHA, followed by the independently verified successful final checkpoint. Supervisor repair must retain an actual completed `reiterate` verdict bound to the earlier worker/SHA, followed by approval of a different final checkpoint. Run counts, provider failures and timeouts alone cannot satisfy either scenario. The MCP probe requires separate sequential calls, including one returned MCP result per Code Mode `execute`; ambiguous batched results are rejected.
+
+Restart requires a running worker with acknowledged prompt dispatch (`dispatchPhase=dispatched`, `dispatchedAt`) and a settled autonomy tick before the Dashboard is stopped. It retains the same Run/session/prompt/dispatch identity and requires confirmed termination afterward. Durable operation leases remain intact.
+
+Moved-base validation reads the actual target branch ref; an open PR’s cached `base.sha` is insufficient. GitHub outage proof requires a completed sanitized GitHub adapter failure, the same worker/checkpoint/PR/base/tree and no new supervisor or merge. An aborted loopback request, CI backoff or unchanged pending state alone cannot pass.
+
 `--full --chaos` adds OpenCode outage/recovery without a duplicate worker Run, using the dedicated managed endpoint described above.
 
 A full run is `blocked`, not `passed`, if a required scenario cannot actually be exercised. For example, Exploration is blocked if no direct model is configured. A chaos run is additionally blocked if its dedicated OpenCode child cannot be started and controlled safely.
 
-“Full” is a fixed contract, not “run whichever scenarios happened to be available.” Every required scenario must produce `passed`; a deliberately unavailable scenario produces `blocked`, and any identity/idempotency violation produces `failed`.
+“Full” is a fixed contract. Every required scenario and `opencode_mcp_interop` must produce `passed`; a deliberately unavailable scenario produces `blocked`, a missing or skipped required scenario produces `incomplete`, and an integrity/idempotency violation produces `failed`. The core CLI result excludes the separately executed MCP stage, while persisted reports and the combined entrypoint include it. A successful MCP probe cannot upgrade an unfinished core campaign.
 
 Scenario failures are never downgraded merely because a scenario was previously labeled optional. Explicitly unavailable prerequisites may return `blocked`; integrity errors, programming errors and ambiguous promotion outcomes remain `failed`. A failed/uncertain Exploration promotion never triggers a fallback Project creation, since the original request may already have created one.
 
@@ -175,6 +185,8 @@ Each autonomous scenario has a stable evidence key and persisted Task ID. The Ta
 Previously passed autonomous Task scenarios are not blindly skipped: resume revalidates their canonical Dashboard state and full merge evidence. Only safely non-destructive fixture/scenario preservation may reuse an already passed record without weakening its identity checks.
 
 The harness retries transient loopback failures (`ECONNRESET`, timeout and related socket errors) up to four attempts with linear backoff for read-only dashboard requests. It does not blindly replay mutating requests after an ambiguous connection loss; those remain fail-closed so a lost response cannot silently create duplicate work.
+
+Before post-merge validation or Project synchronization between scenarios, it waits for a complete autonomy tick rather than treating `already-running` or a Task's `done` state as proof that local base sync has settled. Tick transport failures, malformed settlement responses and recorded action failures propagate with diagnostics. Restart still requires an admitted active worker with exact persisted Run/session/prompt identity; increasing a timeout or merely seeing a backlog Task is not restart proof.
 
 The report result is one of:
 

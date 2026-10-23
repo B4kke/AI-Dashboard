@@ -302,6 +302,8 @@ No worktree/branch/merge path is created. Interrupted queued/running direct-mode
 
 ## Git integrity
 
+Trusted executable and subprocess PATH preparation is asynchronous. Every operation re-resolves symlinks and excludes relative/worktree PATH entries; Git uses the same filtered PATH for executable lookup and its child environment. No cached trust decision is reused across operations. This keeps slow mounted PATH entries from synchronously blocking the HTTP/autonomy event loop without removing repository config, graft, checkpoint or scope validation.
+
 1. Worker gets isolated managed worktree/branch.
 2. Worker is instructed not to commit.
 3. Control plane prepares and persists a versioned checkpoint intent containing the trusted parent SHA, staged tree SHA and commit message.
@@ -323,6 +325,8 @@ No force push, destructive reset or branch-protection bypass is part of recovery
 ## GitHub evidence
 
 Octokit provides GitHub transport, while Dashboard interprets evidence. Collected state includes PR head/base/SHA, paginated check-runs, legacy status contexts, rulesets/classic branch protection, required-check integration identity, opaque/merge-queue conditions, merge SHA and post-merge identity.
+
+Open PR evidence resolves the target's exact live Git ref separately from the PR snapshot. Its validated commit SHA is the current base used by existing publication/review/merge integrity checks; the snapshot is retained as `reportedBaseSha`. Missing or malformed live-ref evidence fails closed. Merged PRs instead retain their historical base plus independent merged-tree verification, so later target-branch movement cannot relabel a completed review.
 
 GitHub publishes a PR's `merge_commit_sha` before the merge is terminal, so a stored merge SHA is not by itself merge proof. Terminal merge evidence requires the publication state `merged` with `merged: true`, the merged commit SHA and post-merge tree verification against the proven worker tree.
 

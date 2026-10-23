@@ -9,6 +9,87 @@ function urlOf(req) { return new URL(req.url, 'http://127.0.0.1'); }
 async function start(handler) { const server = createServer(handler); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve)); return server; }
 async function stop(server) { await new Promise((resolve) => server.close(resolve)); }
 
+test('GitHub SDK honors the configured retry count rather than its plugin default', async () => {
+  let requests = 0;
+  const server = await start((_req, res) => {
+    requests += 1;
+    res.writeHead(503, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ message: 'temporary fixture outage' }));
+  });
+  try {
+    const client = new GitHubClient({ baseUrl: `http://127.0.0.1:${server.address().port}`, token: '', retries: 1 });
+    await assert.rejects(client.pullRequest({ repository: 'owner/repo', number: 1 }), { name: 'GitHubSdkError', status: 503 });
+    assert.equal(requests, 2, 'one initial request plus exactly one configured retry');
+  } finally { await stop(server); }
+});
+
+test('open PR evidence reads the live target ref while merged PR evidence preserves its historical base', async () => {
+  const historical = 'b'.repeat(40);
+  const advanced = 'd'.repeat(40);
+  let merged = false;
+  let refReads = 0;
+  const server = await start((req, res) => {
+    const path = decodeURIComponent(urlOf(req).pathname);
+    res.setHeader('content-type', 'application/json');
+    if (path.endsWith('/pulls/7')) return res.end(JSON.stringify({
+      number: 7, state: merged ? 'closed' : 'open', merged,
+      head: { sha: 'a'.repeat(40), ref: 'ai/task' }, base: { sha: historical, ref: 'beta/pc' },
+    }));
+    if (path.endsWith('/git/ref/heads/beta/pc')) {
+      refReads += 1;
+      return res.end(JSON.stringify({ ref: 'refs/heads/beta/pc', object: { type: 'commit', sha: advanced } }));
+    }
+    if (path.endsWith('/check-runs')) return res.end(JSON.stringify({ total_count: 0, check_runs: [] }));
+    if (path.endsWith('/status')) return res.end(JSON.stringify({ state: 'success', statuses: [] }));
+    res.writeHead(404); res.end('{}');
+  });
+  try {
+    const client = new GitHubClient({ baseUrl: `http://127.0.0.1:${server.address().port}`, token: '', retries: 0 });
+    const open = await client.pullRequestEvidence({ repository: 'owner/repo', number: 7 });
+    assert.equal(open.baseSha, advanced, 'a PR snapshot cannot hide movement of its actual target ref');
+    assert.equal(open.reportedBaseSha, historical);
+    merged = true;
+    const closed = await client.pullRequestEvidence({ repository: 'owner/repo', number: 7 });
+    assert.equal(closed.baseSha, historical, 'post-merge target movement is not the reviewed historical base');
+    assert.equal(refReads, 1, 'historical merged evidence does not depend on a surviving live branch');
+  } finally { await stop(server); }
+});
+
+test('open PR evidence fails closed when the live target ref cannot be proven', async (t) => {
+  for (const fixture of [
+    { name: 'missing', status: 404 },
+    { name: 'unavailable', status: 503 },
+    { name: 'wrong ref', ref: 'refs/heads/other', type: 'commit', sha: 'd'.repeat(40) },
+    { name: 'non-commit', ref: 'refs/heads/main', type: 'tag', sha: 'd'.repeat(40) },
+    { name: 'abbreviated SHA', ref: 'refs/heads/main', type: 'commit', sha: 'deadbeef' },
+    { name: 'missing target branch', branch: '' },
+  ]) await t.test(fixture.name, async () => {
+    const server = await start((req, res) => {
+      const path = decodeURIComponent(urlOf(req).pathname);
+      res.setHeader('content-type', 'application/json');
+      if (path.endsWith('/pulls/7')) return res.end(JSON.stringify({
+        number: 7, state: 'open', head: { sha: 'a'.repeat(40) },
+        base: { ref: fixture.branch ?? 'main', sha: 'b'.repeat(40) },
+      }));
+      if (path.includes('/git/ref/')) {
+        res.statusCode = fixture.status || 200;
+        return res.end(JSON.stringify({ ref: fixture.ref, object: { type: fixture.type, sha: fixture.sha }, message: 'untrusted-secret-response' }));
+      }
+      if (path.endsWith('/check-runs')) return res.end(JSON.stringify({ total_count: 0, check_runs: [] }));
+      if (path.endsWith('/status')) return res.end(JSON.stringify({ state: 'success', statuses: [] }));
+      res.writeHead(404); res.end('{}');
+    });
+    try {
+      const client = new GitHubClient({ baseUrl: `http://127.0.0.1:${server.address().port}`, token: '', retries: 0 });
+      await assert.rejects(client.pullRequestEvidence({ repository: 'owner/repo', number: 7 }), (error) => {
+        assert.match(error.message, /GitHub (?:git\.getRef failed|target branch)/);
+        assert.doesNotMatch(error.message, /untrusted-secret-response/);
+        return true;
+      });
+    } finally { await stop(server); }
+  });
+});
+
 test('repository and remote parsing stay strict', () => {
   assert.equal(parseGitHubRepository('OpenHands/OpenHands').fullName, 'OpenHands/OpenHands');
   assert.equal(parseGitHubRemote('git@github.com:B4kke/AI-Dashboard.git').fullName, 'B4kke/AI-Dashboard');
@@ -37,6 +118,7 @@ test('Octokit adapter normalizes pull request and CI evidence', async () => {
     const url = urlOf(req);
     res.setHeader('content-type', 'application/json');
     if (url.pathname === '/repos/B4kke/AI-Dashboard/pulls/7') return res.end(JSON.stringify({ number: 7, html_url: 'https://github.test/pr/7', state: 'open', draft: false, head: { sha: 'abc', ref: 'ai/task' }, base: { ref: 'main' } }));
+    if (decodeURIComponent(url.pathname) === '/repos/B4kke/AI-Dashboard/git/ref/heads/main') return res.end(JSON.stringify({ ref: 'refs/heads/main', object: { type: 'commit', sha: 'b'.repeat(40) } }));
     if (url.pathname === '/repos/B4kke/AI-Dashboard/commits/abc/check-runs') return res.end(JSON.stringify({ total_count: 1, check_runs: [{ id: 1, name: 'CI', status: 'completed', conclusion: 'success' }] }));
     if (url.pathname === '/repos/B4kke/AI-Dashboard/commits/abc/status') return res.end(JSON.stringify({ state: 'success', statuses: [] }));
     res.statusCode = 404; res.end('{}');
@@ -70,6 +152,7 @@ test('a GitHub check API 503 is CI error, never no-checks', async () => {
     const url = urlOf(req);
     res.setHeader('content-type', 'application/json');
     if (url.pathname === '/repos/B4kke/AI-Dashboard/pulls/8') return res.end(JSON.stringify({ number: 8, state: 'open', draft: false, head: { sha: 'def', ref: 'ai/task' }, base: { ref: 'main' } }));
+    if (decodeURIComponent(url.pathname) === '/repos/B4kke/AI-Dashboard/git/ref/heads/main') return res.end(JSON.stringify({ ref: 'refs/heads/main', object: { type: 'commit', sha: 'b'.repeat(40) } }));
     if (url.pathname === '/repos/B4kke/AI-Dashboard/commits/def/check-runs') { res.statusCode = 503; return res.end(JSON.stringify({ message: 'temporarily unavailable' })); }
     if (url.pathname === '/repos/B4kke/AI-Dashboard/commits/def/status') return res.end(JSON.stringify({ state: 'success', statuses: [] }));
     res.statusCode = 404; res.end('{}');

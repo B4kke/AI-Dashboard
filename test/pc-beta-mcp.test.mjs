@@ -292,7 +292,7 @@ test('MCP interoperability evidence is merged into the canonical PC beta session
     assert.equal(merged, true);
     const persisted = JSON.parse(await readFile(join(root, 'session.json'), 'utf8'));
     assert.equal(persisted.scenarios.opencode_mcp_interop.status, 'passed');
-    assert.equal(persisted.result, 'passed');
+    assert.equal(persisted.result, 'incomplete', 'MCP success does not fill missing full-beta scenarios');
     const report = await readFile(join(root, 'reports', 'pcbeta-test.md'), 'utf8');
     assert.match(report, /opencode_mcp_interop \| passed/);
   } finally {
