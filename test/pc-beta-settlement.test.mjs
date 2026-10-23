@@ -52,6 +52,35 @@ test('beta polling surfaces tick failure before probing for worker evidence', as
   assert.equal(probed, false);
 });
 
+test('beta polling reconciles an ambiguous tick once without replaying its POST', async () => {
+  const harness = new BetaHarness({ timeoutMs: 1000 }, { projectId: 'p1' });
+  let ticks = 0;
+  harness.tick = async () => {
+    ticks += 1;
+    throw Object.assign(new Error('operation timed out'), { name: 'TimeoutError' });
+  };
+  const result = await harness.waitFor('worker', async () => ({ status: 'running' }), {
+    tick: true,
+    reconcileTickFailure: true,
+  });
+  assert.deepEqual(result, { status: 'running' });
+  assert.equal(ticks, 1, 'ambiguous autonomy tick is reconciled instead of replayed');
+});
+
+test('ambiguous beta tick remains failed when read-only reconciliation has no evidence', async () => {
+  const harness = new BetaHarness({ timeoutMs: 1000 }, { projectId: 'p1' });
+  let ticks = 0;
+  harness.tick = async () => {
+    ticks += 1;
+    throw Object.assign(new Error('operation timed out'), { name: 'TimeoutError' });
+  };
+  await assert.rejects(harness.waitFor('worker', async () => null, {
+    tick: true,
+    reconcileTickFailure: true,
+  }), /operation timed out/);
+  assert.equal(ticks, 1, 'lack of read-only evidence does not replay the timed-out POST');
+});
+
 test('beta settlement rejects malformed responses and recorded action failures', async (t) => {
   for (const response of [null, {}, { actions: [{ type: 'task.merge_failed', error: 'sync unavailable' }] }]) {
     await t.test(JSON.stringify(response), async () => {

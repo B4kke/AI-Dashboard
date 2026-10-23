@@ -322,13 +322,24 @@ export class BetaHarness {
   async state() { return this.api('/api/state'); }
   async tick() { return this.api(`/api/projects/${encodeURIComponent(this.session.projectId)}/autonomy/tick`, { method: 'POST', body: {} }); }
 
-  async waitFor(label, predicate, { timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS, tick = false } = {}) {
+  async waitFor(label, predicate, { timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS, tick = false, reconcileTickFailure = false } = {}) {
     const deadline = Date.now() + timeoutMs;
     let last = null;
     while (Date.now() < deadline) {
-      if (tick && this.session.projectId) await this.tick();
+      let tickError = null;
+      if (tick && this.session.projectId) {
+        try {
+          await this.tick();
+        } catch (error) {
+          if (!reconcileTickFailure) throw error;
+          // A timed-out tick may already have admitted work. Reconcile with
+          // read-only evidence once; never replay the ambiguous POST here.
+          tickError = error;
+        }
+      }
       last = await predicate();
       if (last) return last;
+      if (tickError) throw tickError;
       await sleep(POLL_MS);
     }
     const error = new Error(`Timed out waiting for ${label}`);
@@ -1076,7 +1087,7 @@ export class BetaHarness {
         && worker.sessionId && worker.promptMessageId && !worker.terminationConfirmedAt
         && !worker.dispatchUncertain && !worker.quarantineReason
         ? evidence : null;
-    }, { timeoutMs: 90_000, tick: true });
+    }, { timeoutMs: 90_000, tick: true, reconcileTickFailure: true });
     const before = active.workers[0];
     const identity = { runId: before.id, sessionId: before.sessionId, promptMessageId: before.promptMessageId };
     this.session.evidence.dashboardRestart = { taskId: task.id, ...identity, phase: 'before_restart' };
