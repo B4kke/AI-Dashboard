@@ -5,7 +5,9 @@ import {
   assertMarkerSlots,
   isApprovedNewPath,
   normalizeMarkedSource,
+  validateLockAdditions,
   sdkGraph,
+  validateLockRootMetadata,
   validateRootManifest,
 } from '../scripts/check-m3-boundary.mjs';
 
@@ -58,6 +60,50 @@ test('package manifest permits only the two pinned Markdown renderer additions',
   const changedScripts = structuredClone(approved);
   changedScripts.scripts.test = 'echo skipped';
   assert.throws(() => validateRootManifest(baseline, changedScripts), /package.json scripts/);
+
+  const addedRendererButUnreviewedInstallPath = structuredClone(baseline);
+  addedRendererButUnreviewedInstallPath.dependencies['react-markdown'] = '10.1.0';
+  addedRendererButUnreviewedInstallPath.dependencies['remark-gfm'] = '4.0.1';
+  assert.doesNotThrow(() => validateRootManifest(baseline, addedRendererButUnreviewedInstallPath));
+});
+
+test('package manifest rejects unreviewed npm dependency metadata and lock root drift', () => {
+  const baseline = {
+    name: 'app', version: '1', type: 'module', engines: { node: '>=22' },
+    scripts: { test: 'node --test' }, dependencies: { ai: '7.0.97' }, devDependencies: { vite: '8.2.2' },
+  };
+  const dependencyMetadata = [
+    ['optionalDependencies', { 'unreviewed-package': '1.0.0' }],
+    ['peerDependencies', { 'unreviewed-package': '1.0.0' }],
+    ['peerDependenciesMeta', { 'unreviewed-package': { optional: true } }],
+    ['bundledDependencies', ['unreviewed-package']],
+    ['bundleDependencies', ['unreviewed-package']],
+    ['workspaces', ['packages/*']],
+    ['overrides', { 'ai': '7.0.98' }],
+    ['resolutions', { 'ai': '7.0.98' }],
+  ];
+  for (const [field, value] of dependencyMetadata) {
+    const changed = structuredClone(baseline);
+    changed[field] = value;
+    assert.throws(() => validateRootManifest(baseline, changed), new RegExp(`package.json ${field}`));
+  }
+
+  const approved = structuredClone(baseline);
+  approved.dependencies['react-markdown'] = '10.1.0';
+  approved.dependencies['remark-gfm'] = '4.0.1';
+  const root = {
+    name: approved.name,
+    version: approved.version,
+    dependencies: structuredClone(approved.dependencies),
+    devDependencies: structuredClone(approved.devDependencies),
+    engines: structuredClone(approved.engines),
+  };
+  const lock = { lockfileVersion: 3, packages: { '': root } };
+  assert.doesNotThrow(() => validateRootManifest(baseline, approved));
+  assert.doesNotThrow(() => validateLockRootMetadata(approved, lock));
+
+  root.optionalDependencies = { 'unreviewed-package': '1.0.0' };
+  assert.throws(() => validateLockRootMetadata(approved, lock), /package-lock root optionalDependencies/);
 });
 
 function sdkFixture() {
@@ -100,4 +146,24 @@ test('SDK graph protects reachable transitive packages and ignores unrelated ren
     name: 'engine-util', version: '9.0.0', resolved: 'https://registry.example/nested.tgz', integrity: 'sha512-nested',
   };
   assert.notEqual(sdkGraph(baseline.lock, baseline.manifest), sdkGraph(nestedOverride.lock, nestedOverride.manifest));
+});
+
+test('new package-lock nodes must be reachable from the reviewed renderer graph', () => {
+  const baseline = sdkFixture();
+  const unchanged = structuredClone(baseline.lock);
+  assert.doesNotThrow(() => validateLockAdditions(baseline.lock, unchanged, baseline.manifest));
+
+  const changedBaselineNode = structuredClone(baseline.lock);
+  changedBaselineNode.packages['node_modules/engine-util'].hasInstallScript = true;
+  assert.throws(() => validateLockAdditions(baseline.lock, changedBaselineNode, baseline.manifest), /baseline entry changed outside the approved renderer graph/);
+
+  const injected = structuredClone(baseline.lock);
+  injected.packages['node_modules/install-script-payload'] = {
+    name: 'install-script-payload',
+    version: '1.0.0',
+    resolved: 'https://registry.example/install-script-payload.tgz',
+    integrity: 'sha512-payload',
+    hasInstallScript: true,
+  };
+  assert.throws(() => validateLockAdditions(baseline.lock, injected, baseline.manifest), /outside the approved renderer graph/);
 });
