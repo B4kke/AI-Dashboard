@@ -55,6 +55,31 @@ test('restart fails a preparing Run safely when persisted phase proves session c
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('restart preserves task state while an uncertain dispatch still owns its Run', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-dispatch-unknown-recovery-'));
+  try {
+    const store = new StateStore(join(dir, 'state.json')); await store.load();
+    const project = await store.addProject({ name: 'Uncertain dispatch', repoPath: dir, autonomy: { mode: 'autonomous' } });
+    const task = await store.addTask({ projectId: project.id, title: 'Recover admitted worker', state: 'in_progress', acceptanceCriteria: ['done'], verificationCommands: ['node --version'] });
+    const run = await store.createRun({ taskId: task.id, projectId: project.id, kind: 'worker', status: 'dispatch_unknown', iteration: 1 });
+    await store.updateRun(run.id, {
+      dispatchUncertain: true,
+      dispatchPhase: 'prompting',
+      sessionId: 'ses_uncertain_dispatch',
+      promptMessageId: promptMessageId('ses_uncertain_dispatch'),
+      worktreePath: join(dir, 'wt'),
+    });
+    const noop = new Proxy({}, { get: () => async () => { throw new Error('uncertain dispatch is reconciled by the autonomy engine'); } });
+    const orchestrator = createOrchestrator({ store, opencode: noop, github: noop });
+
+    await orchestrator.recover();
+
+    assert.equal(store.getRun(run.id).status, 'dispatch_unknown');
+    assert.equal(store.getRun(run.id).dispatchUncertain, true);
+    assert.equal(store.getTask(task.id).state, 'in_progress');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('restart keeps inactive V2 session without durable terminal outcome under Run ownership', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ai-dashboard-v2-inactive-'));
   try {

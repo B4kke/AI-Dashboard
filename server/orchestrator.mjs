@@ -1022,7 +1022,11 @@ export function createOrchestrator({ store, opencode, github, locks = new InProc
 
     const fresh = store.snapshot();
     for (const task of fresh.tasks) {
-      const active = fresh.runs.some((run) => run.taskId === task.id && ['running', 'retrying', 'preparing'].includes(run.status));
+      const active = fresh.runs.some((run) => run.taskId === task.id && (
+        ACTIVE_RUN_STATUSES.has(run.status)
+        || run.dispatchUncertain === true
+        || Boolean(run.quarantineReason)
+      ));
       if (task.state === 'reviewing' && !active) {
         await store.updateTask(task.id, { state: 'awaiting_review', supervisorFeedback: 'Recovered review state after process restart.' });
         actions.push({ type: 'task.review_recovered', taskId: task.id });
