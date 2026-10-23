@@ -27,7 +27,7 @@ The runtime accepts at most five references and injects at most 10,000 resolved 
 
 `web/src/master/MasterChat.tsx` owns presentation and explicit controls; `MasterChatContainer.tsx` adapts canonical Dashboard state and routes into it; `api.ts` owns the chat HTTP/SSE client. The chat renders model Markdown with raw HTML disabled, strips images, filters link protocols, and presents a plan banner, saved proposals, turn metadata, context previews, model selection, memory controls and read-only specialist summaries.
 
-The existing CI selectors `.message-user` and `.master-empty` remain available on the new UI so the existing Project/Global smoke journey keeps exercising the rendered Master surface. Responsive CSS targets desktop, tablet and phone widths; the rendered result still requires visual inspection at 1440, 768 and 390 pixels for each exact feature head.
+The existing CI selectors `.message-user` and `.master-empty` remain available on the new UI so the existing Project/Global smoke journey keeps exercising the rendered Master surface. Responsive CSS targets desktop, tablet and phone widths. On exact feature head `efabdabac9ca832218c95ec74d1ee9174dbcf03f`, the chat was visually inspected at 1440, 768 and 390 pixels with no horizontal overflow or browser errors; the CI rendered UI smoke also passed.
 
 ## Verification commands
 
@@ -37,4 +37,4 @@ node --test test/m3-*.test.mjs test/master-chat.test.mjs test/master-memory.test
 npm run build
 ```
 
-The complete repository suite and the existing Linux/Windows Actions workflow remain required for exact-head qualification. The existing PC-beta campaign is separate evidence and must not be repeated as part of M3 chat verification.
+The full 617-test repository suite passed in exact-head Linux and Windows Actions, together with rendered UI smoke, in [run 39982662420](https://github.com/B4kke/AI-Dashboard/actions/runs/39982662420). Locally, locked install, syntax checks, the M3 boundary check and production build passed. The boundary guard's exact-head Linux and Windows Actions passed in [run 39982576999](https://github.com/B4kke/AI-Dashboard/actions/runs/39982576999). These checks qualify this implementation slice; they do not claim real external host dogfood. The existing PC-beta campaign is separate evidence and must not be repeated as part of M3 chat verification.
