@@ -17,6 +17,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        # M3_CHAT_CI_LINUX_CHECKOUT_START
+        with:
+          fetch-depth: 0
+        # M3_CHAT_CI_LINUX_CHECKOUT_END
+      # M3_CHAT_CI_LINUX_GUARD_START
+      - name: M3 execution-engine boundary
+        shell: bash
+        env:
+          M3_GUARD_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          if git cat-file -e "${M3_GUARD_BASE}:scripts/check-m3-boundary.mjs" 2>/dev/null; then
+            git show "${M3_GUARD_BASE}:scripts/check-m3-boundary.mjs" > "$RUNNER_TEMP/check-m3-boundary.mjs"
+            cmp "$RUNNER_TEMP/check-m3-boundary.mjs" scripts/check-m3-boundary.mjs
+            node "$RUNNER_TEMP/check-m3-boundary.mjs"
+          else
+            node scripts/check-m3-boundary.mjs
+          fi
+      # M3_CHAT_CI_LINUX_GUARD_END
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -154,6 +172,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        # M3_CHAT_CI_WINDOWS_CHECKOUT_START
+        with:
+          fetch-depth: 0
+        # M3_CHAT_CI_WINDOWS_CHECKOUT_END
+      # M3_CHAT_CI_WINDOWS_GUARD_START
+      - name: M3 execution-engine boundary
+        shell: bash
+        env:
+          M3_GUARD_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          if git cat-file -e "${M3_GUARD_BASE}:scripts/check-m3-boundary.mjs" 2>/dev/null; then
+            git show "${M3_GUARD_BASE}:scripts/check-m3-boundary.mjs" > "$RUNNER_TEMP/check-m3-boundary.mjs"
+            cmp "$RUNNER_TEMP/check-m3-boundary.mjs" scripts/check-m3-boundary.mjs
+            node "$RUNNER_TEMP/check-m3-boundary.mjs"
+          else
+            node scripts/check-m3-boundary.mjs
+          fi
+      # M3_CHAT_CI_WINDOWS_GUARD_END
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
