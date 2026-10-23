@@ -9,7 +9,7 @@ function jsonContract(shape) {
     '```json',
     JSON.stringify(shape, null, 2),
     '```',
-    'The code block must contain valid JSON with no comments or trailing commas. Inside JSON string values, use single quotation marks for quoted prose; if a double quotation mark is needed, escape it as \\".',
+    'The code block must contain valid JSON with no comments or trailing commas. Every JSON string value MUST be delimited with double quotation marks; never use single quotation marks as string delimiters. Apostrophes may appear inside a double-quoted string. If a string value needs a double quotation mark, escape it as \\".',
     'Do not put any text after that JSON block.',
   ];
 }
