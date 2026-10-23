@@ -1041,9 +1041,9 @@ export class BetaHarness {
   async manualWorkerToPublish(spec) {
     await this.patchProject({ mode: 'manual', autoMerge: false });
     const task = await this.createTask(spec);
-    await this.api(`/api/tasks/${encodeURIComponent(task.id)}/delegate`, { method: 'POST', body: {} });
+    await this.api(`/api/tasks/${encodeURIComponent(task.id)}/delegate`, { method: 'POST', body: {}, timeoutMs: 120_000 });
     await this.waitTask(task.id, ['awaiting_publish'], { tick: false });
-    await this.api(`/api/tasks/${encodeURIComponent(task.id)}/publish`, { method: 'POST', body: {} });
+    await this.api(`/api/tasks/${encodeURIComponent(task.id)}/publish`, { method: 'POST', body: {}, timeoutMs: 120_000 });
     const state = await this.state();
     return this.taskEvidence(state, task.id);
   }

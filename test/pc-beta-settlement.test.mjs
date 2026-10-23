@@ -52,6 +52,29 @@ test('beta polling surfaces tick failure before probing for worker evidence', as
   assert.equal(probed, false);
 });
 
+test('manual publish beta gives worker admission and publication enough time without replaying POSTs', async () => {
+  const harness = new BetaHarness({ timeoutMs: 1000 }, { projectId: 'p1' });
+  const task = { id: 't1', projectId: 'p1', state: 'awaiting_publish' };
+  const calls = [];
+  harness.patchProject = async () => {};
+  harness.createTask = async () => task;
+  harness.api = async (path, options) => { calls.push({ path, options }); return { status: 202 }; };
+  harness.waitTask = async () => ({ state: { tasks: [task], runs: [] } });
+  harness.state = async () => ({ tasks: [task], runs: [] });
+
+  const evidence = await harness.manualWorkerToPublish({ title: 'Long beta operation' });
+
+  assert.equal(evidence.task.id, task.id);
+  assert.deepEqual(calls.map(({ path, options }) => ({
+    path,
+    method: options.method,
+    timeoutMs: options.timeoutMs,
+  })), [
+    { path: '/api/tasks/t1/delegate', method: 'POST', timeoutMs: 120_000 },
+    { path: '/api/tasks/t1/publish', method: 'POST', timeoutMs: 120_000 },
+  ]);
+});
+
 test('beta polling reconciles an ambiguous tick once without replaying its POST', async () => {
   const harness = new BetaHarness({ timeoutMs: 1000 }, { projectId: 'p1' });
   let ticks = 0;
