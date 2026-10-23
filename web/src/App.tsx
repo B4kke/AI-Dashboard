@@ -7,6 +7,9 @@ import {
 import { taskCiDiagnostics, taskCiState, taskFailedChecks, taskHasCiFailure } from './ci-presentation.js';
 import { Conversation, Message, PromptInput, Tool } from './components/ai-elements';
 import './styles.css';
+/* M3_CHAT_IMPORTS_START */
+import MasterChatContainer from './master/MasterChatContainer';
+/* M3_CHAT_IMPORTS_END */
 
 const PROJECT_TABS = ['overview', 'tasks', 'agents', 'master', 'github', 'evidence', 'research', 'settings'] as const;
 type ProjectTab = typeof PROJECT_TABS[number];
@@ -229,6 +232,9 @@ function MasterView({ state, setup, routeId, projectId, projectName, busy, run }
     }
   };
   const streamingActive = Boolean(streaming && streaming.conversationId === activeConversationId && !streaming.done);
+  /* M3_CHAT_UI_START */
+  return <MasterChatContainer state={state} setup={setup} routeId={routeId} projectId={projectId} projectName={projectName} busy={busy} run={run} />;
+  /* M3_CHAT_UI_END */
   return <div className={`master-layout${projectId ? ' project-master-layout' : ''}`}>
     <aside className="conversation-list"><div className="panel-title"><span>{t('master.title')}</span><button className="icon-button" aria-label={t('master.newChat')} onClick={()=>void run(create)}>+</button></div>
       {scopedConversations.map(c=><button key={c.id} className={selected?.id===c.id?'conversation-row active':'conversation-row'} onClick={()=>go(projectId ? `/project/${projectId}/master/${c.id}` : `/master/${c.id}`)}><strong>{c.title}</strong><small>{t('master.messageCount', { count: state.masterMessages.filter(m=>m.conversationId===c.id).length })}</small></button>)}

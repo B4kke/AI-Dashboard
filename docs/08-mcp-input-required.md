@@ -1,6 +1,6 @@
 # MCP 2026 multi-round operator input
 
-Status: implemented August 2026 on the foundation branch.
+Status: implemented M3 input-required foundation. Current exact-head and interoperability evidence is tracked in `docs/04-roadmap.md`.
 
 This document defines how AI Dashboard handles operator questions across MCP. It is deliberately separate from the domain `Task` model: an AI Dashboard Task is durable project work; MCP `input_required` is a protocol mechanism that lets one MCP request pause for structured client/operator input and then re-enter the same handler.
 
@@ -108,6 +108,10 @@ The MCP SDK may automatically fulfill the `input_required` round after the handl
 - `input_required` cannot be used to bypass Master/worker/supervisor profile separation.
 - Worker and supervisor profiles remain read-only.
 - MCP text/operator input is context, not machine evidence.
+
+## Interactive Master chat boundary
+
+The current browser Master chat does not implement a trusted `elicitationHandler`, does not advertise external MCP elicitation and does not expose `task_resolve_input`. It can help the operator inspect a `needs_input` Task and formulate the missing decision, but it cannot record an answer or resume the Task from chat. The operator must use the existing explicit MCP/operator-input flow, where `record_only` and `resume` remain separate actions. A future trusted chat elicitation UI must preserve the schema, decline/cancel and no-secrets rules above.
 - No elicitation response can approve the worker's own work or replace independent supervisor/CI evidence.
 
 ## Test contract

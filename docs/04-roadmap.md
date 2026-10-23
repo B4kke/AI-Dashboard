@@ -6,6 +6,8 @@
 
 > **Current status (October 23, 2026; supersedes the older dated status snapshots below):** PR #5 is merged as `a46ee8f`; fresh Linux, rendered UI and Windows Actions passed on that exact merge head ([run 39944712083](https://github.com/B4kke/AI-Dashboard/actions/runs/39944712083)). Standard full PC beta passed on source `9fc284c` in `pcbeta-20261023065201-4097e116`; its implementation tree is the same as the merged head. The operator confirms the separate chaos/outage, protected-branch, operator-input and specialist-scope checks also passed. They were separate runs; the standard report has `chaos=false`. **Do not rerun completed beta gates.** Keep the standard report and the operator-confirmed separate results distinct; link their existing records when available rather than launching another campaign.
 
+`docs/09-hardening-review-checkpoint.md` is a historical September 3, 2026 review snapshot; its then-pending project gates are superseded by this roadmap and must not trigger reruns of gates marked complete here.
+
 **October 23 full qualification:** `9fc284cd762b9387ccd72d9a1ab660b1f6e2d8e0` passed 598/598 deterministic tests and Linux/Windows [Actions run 39914021725](https://github.com/B4kke/AI-Dashboard/actions/runs/39914021725). Complete full-mode campaign `pcbeta-20261023065201-4097e116` reported `passed` with every mandatory scenario green: repository fixture, OpenCode health, Exploration and idempotent Project promotion, happy path (PR #68 merged with checkpoint/tree/base evidence), deliberate CI failure and repair across two worker iterations (PR #69), supervisor rejection/rework bound to the reviewed worker checkpoint (PR #70), Dashboard restart during a real Run with preserved Run/session/prompt identity, moved base branch (stale work blocked to `needs_input`), abandoned worktree detected without uncontrolled cleanup, GitHub API outage returning a confirmed adapter failure while remaining fail-closed in `awaiting_ci`, and OpenCode V2 read/master MCP interoperability with resources, prompts and both profile tools executed. Actions and campaign share the same clean source commit.
 
 October 23 investigation: `6a7f578` passed 567/567 deterministic tests and Linux/Windows [Actions run 39907480534](https://github.com/B4kke/AI-Dashboard/actions/runs/39907480534). Campaign `pcbeta-20261023055141-26ea8c0e` passed Exploration, happy path, deliberate CI repair, supervisor rejection/rework, restart in flight and MCP interoperability, then failed moved-base detection. It remains **failed**. Independent API reads proved PR #67's reported base `f07a825` differed from live target ref `267198a`. The adapter now reads the exact live target ref for open PRs, validates commit/ref/SHA identity and fails closed on unavailable evidence; merged PRs preserve the historical base. A real read-only GitHub probe and normal integrity guard against a copied snapshot reproduce the required `needs_input` stop. Restart tests now wait for prompt acknowledgement and admission settlement, SDK retry counts are explicit, outage proof requires a completed API failure with unchanged publication identity, and report completeness is enforced. These mechanisms have dedicated regressions and are exercised by the qualifying campaign above.
@@ -214,9 +216,26 @@ Exact-head Linux+Windows GitHub Actions verified on commit `a990d75` (push `3299
 
 Still planned:
 
-- visible turn-kind labels and contextual Task/Research shortcuts,
-- richer context attachments (Tasks/Runs/files/reports/evidence) and file references,
+- image/file uploads and broad binary attachments (the current file context is a safe project-relative text reference only),
 - per-agent persona/memory and richer adaptive fleet rebalancing (M3A/M3C).
+
+M3B plan-mode/context follow-up is implemented on `codex/m3-chat-platform` (PR #9, stacked on the engine-boundary PR #8). The initial implementation was exact-head verified on `efabdabac9ca832218c95ec74d1ee9174dbcf03f`; current PR checks qualify subsequent review fixes:
+
+- separate interactive chat runtime leaves the beta-tested automatic planner service and its tool path unchanged,
+- bounded read tools and `propose_<tool>` wrappers; explicit proposal-ID execution revalidates the saved schema/arguments and invokes the original tool once without another model call,
+- no `task_resolve_input`, publish, review, merge or approval tools in interactive chat,
+- explicit one-use previews for at most five Task/Run/Research/evidence/text-file references and 10,000 total resolved characters, with Project containment, source-freshness, secret and filesystem checks,
+- per-conversation model override, abort-backed Stop, new-request Retry and actual-usage-only display,
+- inspectable/editable/deletable memory and read-only specialist summaries in the chat workspace; no StateStore schema change,
+- review fixes preserve durable request identity beyond visible-history limits, retain unresolved proposals, exclude planner/system history safely during startup, disable production SDK retries and sanitize model-facing/persisted chat data,
+- evidence-preview freshness ignores generated timestamps; bounded file reads and identity rechecks reject growing files and parent-symlink swaps; dropped context is visibly marked truncated,
+- browser regressions cover duplicate sends, cancellation/retry, invalid routes, stale async metadata/previews, canonical saved answers and visible proposal/memory errors; phone controls preserve new-chat access, contained model selection and readable context/actions,
+- deterministic M3 HTTP/runtime/context/UI/boundary tests and a production Vite build pass locally,
+- exact-head Linux and Windows Actions, including full deterministic suites and rendered UI smoke, passed in [run 39982662420](https://github.com/B4kke/AI-Dashboard/actions/runs/39982662420); the rendered chat was also visually inspected at 1440, 768 and 390 px.
+
+PR #8's boundary guard passed exact-head Linux and Windows Actions in [run 39982576999](https://github.com/B4kke/AI-Dashboard/actions/runs/39982576999). Both PRs remain open; merge #8 first, then retarget #9 to `main`. This verification does not claim real external host dogfood and does not repeat the separately completed PC-beta campaign.
+
+This is a new M3 qualification slice; it does not change, repeat or downgrade the separately completed PC-beta campaign above.
 
 ### M3C — Memory & personal context — IMPLEMENTED EARLY SLICE
 

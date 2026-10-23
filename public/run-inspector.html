@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="nb">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>AI Dashboard · Run Inspector</title>
+  <link rel="stylesheet" href="/run-inspector.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar"><div><p class="eyebrow">AI Dashboard</p><h1>Run Inspector</h1><p class="muted">Agentpåstand, maskinevidens, CI, supervisor, lease og audit-tidslinje på ett sted.</p></div><a class="back" href="/">Til dashboard</a></header>
+    <section class="toolbar panel"><label for="run-select">Kjøring</label><select id="run-select"></select><button id="refresh" type="button">Oppdater</button><span id="live" class="live">Kobler til…</span></section>
+    <section id="summary" class="summary"></section>
+    <section class="grid">
+      <article class="panel"><div class="section-head"><h2>Identitet og lease</h2><span id="phase" class="pill"></span></div><dl id="identity" class="facts"></dl></article>
+      <article class="panel"><h2>Git / checkpoint</h2><dl id="git" class="facts"></dl></article>
+      <article class="panel wide"><h2>Kontrollplan-verifikasjon</h2><div id="verification"></div></article>
+      <article class="panel wide"><h2>GitHub / CI</h2><div id="github"></div></article>
+      <article class="panel wide"><h2>Supervisor</h2><div id="supervisor"></div></article>
+      <article class="panel wide"><div class="section-head"><h2>EvidenceBundle</h2><span id="evidence-state" class="pill"></span></div><div id="missing"></div><pre id="evidence"></pre></article>
+      <article class="panel wide"><h2>Audit-tidslinje</h2><ol id="timeline" class="timeline"></ol></article>
+    </section>
+  </main>
+  <script type="module" src="/run-inspector.js"></script>
+</body>
+</html>

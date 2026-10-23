@@ -128,6 +128,8 @@ Master AI is the high-level project orchestrator/assistant, not root authority. 
 
 Master AI must never use conversational confidence as evidence and cannot approve its own coding output or bypass independent supervisor/control-plane gates.
 
+Interactive Master chat is a distinct plan-only surface. It may receive canonical reads and proposal wrappers for bounded mutations, but it must not execute those mutations during model generation. The operator executes a saved proposal through its ID and the existing Dashboard tool schema; execution makes no model call. The chat excludes `task_resolve_input`, publish, review, merge and approval tools. Project context attachments require an explicit fresh preview, are limited to five references and 10,000 resolved characters, are revalidated at send time and apply to the current turn only. File references must stay inside the Project repository and pass the bounded text/sensitive-content checks. Chat context, assistant claims and proposals are not machine evidence or authorization.
+
 ### Master SOUL and memory
 
 Master uses a local runtime `SOUL.md` plus bounded durable memory to personalize future conversations. This context is explicitly subordinate to control-plane authority.

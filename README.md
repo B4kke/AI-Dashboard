@@ -153,6 +153,8 @@ It cannot fabricate evidence, approve its own coding work, interpret unavailable
 
 Persistent Master chat is implemented as a **normal global and Project-scoped chat environment** with a conversation sidebar, centered message stream and composer. Project conversations stay isolated inside the owning Project workspace. History persists and ordinary HTTP/UI input can create only `user` + `conversation`; it cannot fabricate assistant roles, tool calls or verified-result labels. Task/Research creation still enters the normal control plane. Master uses the same pinned AI SDK streaming family as HomeAI (`ai`, `@ai-sdk/openai-compatible` and the AI-SDK MCP adapter) with Dashboard MCP tools, a local runtime `SOUL.md`, and bounded inspectable/editable/deletable durable memory. Interactive turns stream model tokens plus reasoning/activity and tool status over the turn SSE response while one persisted assistant message remains canonical. Post-turn reflection is scheduled after the visible answer so learning does not hold the chat response open.
 
+The M3 interactive chat follow-up is a separate plan-only runtime layered beside the established automatic planner. It gives the model canonical reads and proposal-only names for bounded mutations; the operator must explicitly execute a saved proposal by ID, which invokes the original tool arguments without another model call. It excludes `task_resolve_input`, publish/review/merge and approval tools. Project chat can attach up to five Task, Run, Research, evidence or safe text-file references after an explicit short-lived preview; the selected material is bounded to 10,000 characters, checked again for freshness when sent and supplied only to that turn. Raw context text is not added to durable chat metadata. Model overrides are per conversation. Stop aborts the active stream; Retry creates a new request ID and never replays an uncertain external action.
+
 An optional **bounded automatic Master planner** is implemented per Project. It requires an explicit objective, at least one Project definition-of-done criterion and `autonomous` mode. Only when the Project has no open Tasks or active/uncertain Runs may it claim a durable planning cycle. That cycle can inspect canonical state and create exactly one atomic dependency-aware Task batch, mark the Project as needing operator input, or assess the completion contract as satisfied. The automatic turn receives only read tools plus `task_batch_create`; delegation, publish, review and merge tools are technically unavailable. A restart during planning fails closed to `needs_input` and requires explicit restart.
 
 For autonomous worker admission, dependency-ready backlog Tasks are considered in P0–P3 order. Equal priorities retain their stored order; unknown legacy priorities are treated as P2. Supervisor review keeps its existing precedence, and every worker still passes the normal capacity, ownership and preflight gates.
@@ -288,7 +290,7 @@ Executable/PATH validation uses asynchronous filesystem I/O and rechecks worktre
 
 ## MCP/API surfaces
 
-Existing product APIs remain under `/api/*` for Exploration, Projects, Tasks, Ideas, Research, models, OpenCode, GitHub, evidence, autonomy, Runs, workspaces and **Master** (`/api/master/conversations`, `/api/master/conversations/:id/messages`).
+Existing product APIs remain under `/api/*` for Exploration, Projects, Tasks, Ideas, Research, models, OpenCode, GitHub, evidence, autonomy, Runs, workspaces and **Master** (`/api/master/conversations`, `/api/master/conversations/:id/messages`, `/api/master/conversations/:id/chat`).
 
 Loopback MCP host administration:
 
@@ -335,6 +337,7 @@ MCP server endpoints:
 - optional external MCP elicitation bridge,
 - default-deny external tool policy,
 - durable specialist Agent Registry (state schema v10) + persistent Master chat (no publish/merge bypass),
+- interactive Project-scoped Master plan chat with explicit mutation proposals, turn-scoped context previews, per-chat model selection, bounded stop/retry and read-only fleet/memory panels,
 - Project-scoped Agent fleet operator surface (Registry as canonical truth, fleet view with assigned Task/active Run and guarded create/edit/enable/disable),
 - global + Project-scoped Master conversations/messages (`POST/GET /api/master/*`, kind-tagged, toolCalls capped),
 - Task assignment/workScopes,
