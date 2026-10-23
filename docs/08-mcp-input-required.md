@@ -1,6 +1,6 @@
 # MCP 2026 multi-round operator input
 
-Status: implemented August 2026 on the foundation branch.
+Status: implemented M3 input-required foundation. Current exact-head and interoperability evidence is tracked in `docs/04-roadmap.md`.
 
 This document defines how AI Dashboard handles operator questions across MCP. It is deliberately separate from the domain `Task` model: an AI Dashboard Task is durable project work; MCP `input_required` is a protocol mechanism that lets one MCP request pause for structured client/operator input and then re-enter the same handler.
 

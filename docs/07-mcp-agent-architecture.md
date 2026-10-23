@@ -1,6 +1,6 @@
 # MCP and specialist-agent architecture
 
-Status: implemented early M3 slice, August 2026. This document describes the current foundation-branch code and the boundaries future Master AI/fleet work must preserve. Focused deterministic hardening coverage exists; fresh Linux + Windows GitHub Actions on the exact final commit and full real-PC OpenCode/GitHub dogfood remain open.
+Status: M3 MCP foundation implemented. This document describes the MCP capability and authority contracts; current implementation and verification levels are tracked in `docs/04-roadmap.md`. The completed PC-beta qualification exercised OpenCode read/master MCP interoperability on its clean source commit. Broader external-host interoperability remains a separate planned verification level.
 
 ## Purpose
 
