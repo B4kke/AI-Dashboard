@@ -70,6 +70,14 @@ Do not confuse AI Dashboard's durable Project/Task/Run domain objects with an MC
 
 See `docs/07-mcp-agent-architecture.md` for the server/host and specialist-agent model and `docs/08-mcp-input-required.md` for the full operator-input contract.
 
+## AI SDK and interactive Master chat
+
+Pinned `ai@7.0.97`, `@ai-sdk/openai-compatible@3.0.47` and `@ai-sdk/mcp@2.0.48` remain unchanged. The M3 chat follow-up uses the existing AI SDK streaming/tool path through an additive chat runtime; it does not replace or widen the automatic planner's tool policy. Dashboard owns the read/proposal allowlists, chat request identity, preview freshness, per-chat model override, stop/retry behavior and proposal execution transition.
+
+Interactive mutations are exposed to the model as `propose_<tool>` wrappers. A wrapper validates the advertised tool schema and stores its exact original tool name/arguments as a draft; it cannot invoke the mutation. After a completed turn the operator may execute that saved proposal by ID. The runtime re-discovers the pinned MCP tool, verifies the schema hash and saved arguments, then invokes that exact tool once without a second model request. A possibly-started execution becomes `outcome_unknown` after interruption/restart and is never automatically replayed.
+
+`react-markdown@10.1.0` and `remark-gfm@4.0.1` are the only new runtime dependencies for the chat UI. Markdown rendering skips raw HTML and images and filters link protocols. These packages do not enter the AI/MCP/OpenCode/Octokit/Zod SDK graph. `package-lock.json` remains authoritative and CI installs with `npm ci`.
+
 ## OpenCode
 
 The OpenCode harness adapter uses pinned `@opencode/client@2.0.24` and connects to an existing OpenCode V2 server. V2 transport shapes stay inside `server/integrations/opencode.mjs`; core Project/Task/Run state does not depend on raw SDK objects.

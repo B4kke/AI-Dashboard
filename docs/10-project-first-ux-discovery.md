@@ -34,6 +34,8 @@ Implemented on the foundation branch:
 - model selectors separate OpenCode execution models from direct-provider Master/Research models,
 - Project-scoped Master conversations remain inside the owning Project context.
 
+The separate M3 Master chat may show Project records as explicit, turn-local context choices. Available references are Tasks, Runs, Research reports, task evidence and project-relative text files. The operator selects references, refreshes a preview, inspects the reference list and then sends; no attachment is silently carried into a later turn. The UI communicates stale or unavailable sources and requires a new preview before retrying. File entry is a path reference rather than an upload: the server owns root containment, symlink, extension, size, binary and secret-content checks. This adds a read-only context path and does not change Project import, repository discovery or execution authority.
+
 Intentionally partial rather than over-abstracted:
 
 - global defaults currently cover role models plus autonomy mode/CI requirement; coding-harness, verification-policy and concurrency defaults remain planned,

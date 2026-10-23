@@ -232,6 +232,12 @@ The operator should always know:
 
 Navigation depth should stay shallow. Do not introduce nested navigation purely to mirror backend object relationships.
 
+### Master chat is a planning workspace
+
+Master chat should feel like a focused conversation inside the active Project, with a clear plan-mode banner and one dominant composer action. The interface distinguishes model answers from saved action proposals; execution is an explicit, visible operator action on a reviewed proposal. It must never imply that a suggested action has already changed Project state. Context choices stay optional and inspectable, and a freshness failure must explain that the operator should refresh the preview. Specialist and memory panels remain secondary, read-only/editable context panels rather than competing navigation or evidence surfaces.
+
+At desktop width the conversation list and message workspace can sit side by side. At tablet and phone widths, the chat remains a single readable column without horizontal page scrolling; proposal actions, context preview, Stop and Send stay reachable with touch-sized controls. Streaming activity is announced without flooding the message list. Failed or cancelled turns offer an explicit retry that starts a new request; uncertain mutation outcomes never get a retry action.
+
 ---
 
 ## 9. Status and color semantics

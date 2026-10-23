@@ -22,6 +22,10 @@ import { createOrchestrator } from './orchestrator.mjs';
 import { createDiscoveryService } from './discovery/service.mjs';
 import { createSetupService } from './setup/service.mjs';
 import { createMasterService } from './master/service.mjs';
+/* M3_CHAT_IMPORTS_START */
+import { createChatRuntime } from './master/chat-runtime.mjs';
+import { createChatContext } from './master/chat-context.mjs';
+/* M3_CHAT_IMPORTS_END */
 import { createHttpServer } from './http-server.mjs';
 import { createDashboardMcp } from './mcp/dashboard-server.mjs';
 import { McpClientManager } from './mcp/client-manager.mjs';
@@ -85,6 +89,18 @@ const discovery = createDiscoveryService({ store, github });
 const setup = createSetupService({ store, persistence: sqlite, discovery, opencode: rawOpenCode, research, dashboardBaseUrl });
 const master = createMasterService({ store, setup, dashboardBaseUrl, persistence: sqlite, soulPath: masterSoulFile });
 await master.initialize();
+/* M3_CHAT_RUNTIME_START */
+const interactiveChat = createChatRuntime({
+  store,
+  setup,
+  persistence: sqlite,
+  soulPath: masterSoulFile,
+  dashboardBaseUrl,
+  contextResolver: createChatContext({ store }),
+});
+await interactiveChat.initialize();
+const masterForHttp = { ...master, chatRuntime: interactiveChat };
+/* M3_CHAT_RUNTIME_END */
 const autonomy = new AutonomyEngine({
   store,
   operations: {
@@ -109,7 +125,9 @@ const mcpClients = privateMode ? new McpClientManager({ store, version: VERSION,
 if (!privateMode) console.log('AI Dashboard MCP disabled because the control API is not bound to loopback');
 
 const server = createHttpServer({
-  store, events, orchestrator, autonomy, research, github, mcp, mcpClients, discovery, setup, master,
+  /* M3_CHAT_HTTP_START */
+  store, events, orchestrator, autonomy, research, github, mcp, mcpClients, discovery, setup, master: masterForHttp,
+  /* M3_CHAT_HTTP_END */
   publicDir: PUBLIC, version: VERSION, privateMode,
 });
 installReliabilityRoutes(server, { reliability, privateMode });
@@ -131,7 +149,9 @@ function shutdown(signal) {
   console.log(`AI Dashboard received ${signal}; stopping control loop`);
   autonomy.stop();
   reliability.stop();
-  Promise.allSettled([Promise.resolve(mcp?.close?.()), master.drainLearning()]).finally(() => {
+  /* M3_CHAT_SHUTDOWN_START */
+  Promise.allSettled([Promise.resolve(mcp?.close?.()), master.drainLearning(), interactiveChat.shutdown()]).finally(() => {
+  /* M3_CHAT_SHUTDOWN_END */
     server.close(() => { sqlite.close(); process.exit(0); });
   });
   setTimeout(() => { try { sqlite.close(); } catch {} process.exit(1); }, 5_000).unref();

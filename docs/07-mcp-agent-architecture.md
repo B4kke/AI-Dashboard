@@ -250,6 +250,12 @@ If a Task reaches `needs_input`, Master reads the reason and uses `task_resolve_
 
 Dependencies and scopes solve different problems: dependencies express ordering/data requirements; scopes express mutation ownership. Safe plans may require both.
 
+### Interactive plan-mode Master chat
+
+The browser chat uses a dedicated runtime wrapper and the same Dashboard MCP server, but it is not the automatic Project planner. It is limited to the established `plan` mode and gives the model only canonical reads plus `propose_<tool>` wrappers for bounded Project/Task/Agent/Research/Idea/Run mutations. `task_resolve_input`, publish, review, merge and approval tools are absent. A proposed tool call stores its original schema identity and exact arguments. Only an explicit operator action with the proposal ID invokes the original tool, once, without another model call. An uncertain execution is marked `outcome_unknown`; it is not retried automatically.
+
+Project context is opt-in. The browser requests a bounded preview before sending selected Task, Run, Research, evidence or safe text-file references. The runtime checks that references belong to the conversation's Project, limits the set to five and the resolved prompt addition to 10,000 characters, filters secret-like content and re-resolves identity/revision/hash at send time. Only a manifest is durable; raw source text enters the active model turn and is not appended to history. This feature does not advertise MCP elicitation or collect answers for `task_resolve_input`.
+
 ## Worker prompt integration
 
 For assigned Tasks the coding prompt receives specialist name, role, instructions, exact owned scopes, sibling-scope prohibition and the requirement to return `needs_input` when correct work crosses the boundary. Unassigned Tasks receive an explicit “no specialist” statement and their authoritative Task scopes; omission of `agentId` does not omit ownership.

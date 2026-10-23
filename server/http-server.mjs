@@ -4,6 +4,9 @@ import { extname, resolve, sep } from 'node:path';
 import { repairTaskFromOperator } from './core/operator-task-repair.mjs';
 import { agentFleetView } from './core/agent-fleet-view.mjs';
 import { inspectProjectUsability } from './core/project-usability.mjs';
+/* M3_CHAT_IMPORTS_START */
+import { createMasterChatHttpHandler } from './master/chat-http.mjs';
+/* M3_CHAT_IMPORTS_END */
 
 const AGENT_MUTATION_FIELDS = new Set(['name', 'role', 'harness', 'model', 'instructions', 'capabilities', 'workScopes', 'enabled']);
 const MASTER_USER_MESSAGE_FIELDS = new Set(['content']);
@@ -89,7 +92,20 @@ async function body(request) {
 }
 
 export function createHttpServer({ store, events, orchestrator, autonomy, research, github, mcp = null, mcpClients = null, discovery = null, setup = null, master = null, privateMode = false, publicDir, version = '0.0.7' }) {
+  /* M3_CHAT_ROUTE_SETUP_START */
+  const masterChatHttp = master?.chatRuntime ? createMasterChatHttpHandler({
+    masterChat: master.chatRuntime,
+    store,
+    master,
+    readBody: body,
+    sendJson: json,
+    securityHeaders: SECURITY_HEADERS,
+  }) : null;
+  /* M3_CHAT_ROUTE_SETUP_END */
   async function api(request, response, url) {
+    /* M3_CHAT_ROUTE_START */
+    if (masterChatHttp && await masterChatHttp.route(request, response, url)) return true;
+    /* M3_CHAT_ROUTE_END */
     if (request.method === 'GET' && url.pathname === '/api/health') {
       const [openCode, providers] = await Promise.all([orchestrator.opencodeOverview(), research.listProviders().catch(() => [])]);
       return json(response, 200, {

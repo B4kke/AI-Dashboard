@@ -214,9 +214,20 @@ Exact-head Linux+Windows GitHub Actions verified on commit `a990d75` (push `3299
 
 Still planned:
 
-- visible turn-kind labels and contextual Task/Research shortcuts,
-- richer context attachments (Tasks/Runs/files/reports/evidence) and file references,
+- image/file uploads and broad binary attachments (the current file context is a safe project-relative text reference only),
 - per-agent persona/memory and richer adaptive fleet rebalancing (M3A/M3C).
+
+M3B plan-mode/context follow-up implemented on `codex/m3-chat-platform` (level 2 locally; exact-head Linux/Windows Actions and rendered desktop/tablet/phone inspection remain pending):
+
+- separate interactive chat runtime leaves the beta-tested automatic planner service and its tool path unchanged,
+- bounded read tools and `propose_<tool>` wrappers; explicit proposal-ID execution revalidates the saved schema/arguments and invokes the original tool once without another model call,
+- no `task_resolve_input`, publish, review, merge or approval tools in interactive chat,
+- explicit one-use previews for at most five Task/Run/Research/evidence/text-file references and 10,000 total resolved characters, with Project containment, source-freshness, secret and filesystem checks,
+- per-conversation model override, abort-backed Stop, new-request Retry and actual-usage-only display,
+- inspectable/editable/deletable memory and read-only specialist summaries in the chat workspace; no StateStore schema change,
+- deterministic M3 HTTP/runtime/context/UI/boundary tests and a production Vite build pass locally.
+
+This is a new M3 qualification slice; it does not change, repeat or downgrade the separately completed PC-beta campaign above.
 
 ### M3C — Memory & personal context — IMPLEMENTED EARLY SLICE
 
